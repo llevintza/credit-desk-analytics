@@ -139,6 +139,25 @@ function pushArgs(base, extra = []) {
   ];
 }
 
+function assertGatePath(output, path) {
+  assert.match(output, new RegExp(`^gate-path: ${path}$`, "m"));
+}
+
+function assertBaseSourceLabels(output, baseSha) {
+  const sha = baseSha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(output, new RegExp(`Gate script: \`perf/coverage-gate\\.mjs\` from \`_base\` at BASE_SHA \\(\`${sha}\`\\)\\.`));
+  assert.match(output, new RegExp(`Thresholds: \`perf/coverage-thresholds\\.json\` from \`_base\` at BASE_SHA \\(\`${sha}\`\\)\\.`));
+  assert.match(output, new RegExp(`Floor: \`perf/coverage-baseline\\.json\` from \`_base\` at BASE_SHA \\(\`${sha}\`\\)\\.`));
+}
+
+function assertBootstrapLabels(output, path) {
+  assertGatePath(output, path);
+  assert.match(output, /Gate script: HEAD `perf\/coverage-gate\.mjs` \(introducing bootstrap; BASE_SHA has no gate\)/);
+  assert.match(output, /This path is unreachable once BASE_SHA has the gate/);
+  assert.match(output, /Thresholds: bootstrap defaults \(diff ≥ 80\/80\), not a file at BASE_SHA/);
+  assert.match(output, /Floor: \*\*0 \/ 0\*\* \(introducing bootstrap; BASE_SHA has no baseline\)/);
+}
+
 test("parseArgs reads flags", () => {
   assert.deepEqual(parseArgs(["--base", "abc", "--dotnet", "x"]), { base: "abc", dotnet: "x" });
 });
@@ -317,6 +336,7 @@ test("bootstrap: base has no gate script, head copy is allowed", () => {
     assert.equal(r.bootstrapped, true);
     assert.equal(r.failed, false);
     assert.match(r.output, /Bootstrap/);
+    assertBootstrapLabels(r.output, "pr/bootstrap");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1044,6 +1064,7 @@ test("after bootstrap, deleting the gate script on head fails closed", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/missing-head-gate");
     assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1078,6 +1099,7 @@ test("after bootstrap, renaming the gate script on head fails closed", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/missing-head-gate");
     assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1094,6 +1116,7 @@ test("non-default PR base fails closed (retarget bypass)", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/retarget");
     assert.match(r.output, /not the default branch 'main'/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1279,6 +1302,7 @@ test("missing bootstrap allowOnce is not treated as script-missing bootstrap", (
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/no-bootstrap-signal");
     assert.match(r.output, /explicit one-time signal/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1342,6 +1366,8 @@ test("first push that introduces the gate bootstraps (event.before has no gate)"
     assert.equal(r.failed, false, r.output);
     assert.equal(r.bootstrapped, true);
     assert.match(r.output, /introducing push|Bootstrap/);
+    assertBootstrapLabels(r.output, "push/bootstrap");
+    assert.match(r.output, /This push may establish the gate/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1369,6 +1395,8 @@ test("docs-only push after merge uses the BASE_SHA floor and ignores leftover ov
     assert.equal(r.failed, false, r.output);
     assert.equal(r.bootstrapped, false);
     assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+    assertGatePath(r.output, "push/base");
+    assertBaseSourceLabels(r.output, merged);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1396,6 +1424,8 @@ test("docs-only PR after merge ignores leftover override whose from no longer ma
     assert.equal(r.failed, false, r.output);
     assert.doesNotMatch(r.output, /Re-baseline override/);
     assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+    assertGatePath(r.output, "pr/default");
+    assertBaseSourceLabels(r.output, main);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1419,6 +1449,7 @@ test("PR cannot use the introducing-gate push path (R3-M2)", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/missing-base-gate");
     assert.match(r.output, /base is missing perf\/coverage-gate\.mjs/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1473,6 +1504,8 @@ test("R5-M1 (a): override PR push passes when from equals the BASE_SHA floor", (
     assert.equal(r.bootstrapped, false);
     assert.match(r.output, /Re-baseline override/);
     assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+    assertGatePath(r.output, "push/base");
+    assertBaseSourceLabels(r.output, before);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1500,7 +1533,38 @@ test("R5-M1 (b): direct push that lowers the baseline fails", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
+    assertGatePath(r.output, "push/base");
     assert.match(r.output, /lowers the committed baseline|below BASE_SHA|documented change in measurement scope/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap is unreachable once BASE_SHA already has the gate", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 100, branch: 100 },
+      web: { line: 100, branch: 100 },
+    }));
+    write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
+    const noGate = commit(dir, "pre-gate default");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    const withGate = commit(dir, "BASE_SHA has the gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: pushArgs(withGate, ["--default-sha", noGate]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/bootstrap-unreachable");
+    assert.match(r.output, /Bootstrap is unreachable now that BASE_SHA has/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1660,6 +1724,8 @@ test("push with empty --base-ref does not treat PR base as true", () => {
     });
     assert.equal(r.failed, false, r.output);
     assert.doesNotMatch(r.output, /PR base 'true'/);
+    assertGatePath(r.output, "push/base");
+    assertBaseSourceLabels(r.output, merged);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
