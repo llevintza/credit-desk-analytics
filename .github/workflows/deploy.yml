@@ -1,0 +1,106 @@
+name: Deploy
+
+# README §14.2: on a green CI run for main, migrate Neon -> seed if the seed version changed
+# -> trigger the Render deploy hook -> wait until /health reports the merged commit.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  preflight:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          missing=""
+          [ -n "$NEON_DATABASE_URL" ] || missing="$missing NEON_DATABASE_URL"
+          [ -n "$RENDER_DEPLOY_HOOK_URL" ] || missing="$missing RENDER_DEPLOY_HOOK_URL"
+          [ -n "$APP_URL" ] || missing="$missing APP_URL"
+          if [ -n "$missing" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped: production environment not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "Missing:$missing. See README §13.3 for the one-time setup." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Build migrations bundle and seeder
+        uses: ./.github/actions/build-db-tools
+
+      - name: Migrate Neon
+        run: ./dbtools/efbundle | tee migrate.txt
+
+      - name: Seed (only if the seed version or scale changed)
+        env:
+          SEED_SCALE: ${{ vars.SEED_SCALE || '1.0' }}
+        run: ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" | tee seed.txt
+
+      - name: Trigger Render deploy of this commit
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          case "$HOOK" in *\?*) sep='&' ;; *) sep='?' ;; esac
+          curl -fsS -X POST "${HOOK}${sep}ref=${SHA}" > /dev/null
+          echo "Deploy requested for ${SHA}"
+
+      - name: Smoke test (wait for the new build to serve /health)
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          # Free-tier Docker builds plus cold start can take several minutes.
+          v=""
+          deadline=$(( $(date +%s) + 900 ))
+          until [ "$(date +%s)" -ge "$deadline" ]; do
+            v=$(curl -fsS --max-time 60 "$APP_URL/health" 2>/dev/null | jq -r .version || true)
+            echo "live version: ${v:-<none>}"
+            [ "$v" = "$SHA" ] && break
+            sleep 15
+          done
+          [ "$v" = "$SHA" ] || { echo "::error::$APP_URL did not report $SHA within 15 minutes"; exit 1; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/")" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/api/me")" = 401
+
+      - name: Summary
+        if: always()
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          {
+            echo "### Deploy ${SHA:0:7}"
+            echo "- URL: $APP_URL"
+            echo "- Migrations:"; sed 's/^/    /' migrate.txt 2>/dev/null || true
+            echo "- Seed:"; sed 's/^/    /' seed.txt 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"

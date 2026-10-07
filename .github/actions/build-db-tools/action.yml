@@ -1,0 +1,23 @@
+name: Build database tools
+description: Builds the self-contained EF Core migrations bundle and seeder for linux-x64 (README §14.2).
+outputs:
+  dir:
+    description: Directory containing efbundle and seeder/
+    value: ${{ steps.out.outputs.dir }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        global-json-file: global.json
+    - shell: bash
+      run: dotnet tool restore
+    - shell: bash
+      run: |
+        dotnet ef migrations bundle \
+          --project src/Desk.Data --startup-project src/Desk.Data \
+          --self-contained -r linux-x64 -o dbtools/efbundle --force
+        dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained -o dbtools/seeder
+    - id: out
+      shell: bash
+      run: echo "dir=$GITHUB_WORKSPACE/dbtools" >> "$GITHUB_OUTPUT"

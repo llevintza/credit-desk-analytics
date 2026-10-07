@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        # Ephemeral, job-local database: trust auth, so no password exists anywhere.
+        env:
+          POSTGRES_DB: creditdesk
+          POSTGRES_USER: desk
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U desk -d creditdesk"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DATABASE_URL: Host=localhost;Port=5432;Database=creditdesk;Username=desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet tool restore
+      - run: dotnet build -c Release
+      - run: dotnet test -c Release --no-build
+      - name: No pending model changes (README §14.4)
+        run: dotnet ef migrations has-pending-model-changes --project src/Desk.Data --startup-project src/Desk.Data
+      # Rehearse the deploy pipeline's database steps on a throwaway Postgres.
+      - uses: ./.github/actions/build-db-tools
+      - name: Migrate (twice; the second run must be a no-op)
+        run: ./dbtools/efbundle && ./dbtools/efbundle
+      - name: Seed, then confirm --if-changed skips
+        run: |
+          ./dbtools/seeder/Desk.Seeder --if-changed --scale 0.1 | tee seed1.txt
+          ./dbtools/seeder/Desk.Seeder --if-changed --scale 0.1 | tee seed2.txt
+          grep -q '^SEED_ACTION=seeded' seed1.txt
+          grep -q '^SEED_ACTION=skipped' seed2.txt
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test -- --watch=false
+      - run: npm run build
+
+  compose-smoke:
+    # The same checks the deploy smoke test runs against Render, here against the built image.
+    runs-on: ubuntu-latest
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate a throwaway local password (never stored)
+        run: |
+          pw=$(openssl rand -hex 16)
+          echo "::add-mask::$pw"
+          echo "POSTGRES_PASSWORD=$pw" > .env
+      - run: APP_VERSION=${{ github.sha }} docker compose up -d --build
+      - name: Smoke
+        run: |
+          for _ in $(seq 1 60); do curl -fsS localhost:8080/health > health.json && break; sleep 2; done
+          cat health.json
+          test "$(jq -r .version health.json)" = "${{ github.sha }}"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)" = 401
+      - if: failure()
+        run: docker compose logs
