@@ -52,15 +52,19 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Task | Command |
 |---|---|
 | Start Postgres | `docker compose up -d postgres` |
-| Seed (local) | `dotnet run --project src/Desk.Seeder -- --seed 42 --scale 1.0` |
-| Create a user | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
-| API | `dotnet run --project src/Desk.Api` |
+| Restore tools (dotnet-ef) | `dotnet tool restore` |
+| Apply migrations (local) | `dotnet ef database update --project src/Desk.Data --startup-project src/Desk.Data` |
+| Add a migration | `dotnet ef migrations add <Name> --project src/Desk.Data --startup-project src/Desk.Data --output-dir App/Migrations` |
+| Seed (local) | `dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0` (`--force` to reseed, `--size-report`) |
+| API | `dotnet run --project src/Desk.Api` (http://localhost:5180) |
 | API tests | `dotnet test` |
-| Web dev server | `cd web && npm start` |
-| Web lint + unit tests | `cd web && npm run lint && npm test -- --run` |
-| E2E | `cd e2e && npx playwright test` |
-| Payload budget | `node perf/payload-size.mjs` |
-| Whole stack | `docker compose up --build` |
+| Web dev server | `cd web && npm start` (http://localhost:4200, proxies to :5180) |
+| Web lint + unit tests | `cd web && npm run lint && npm test -- --watch=false` |
+| Whole stack | `docker compose up --build` (http://localhost:8080) |
+| Lint workflows | `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest` |
+| Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
+| E2E (phase 4) | `cd e2e && npx playwright test` |
+| Payload budget (phase 3) | `node perf/payload-size.mjs` |
 
 ## Deployment
 

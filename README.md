@@ -661,15 +661,20 @@ Every PR that touches a measured path **MUST** paste before/after numbers in its
 **Prerequisites:** .NET 10 SDK, Node 22 LTS, Docker.
 
 ```bash
-cp .env.example .env                       # fill in local values (never commit .env)
-docker compose up -d postgres              # Postgres 17 on localhost:5432
-dotnet run --project src/Desk.Seeder -- --seed 42 --scale 1.0
-dotnet run --project src/Desk.UserAdmin -- add --email dev@example.com --role admin --expires 2027-01-01
-dotnet run --project src/Desk.Api          # https://localhost:7180 (serves /api)
-cd web && npm ci && npm start              # http://localhost:4200 (proxies /api to the API)
+cp .env.example .env                       # .env is gitignored; never commit it
+sed -i.bak "s/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env && rm .env.bak
+set -a; . ./.env; set +a                   # load POSTGRES_PASSWORD / DATABASE_URL into this shell
+docker compose up -d postgres              # Postgres 17 on localhost:5432 (db creditdesk, password from .env)
+dotnet tool restore
+dotnet ef database update --project src/Desk.Data --startup-project src/Desk.Data   # apply migrations
+dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0                    # seed (skips if current)
+dotnet run --project src/Desk.Api          # http://localhost:5180 (/health, /api)
+cd web && npm ci && npm start              # http://localhost:4200 (proxies /api and /health to :5180)
 ```
 
-Or everything in containers: `docker compose up --build` (postgres + app on http://localhost:8080).
+The tools read `DATABASE_URL` (or `ConnectionStrings__<Source>`) from the environment. There's deliberately **no built-in default connection string**: credentials only ever come from `.env` locally, from CI configuration, or from the production secret. Both Npgsql keyword strings and `postgres://` URIs work. Creating accounts (`Desk.UserAdmin`) arrives in phase 2.
+
+Or the whole stack in containers: `docker compose up --build` gives the app on http://localhost:8080. Migrate and seed from the host as above; the app never migrates at startup.
 
 **`.env.example`** (key names only):
 
@@ -859,8 +864,8 @@ The implementing agent **stops after opening each PR** and waits for review.
 
 | Phase | PR | State |
 |---|---|---|
-| Spec | #1 | In review |
-| 0 Scaffold | n/a | Not started |
+| Spec | #1 | Merged |
+| 0 Scaffold | #2 | In review: deploys on merge once the §13.3 setup is done |
 | 1 Data | n/a | Not started |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |
