@@ -835,7 +835,7 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 
 - Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. That marker is the model's own count. Any workflow running as `github-actions[bot]` can post it.
-- Before the action runs, the job overlays the base `AGENTS.md` and `README.md` on the working tree (so `CLAUDE.md`'s `@AGENTS.md` import cannot load the PR head), deletes nested `CLAUDE.md` files, and copies base `.claude` / top-level `CLAUDE.md`. Checkout credentials are not persisted; `Read` of `.git/**` is denied (the action still writes its own job token into `.git/config`). The job is **advisory and must not be a required check**. It skips with a notice when the key is missing.
+- Before the action runs, the job removes symlinks outside `.git`/`.review-base`, overlays the base `AGENTS.md` and `README.md` on the working tree (so `CLAUDE.md`'s `@AGENTS.md` import cannot load the PR head), deletes nested `CLAUDE.md` / `AGENTS.md` files and nested `.claude/` dirs, and copies base `.claude` / top-level `CLAUDE.md`. Checkout credentials are not persisted; `Read` of `.git/**` is denied (the action still writes its own job token into `.git/config`). The job is **advisory and must not be a required check**. It skips with a notice when the key is missing. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip.
 - **Leo's decision (2026-10-07):** `ANTHROPIC_API_KEY` lives in a dedicated GitHub environment **`claude-review`** (spend-capped key; no branch restriction; no required reviewers). Never the `production` environment, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. It is unknown whether the Claude GitHub App is installed; the workflow does not need it (it passes `github_token`).
 
 **The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
@@ -844,9 +844,10 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
 3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
 Tech Coordinator merges and starts the next phase.
 
-**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip.
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
 ---
 
@@ -883,6 +884,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
 3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
 ---

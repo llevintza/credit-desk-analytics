@@ -133,7 +133,7 @@ Confirm `NEON_DATABASE_URL` and `RENDER_DEPLOY_HOOK_URL` will be **environment**
 
 ## Step 5: Anthropic API key (Claude review; Leo's decision, 2026-10-07)
 
-The review job is **advisory and not a required check**. Leo's decision (2026-10-07): a dedicated `claude-review` GitHub environment holding a spend-capped key. Not `production` (that environment is main-only; PR jobs must never see it). Not a repository secret. Same-repo PRs use this key; forks and Dependabot skip. Each run creates a GitHub deployment on the PR (no reviewers, no branch restriction, so those jobs can read the key).
+The review job is **advisory and not a required check**. Leo's decision (2026-10-07): a dedicated `claude-review` GitHub environment holding a spend-capped key. Not `production` (that environment is main-only; PR jobs must never see it). Not a repository secret. Same-repo PRs use this key. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip. Each run creates a GitHub deployment on the PR (no reviewers, no branch restriction, so those jobs can read the key).
 
 1. Sign in at <https://console.anthropic.com> → **Settings → API Keys** → **Create Key**.
    - **Name:** `credit-desk-analytics PR review`.
@@ -151,10 +151,10 @@ The review job is **advisory and not a required check**. Leo's decision (2026-10
 4. It is unknown whether the Claude GitHub App (<https://github.com/apps/claude>) is installed on this repo. The workflow passes its own `GITHUB_TOKEN`, so no App install is required and review comments appear as **github-actions[bot]**. If you later install the App and remove `github_token:` from the workflow, comments post as **claude[bot]** and the job would need `id-token: write`.
 
 **What the review does:**
-- It runs on every same-repo, non-draft, non-Dependabot PR push (`.github/workflows/claude-review.yml`).
+- It runs on every same-repo, non-draft PR against `main` (`.github/workflows/claude-review.yml`).
 - It posts inline comments marked **[blocking]** or **[suggestion]**.
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head> blocking=<n> -->`.
-- If the key is missing, the job **skips with a notice** and stays green. Forks and Dependabot are skipped. Keep `review` **out** of the required checks on `main`.
+- If the key is missing, the job **skips with a notice** and stays green. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip. Keep `review` **out** of the required checks on `main`.
 
 **The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
 
@@ -162,6 +162,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
 3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
 Tech Coordinator merges and starts the next phase.
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip.

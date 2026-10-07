@@ -24,6 +24,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
    2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
    3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
    Tech Coordinator merges and starts the next phase.
 
    - Fix [blocking] comments on the same branch and push. Don't resolve a reviewer thread you haven't fixed.
@@ -93,6 +94,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 
 ## Definition of done for any PR
 
+- CI is green: build, tests, lint, e2e, budgets (each once it exists).
 - The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
