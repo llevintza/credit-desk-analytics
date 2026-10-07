@@ -9,6 +9,8 @@ name: Deploy
 #   workflow_run: event == push, head_branch == main, head_repository == this repo, conclusion success
 #   workflow_dispatch: github.ref == refs/heads/main (case-sensitive bash; GitHub == is not)
 #   SHA being deployed == current tip of refs/heads/main (blocks re-runs of old CI/deploy)
+# A SHA that is no longer the tip is skipped (neutral), not failed, so a lagging CI run
+# does not paint the check red. Wrong-ref dispatch still fails.
 on:
   workflow_run:
     workflows: [CI]
@@ -47,8 +49,14 @@ jobs:
         && github.event.workflow_run.head_repository.full_name == github.repository
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.tip.outputs.allowed }}
     steps:
       - name: Require exact main tip
+        id: tip
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
@@ -73,15 +81,25 @@ jobs:
               exit 1
               ;;
           esac
-          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
-          if [ "$SHA" != "$tip" ]; then
-            echo "::error::Refusing to deploy $SHA; current tip of main is $tip. Re-runs of old CI/deploy runs are blocked."
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/heads/main" --jq .sha)
+          if [ -z "$tip" ] || [ "$tip" = null ]; then
+            echo "::error::Could not resolve the current tip of main."
             exit 1
+          fi
+          if [ "$SHA" != "$tip" ]; then
+            echo "::notice::Skipping deploy of $SHA; current tip of main is $tip. Re-runs of old CI/deploy runs are blocked."
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
           fi
 
   preflight:
     needs: gate
+    if: needs.gate.outputs.allowed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     environment: production
     outputs:
       configured: ${{ steps.check.outputs.configured }}
@@ -106,47 +124,64 @@ jobs:
 
   release:
     needs: [gate, preflight]
-    if: needs.preflight.outputs.configured == 'true'
+    if: needs.gate.outputs.allowed == 'true' && needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     environment: production
     steps:
       - name: Confirm SHA is still the tip of main
+        id: tip
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
-          if [ "$SHA" != "$tip" ]; then
-            echo "::error::Refusing to deploy $SHA; current tip of main is $tip."
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/heads/main" --jq .sha)
+          if [ -z "$tip" ] || [ "$tip" = null ]; then
+            echo "::error::Could not resolve the current tip of main."
             exit 1
           fi
+          if [ "$SHA" != "$tip" ]; then
+            echo "::notice::Skipping deploy of $SHA; current tip of main is $tip."
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.tip.outputs.allowed == 'true'
         with:
           ref: ${{ env.SHA }}
+          persist-credentials: false
 
       - name: Build migrations bundle and seeder
+        if: steps.tip.outputs.allowed == 'true'
         uses: ./.github/actions/build-db-tools
 
       - name: Migrate Neon
+        if: steps.tip.outputs.allowed == 'true'
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: ./dbtools/efbundle | tee migrate.txt
 
       - name: Seed (only if the seed version or scale changed)
+        if: steps.tip.outputs.allowed == 'true'
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           SEED_SCALE: ${{ vars.SEED_SCALE || '1.0' }}
         run: ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" | tee seed.txt
 
       - name: Trigger Render deploy of this commit
+        if: steps.tip.outputs.allowed == 'true'
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           case "$HOOK" in *\?*) sep='&' ;; *) sep='?' ;; esac
-          curl -fsS -X POST "${HOOK}${sep}ref=${SHA}" > /dev/null
+          curl -fsS --max-time 30 -X POST "${HOOK}${sep}ref=${SHA}" > /dev/null
           echo "Deploy requested for ${SHA}"
 
       - name: Smoke test (wait for the new build to serve /health)
+        if: steps.tip.outputs.allowed == 'true'
         env:
           APP_URL: ${{ vars.APP_URL }}
         run: |
@@ -160,8 +195,8 @@ jobs:
             sleep 15
           done
           [ "$v" = "$SHA" ] || { echo "::error::$APP_URL did not report $SHA within 15 minutes"; exit 1; }
-          root_code=$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/")
-          me_code=$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/api/me")
+          root_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/")
+          me_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/api/me")
           echo "GET / -> $root_code"
           echo "GET /api/me -> $me_code"
           test "$root_code" = 200
@@ -171,7 +206,12 @@ jobs:
         if: always()
         env:
           APP_URL: ${{ vars.APP_URL }}
+          ALLOWED: ${{ steps.tip.outputs.allowed }}
         run: |
+          if [ "$ALLOWED" != true ]; then
+            echo "### Deploy skipped: main moved past ${SHA:0:7}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "### Deploy ${SHA:0:7}"
             echo "- URL: $APP_URL"

@@ -1,0 +1,32 @@
+name: Gitleaks (full history)
+
+# Weekly scan of every ref (`git log --all`), including dangling commits the PR job's
+# `--log-opts=HEAD` cannot see. Dispatch-able. The PR `secrets` job in ci.yml is unchanged.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (all refs)
+        run: >
+          docker run --rm -v "$PWD":/repo
+          zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
+          git /repo --config /repo/.gitleaks.toml --redact --no-banner -v --log-opts=--all
