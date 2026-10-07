@@ -41,7 +41,7 @@ public static class ConnectionStrings
             Host = uri.Host,
             Port = uri.IsDefaultPort || uri.Port <= 0 ? 5432 : uri.Port,
             Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
-            Username = Uri.UnescapeDataString(userInfo[0]),
+            Username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "",
             Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : null,
         };
         foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
@@ -50,11 +50,19 @@ public static class ConnectionStrings
             var value = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
             switch (kv[0].ToLowerInvariant())
             {
-                case "sslmode": b.SslMode = Enum.Parse<SslMode>(value, ignoreCase: true); break;
+                case "sslmode": b.SslMode = ParseSslMode(value); break;
                 case "channel_binding": break; // libpq-only; Npgsql negotiates SCRAM channel binding itself
                 default: break;
             }
         }
         return b.ConnectionString;
+    }
+
+    internal static SslMode ParseSslMode(string value)
+    {
+        var token = value.Replace("-", "", StringComparison.Ordinal);
+        if (!Enum.TryParse<SslMode>(token, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+            throw new ArgumentException($"Unknown sslmode '{value}'.");
+        return mode;
     }
 }
