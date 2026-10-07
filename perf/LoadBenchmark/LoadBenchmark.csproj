@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ADR-0004: bulk load via Npgsql binary COPY vs EF Core AddRange + SaveChanges, same rows, same table shape. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Seeder/Desk.Seeder.csproj" />
+  </ItemGroup>
+</Project>

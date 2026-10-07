@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/perf/">
+    <Project Path="perf/LoadBenchmark/LoadBenchmark.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Desk.Api/Desk.Api.csproj" />
     <Project Path="src/Desk.Data/Desk.Data.csproj" />
