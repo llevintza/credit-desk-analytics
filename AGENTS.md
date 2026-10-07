@@ -16,8 +16,16 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    - before/after measurements
    - Playwright screenshots for UI changes (dark + light)
    - the test list
+   - coverage numbers (coverlet and Vitest: line/branch overall and on new/changed code, link to the CI summary)
    - an updated README §17 Status row
-6. **Every PR also gets an automated Claude review** (README §14.5). Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer). The gate includes all test suites passing with nothing skipped or weakened, coverage collected with main never dropping and ≥80% on new or changed code, and CI governance (workflows, Dockerfile, render.yaml reviewed like code, SHA pins, least privilege, secrets only in the production environment, gitleaks on, nothing loosened).
+6. **Every PR also gets an automated Claude review** (README §14.5). Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer).
+
+   The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+   3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+   Tech Coordinator merges and starts the next phase.
+
    - Fix [blocking] comments on the same branch and push. Don't resolve a reviewer thread you haven't fixed.
    - **Tech Coordinator merges. Never merge a PR yourself, including your own.** A Claude `blocking=0` marker, self-resolved threads, or green checks without coverage are not the gate and do not authorize a merge or the next phase.
    - **After a merge, wait for Tech Coordinator to start the next phase.** Don't start it yourself.
@@ -31,7 +39,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
   - `.env.example` holds key names only.
   - Connection strings, cookie keys and demo-account JSON live in the Render/Neon dashboards or a local `.env`.
   - Production deploy/DB secrets live only in the GitHub `production` environment (never as repository secrets).
-  - The Claude review API key is a documented exception (default pending Leo's confirmation): a dedicated `claude-review` environment (not `production`, not a repository secret), holding a spend-capped key used only by `.github/workflows/claude-review.yml`.
+  - The Claude review API key is Leo's decision (2026-10-07): a dedicated `claude-review` environment (not `production`, not a repository secret), holding a spend-capped key used only by `.github/workflows/claude-review.yml`.
   - The UserAdmin CLI prints generated passwords **once** and never logs them.
   - Never paste credentials into commits, PRs, issues or ADRs.
   - **No default or example credentials either**, not even for local throwaway databases: no `Password=…` literals in compose, CI, code or docs. Local passwords are generated into the gitignored `.env`. CI databases use trust auth or a per-run random password.
@@ -85,9 +93,11 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 
 ## Definition of done for any PR
 
-- All test suites passing with nothing skipped or weakened; coverage collected with main never dropping and ≥80% on new or changed code; lint, e2e, budgets.
-- CI governance: workflows, Dockerfile, render.yaml reviewed like code; SHA pins; least privilege; secrets only in the `production` environment (plus the documented `claude-review` exception); gitleaks on; nothing loosened.
+- The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+  1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+  2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+  3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.
 - README §17 Status is updated. Nothing secret is in the diff.
-- Tech Coordinator merges. Don't start the next §15 phase until Tech Coordinator does.
+- Tech Coordinator merges and starts the next phase. Don't start the next §15 phase until Tech Coordinator does.

@@ -760,19 +760,19 @@ services:
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
 3. **GitHub protections first** (before any production secret):
    - Environment **`production`:** deployment branch `main` only; **required reviewers on** (workflow YAML cannot set those).
-   - Ruleset on `main`: required status checks only (`secrets`, `api`, `web`, `compose-smoke`; **not** `review`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
-4. **Then** add the `production` environment secrets/variables. Don't set `APP_URL` until Tech Coordinator gives the go-ahead (that variable turns deploys on):
+   - Ruleset on `main`: required status checks: every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
+4. **Then** add the `production` environment secrets (not `APP_URL` yet):
 
    | Kind | Name | Value |
    |---|---|---|
    | secret | `NEON_DATABASE_URL` | Neon direct connection string (Npgsql format) |
    | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
-   | variable | `APP_URL` | `https://credit-desk-analytics.onrender.com` (or the assigned URL) |
    | variable | `SEED_SCALE` | `1.0` |
 
-5. **Claude review (default pending Leo's confirmation):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. The `review` check stays non-required.
-6. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
-7. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
+5. **Claude review (Leo's decision, 2026-10-07):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. The `review` check stays non-required.
+6. **Last:** after Tech Coordinator's go-ahead, set `production` environment variable `APP_URL` to the service URL (no trailing slash). That variable turns deploys on.
+7. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
+8. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
 
 ---
 
@@ -835,16 +835,18 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 
 - Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. That marker is the model's own count. Any workflow running as `github-actions[bot]` can post it.
-- It reads working rules from the PR **base** commit, not the head. The job is **advisory and must not be a required check**. It skips with a notice when the key is missing, and it skips forks and Dependabot.
-- **Default (pending Leo's confirmation):** `ANTHROPIC_API_KEY` lives in a dedicated GitHub environment **`claude-review`** (spend-capped key; no branch restriction; no required reviewers). Never the `production` environment, never a repository secret. It is unknown whether the Claude GitHub App is installed; the workflow does not need it (it passes `github_token`).
-
-Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer). The gate includes all test suites passing with nothing skipped or weakened, coverage collected with main never dropping and ≥80% on new or changed code, and CI governance (workflows, Dockerfile, render.yaml reviewed like code, SHA pins, least privilege, secrets only in the production environment, gitleaks on, nothing loosened).
+- Before the action runs, the job overlays the base `AGENTS.md` and `README.md` on the working tree (so `CLAUDE.md`'s `@AGENTS.md` import cannot load the PR head), deletes nested `CLAUDE.md` files, and copies base `.claude` / top-level `CLAUDE.md`. Checkout credentials are not persisted; `Read` of `.git/**` is denied (the action still writes its own job token into `.git/config`). The job is **advisory and must not be a required check**. It skips with a notice when the key is missing.
+- **Leo's decision (2026-10-07):** `ANTHROPIC_API_KEY` lives in a dedicated GitHub environment **`claude-review`** (spend-capped key; no branch restriction; no required reviewers). Never the `production` environment, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. It is unknown whether the Claude GitHub App is installed; the workflow does not need it (it passes `github_token`).
 
 **The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
 
-**Merge gate:** every required check green on the head SHA (tests with none skipped or weakened; coverage reported, ≥80% on new/changed code, no drop on main), Code Reviewer's verdict for the head SHA, and Tech Coordinator merges. Tech Coordinator starts the next phase.
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+Tech Coordinator merges and starts the next phase.
 
-**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges.
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip.
 
 ---
 
@@ -875,7 +877,13 @@ Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15
 - Playwright screenshots for UI changes
 - an updated [§17 Status](#17-status) row
 
-The implementing agent **stops after opening each PR** and waits for review. **Tech Coordinator merges.** After a merge, wait for Tech Coordinator to start the next phase; don't start it yourself.
+The implementing agent **stops after opening each PR** and waits for review.
+
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
 ---
 

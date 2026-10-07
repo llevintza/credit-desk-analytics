@@ -25,7 +25,7 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
 | Render **Deploy Hook URL** | Render (step 2) | GitHub `production` environment secret `RENDER_DEPLOY_HOOK_URL` | The deploy pipeline, to start a deploy |
 | Render **service URL** | Render (step 2) | GitHub `production` environment variable `APP_URL` | The deploy pipeline's smoke test |
 | `SEED_SCALE` = `1.0` | n/a | GitHub `production` environment variable | The seeder |
-| Anthropic API key | Anthropic Console (step 5) | GitHub **`claude-review` environment** secret `ANTHROPIC_API_KEY` (default pending Leo's confirmation; never `production`, never a repository secret) | The Claude review workflow on every PR |
+| Anthropic API key | Anthropic Console (step 5) | GitHub **`claude-review` environment** secret `ANTHROPIC_API_KEY` (Leo's decision, 2026-10-07; never `production`, never a repository secret) | The Claude review workflow on same-repo PRs (forks and Dependabot skip) |
 
 ---
 
@@ -102,9 +102,9 @@ Workflow YAML cannot set these. Do them by hand.
 2. **Create `production`** if it does not exist (**New environment**, name `production` exactly), then **Configure environment**.
 3. **Restrict it now:**
    - **Deployment branches and tags:** choose **Selected branches and tags**, then add the rule `main`. Only `main` can deploy.
-   - **Required reviewers:** add `llevintza` (**required**). Every production deploy and DB-ops run waits for an approval in the Actions tab. Leave "Prevent self-review" off: you're the only reviewer. Every bot acts as `llevintza`, so this is a deliberate step and an audit trail, not separation of duties.
+   - **Required reviewers:** add `llevintza` (**required**). `deploy.yml` has both `preflight` and `release` on `environment: production`, so each deploy waits for **two** approvals, and every merge's preflight waits even while `APP_URL` is unset. Leave "Prevent self-review" off: you're the only reviewer. Every bot acts as `llevintza`, so this is a deliberate step and an audit trail, not separation of duties.
 4. **Ruleset on `main`** (Settings → Rules → New ruleset, target `main`):
-   - **Required status checks only:** `secrets`, `api`, `web`, `compose-smoke`. Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
+   - **Required status checks:** every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
    - **No required approving review.** Every bot acts as `llevintza` and cannot self-approve, so a required PR review would deadlock every merge.
    - Block force-pushes and deletions of `main`.
 
@@ -131,9 +131,9 @@ Confirm `NEON_DATABASE_URL` and `RENDER_DEPLOY_HOOK_URL` will be **environment**
 
 ---
 
-## Step 5: Anthropic API key (Claude review; default pending Leo's confirmation)
+## Step 5: Anthropic API key (Claude review; Leo's decision, 2026-10-07)
 
-The review job is **advisory and not a required check**. Default (pending Leo's confirmation): a dedicated `claude-review` GitHub environment holding a spend-capped key. Not `production` (that environment is main-only; PR jobs must never see it). Not a repository secret.
+The review job is **advisory and not a required check**. Leo's decision (2026-10-07): a dedicated `claude-review` GitHub environment holding a spend-capped key. Not `production` (that environment is main-only; PR jobs must never see it). Not a repository secret. Same-repo PRs use this key; forks and Dependabot skip. Each run creates a GitHub deployment on the PR (no reviewers, no branch restriction, so those jobs can read the key).
 
 1. Sign in at <https://console.anthropic.com> → **Settings → API Keys** → **Create Key**.
    - **Name:** `credit-desk-analytics PR review`.
@@ -156,17 +156,21 @@ The review job is **advisory and not a required check**. Default (pending Leo's 
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head> blocking=<n> -->`.
 - If the key is missing, the job **skips with a notice** and stays green. Forks and Dependabot are skipped. Keep `review` **out** of the required checks on `main`.
 
-Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer). The gate includes all test suites passing with nothing skipped or weakened, coverage collected with main never dropping and ≥80% on new or changed code, and CI governance (workflows, Dockerfile, render.yaml reviewed like code, SHA pins, least privilege, secrets only in the production environment, gitleaks on, nothing loosened).
-
 **The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
 
-**Merge gate:** every required check green on the head SHA (tests with none skipped or weakened; coverage reported, ≥80% on new/changed code, no drop on main), Code Reviewer's verdict for the head SHA, and Tech Coordinator merges. Tech Coordinator starts the next phase.
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+Tech Coordinator merges and starts the next phase.
 
-**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can still change `claude-review.yml` itself; that residual risk is accepted only because the review is advisory.
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip.
 
 ---
 
 ## Step 6: First deploy
+
+**Prerequisite:** Tech Coordinator's go-ahead, then step 4.3 (`APP_URL`); approve both `production` prompts (`preflight` and `release`).
 
 1. GitHub → **Actions** → **Deploy** → **Run workflow** (branch **main**) → **Run workflow**.
 2. Open the run. The **preflight** job should report all values present. Then **release** runs:
