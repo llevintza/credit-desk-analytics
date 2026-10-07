@@ -12,7 +12,20 @@ runs:
         global-json-file: global.json
     - shell: bash
       run: dotnet tool restore
+    # `dotnet tool restore` only installs local tools (dotnet-ef). It does not write
+    # project.assets.json. Deploy and db-ops invoke this action on a clean checkout,
+    # so NuGet restore for linux-x64 must happen here (NETSDK1004 otherwise).
     - shell: bash
+      run: |
+        dotnet restore src/Desk.Data/Desk.Data.csproj -r linux-x64
+        dotnet restore src/Desk.Seeder/Desk.Seeder.csproj -r linux-x64
+    # AppDbContextDesignFactory requires ConnectionStrings__App or DATABASE_URL to
+    # construct the context. The bundle does not open a connection at build time and
+    # re-reads DATABASE_URL at runtime (deploy/db-ops inject the production secret
+    # only on migrate/seed). Password-less, not a credential.
+    - shell: bash
+      env:
+        DATABASE_URL: Host=127.0.0.1;Database=design-time;Username=design-time
       run: |
         dotnet ef migrations bundle \
           --project src/Desk.Data --startup-project src/Desk.Data \
