@@ -123,6 +123,7 @@ Keep the Neon tab open: you'll paste the connection string in steps 2 and 3.
    - **Name:** `ANTHROPIC_API_KEY`
    - **Value:** the key
 3. This is a **repository** secret, not a `production` environment secret, because reviews run on PR branches.
+4. No GitHub App installation is needed. The workflow passes its own `GITHUB_TOKEN` to the action, so review comments appear as **github-actions[bot]**. If you install the Claude GitHub App (<https://github.com/apps/claude>) instead and remove `github_token:` from the workflow, comments post as **claude[bot]**.
 
 **What the review does:**
 - It runs on every PR push (`.github/workflows/claude-review.yml`).
