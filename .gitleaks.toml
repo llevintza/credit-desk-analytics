@@ -29,5 +29,7 @@ secretGroup = 1
 # letters, so 7a9c9b3's excludeByAttribute list was a false positive. Not a
 # token; do not rewrite history for it.
 [[allowlists]]
-description = "Coverlet excludeByAttribute names are not Codecov tokens"
-paths = ['''(^|/)tests/testconfig\.json$''']
+description = "Coverlet ExcludeFromCodeCoverageAttribute is not a Codecov token"
+targetRules = ["codecov-access-token"]
+regexTarget = "match"
+regexes = ['''ExcludeFromCodeCoverageAttribute''']
