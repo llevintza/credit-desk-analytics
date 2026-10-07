@@ -108,6 +108,6 @@ jobs:
           cat health.json
           test "$(jq -r .version health.json)" = "${{ github.sha }}"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)" = 200
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me")" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)" = 401
       - if: failure()
         run: docker compose logs
