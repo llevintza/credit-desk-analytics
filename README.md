@@ -872,7 +872,7 @@ The implementing agent **stops after opening each PR** and waits for review.
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up (this PR): deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL) |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL) |
 | 1 Data | n/a | Not started |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |
