@@ -45,3 +45,4 @@ Option 2:
 - **Migrations must be backward compatible** with the running version (expand → contract; README §14.4), because they run before the new app starts.
 - **The seeder owns seed versioning.** Forgetting to bump `SeedVersion.Current` means production keeps old data. AGENTS.md calls this out.
 - **One-time manual setup** (Neon project, Render blueprint, GitHub environment secrets; README §13.3). Until it's done, the preflight job skips the deploy with a summary instead of failing.
+- **Stop-on-failure and main-only release** are enforced by ADR-0017 (`defaults.run.shell: bash` for pipefail, explicit `workflow_run`/`workflow_dispatch` guards, step-scoped `DATABASE_URL`). The `branches: [main]` filter on `workflow_run` is not sufficient on its own.

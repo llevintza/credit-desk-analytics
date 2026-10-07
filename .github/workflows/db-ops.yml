@@ -1,6 +1,8 @@
 name: DB ops
 
 # README §14.3: manual, guarded operations on the production database.
+# DATABASE_URL is only injected on the steps that talk to Neon. Dispatch is
+# refused unless the run is from refs/heads/main (case-sensitive) at the current tip.
 on:
   workflow_dispatch:
     inputs:
@@ -23,20 +25,47 @@ concurrency:
 permissions:
   contents: read
 
-jobs:
+# Explicit `bash` is `bash --noprofile --norc -eo pipefail`, so `case … | tee`
+# fails the step when migrate/seed/size-report exits non-zero.
+defaults:
   run:
+    shell: bash
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exact main tip
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::DB ops is only allowed from refs/heads/main (this run is $REF)."
+            exit 1
+          fi
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$SHA" != "$tip" ]; then
+            echo "::error::Refusing DB ops at $SHA; current tip of main is $tip. Re-runs of old runs are blocked."
+            exit 1
+          fi
+
+  run:
+    needs: gate
     runs-on: ubuntu-latest
     environment: production
     env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       # Inputs go through env, never interpolated into scripts (script injection).
       OPERATION: ${{ inputs.operation }}
       SCALE: ${{ inputs.scale }}
       CONFIRM: ${{ inputs.confirm }}
     steps:
       - name: Guard
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
-          [ -n "$DATABASE_URL" ] || { echo "::error::NEON_DATABASE_URL is not set (README §13.3)"; exit 1; }
+          [ -n "$NEON_DATABASE_URL" ] || { echo "::error::NEON_DATABASE_URL is not set (README §13.3)"; exit 1; }
           case "$SCALE" in ''|*[!0-9.]*) echo "::error::scale must be a number"; exit 1 ;; esac
           if [ "$OPERATION" = "reseed" ] && [ "$CONFIRM" != "RESEED-PRODUCTION" ]; then
             echo "::error::reseed requires confirm=RESEED-PRODUCTION"; exit 1
@@ -44,10 +73,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-db-tools
       - name: Run
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           case "$OPERATION" in
             migrate)     ./dbtools/efbundle ;;
             reseed)      ./dbtools/seeder/Desk.Seeder --force --scale "$SCALE" ;;
             size-report) ./dbtools/seeder/Desk.Seeder --size-report ;;
           esac | tee out.txt
-          { echo "### DB ops: $OPERATION"; sed 's/^/    /' out.txt; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Summary
+        if: always()
+        run: |
+          { echo "### DB ops: $OPERATION"; sed 's/^/    /' out.txt 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"

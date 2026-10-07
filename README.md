@@ -758,7 +758,7 @@ services:
    - New → Blueprint → this repo (`render.yaml`).
    - Set `DATABASE_URL` in the dashboard.
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
-3. **GitHub:** create the Environment **`production`** (Settings → Environments), with required reviewers optional. Add:
+3. **GitHub:** create the Environment **`production`** (Settings → Environments). Limit it to the `main` branch and require reviewers (workflow YAML cannot set those). Add:
 
    | Kind | Name | Value |
    |---|---|---|
@@ -788,11 +788,17 @@ services:
    - upload the report and screenshots as artifacts
 4. **budgets:** `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
-Nothing deploys from PR branches.
+Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
 ### 14.2 CD: `.github/workflows/deploy.yml`, on push to `main` (after CI passes)
 
-Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by `workflow_dispatch`. It runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
+Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by `workflow_dispatch`. The `workflow_run` `branches: [main]` filter matches the triggering run's **head branch**, so jobs that use the `production` environment (and `DATABASE_URL`) also require:
+
+- **`workflow_run`:** `event == push` **and** `head_branch == main` **and** `head_repository.full_name == github.repository` **and** `conclusion == success`
+- **`workflow_dispatch`:** ref is exactly `refs/heads/main` (case-sensitive bash in the no-secrets `gate` job; GitHub's expression `==` is case-insensitive)
+- **SHA:** `workflow_run.head_sha` or `github.sha` equals the current tip of `main` (re-runs of old successful CI/deploy runs are refused)
+
+`DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). The workflow runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
 
 | Job | Steps |
 |---|---|
@@ -808,6 +814,8 @@ Inputs:
 - `operation`: `migrate` | `reseed` | `size-report`
 - `scale`: default `1.0`
 - `confirm`: must equal `RESEED-PRODUCTION` for `reseed`; otherwise the job fails before touching the database
+
+Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensitive) at the current tip of `main`. `DATABASE_URL` is injected only on the step that talks to Neon.
 
 `reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
 
@@ -878,7 +886,7 @@ The implementing agent **stops after opening each PR** and waits for review.
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | In review: deploys on merge once the §13.3 setup is done |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL) |
 | 1 Data | n/a | Not started |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |
