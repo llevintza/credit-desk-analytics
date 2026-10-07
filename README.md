@@ -786,14 +786,15 @@ services:
    - upload the report and screenshots as artifacts
 4. **budgets:** `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
-Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless `github.ref == refs/heads/main` (ADR-0017). A PR whose head branch is named `main` is not a deploy.
+Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
 ### 14.2 CD: `.github/workflows/deploy.yml`, on push to `main` (after CI passes)
 
 Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by `workflow_dispatch`. The `workflow_run` `branches: [main]` filter matches the triggering run's **head branch**, so jobs that use the `production` environment (and `DATABASE_URL`) also require:
 
 - **`workflow_run`:** `event == push` **and** `head_branch == main` **and** `head_repository.full_name == github.repository` **and** `conclusion == success`
-- **`workflow_dispatch`:** `github.ref == refs/heads/main` (any other ref fails a no-secrets job)
+- **`workflow_dispatch`:** ref is exactly `refs/heads/main` (case-sensitive bash in the no-secrets `gate` job; GitHub's expression `==` is case-insensitive)
+- **SHA:** `workflow_run.head_sha` or `github.sha` equals the current tip of `main` (re-runs of old successful CI/deploy runs are refused)
 
 `DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). The workflow runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
 
@@ -812,7 +813,7 @@ Inputs:
 - `scale`: default `1.0`
 - `confirm`: must equal `RESEED-PRODUCTION` for `reseed`; otherwise the job fails before touching the database
 
-Dispatch is refused unless the run is from `refs/heads/main`. `DATABASE_URL` is injected only on the step that talks to Neon.
+Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensitive) at the current tip of `main`. `DATABASE_URL` is injected only on the step that talks to Neon.
 
 `reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
 

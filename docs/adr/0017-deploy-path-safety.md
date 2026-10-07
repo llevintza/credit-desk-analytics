@@ -53,12 +53,13 @@ Option 3.
 Deploy/release (and any job that receives `DATABASE_URL`) runs only when:
 
 - **`workflow_run`:** `conclusion == success` **and** `event == 'push'` **and** `head_branch == 'main'` **and** `head_repository.full_name == github.repository`
-- **`workflow_dispatch`:** `github.ref == 'refs/heads/main'`
+- **`workflow_dispatch`:** ref is exactly `refs/heads/main`
+- **SHA** (case-sensitive bash in the no-secrets `gate` job, repeated at the start of `release`): equals the current tip of `main` (`gh api repos/$GITHUB_REPOSITORY/commits/main --jq .sha`). Re-running an old CI or deploy run is refused.
 
-`db-ops.yml` is dispatch-only and uses the same ref guard.
+GitHub expression `==` is case-insensitive, so `MAIN` would pass `== 'main'`. The `gate` job uses `[ "$REF" = refs/heads/main ]` / `[ "$HEAD_BRANCH" = main ]` with those values passed through `env:` (not interpolated into `run:`). `db-ops.yml` is dispatch-only and uses the same gate.
 
 ## Consequences
 
 - A failed migration or seed fails its step and stops the job in CI, deploy, and db-ops. The running app keeps serving the old schema, which is the ADR-0016 / §14.4 promise.
-- `workflow_run` still *starts* for any completed CI run whose `head_branch` is `main` (GitHub's filter cannot see `event` or the head repository). Jobs that use the `production` environment are skipped unless the extra `if` matches. A human should still set the GitHub `production` environment to the `main` branch with required reviewers, and a ruleset on `main` (required checks, one review, squash only). Those cannot be expressed in workflow YAML.
+- `workflow_run` still *starts* for any completed CI run whose `head_branch` is `main` (GitHub's filter cannot see `event` or the head repository). Jobs that use the `production` environment `need` the no-secrets `gate` job. A human **must** set the GitHub `production` environment to the `main` branch with required reviewers **before any production secret is added**: `workflow_dispatch` runs the selected ref's YAML, so a branch that deletes the gate would otherwise still see those secrets. A ruleset on `main` (required checks, one review, squash only) is the same class of dashboard setting. Those cannot be expressed in workflow YAML.
 - SHA-pinning Actions, Dependabot, coverage, and a scheduled full-history gitleaks scan stay out of this PR.
