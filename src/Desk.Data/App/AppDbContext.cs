@@ -2,12 +2,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Desk.Data.App;
 
-/// <summary>Stable application model (EF Core): seed metadata now; accounts, presets and audit in later phases.</summary>
+/// <summary>Stable application model (EF Core): seed metadata and the column catalog; accounts, presets and audit in later phases.</summary>
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public const string Schema = "app";
 
     public DbSet<SeedMetadata> SeedMetadata => Set<SeedMetadata>();
+    public DbSet<ColumnCatalogEntry> ColumnCatalog => Set<ColumnCatalogEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -22,6 +23,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");
             e.Property(x => x.DatabaseSizeBytes).HasColumnName("database_size_bytes");
             e.HasIndex(x => x.CompletedAt);
+        });
+        b.Entity<ColumnCatalogEntry>(e =>
+        {
+            e.ToTable("column_catalog");
+            e.HasKey(x => x.Name);
+            e.Property(x => x.Name).HasColumnName("name").HasMaxLength(64);
+            e.Property(x => x.Ordinal).HasColumnName("ordinal");
+            e.Property(x => x.Group).HasColumnName("group_name").HasMaxLength(64);
+            e.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16);
+            e.Property(x => x.Aggregation).HasColumnName("aggregation").HasMaxLength(32);
+            e.Property(x => x.Header).HasColumnName("header").HasMaxLength(64);
+            e.HasIndex(x => x.Ordinal).IsUnique();
         });
     }
 }
