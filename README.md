@@ -148,10 +148,11 @@ credit-desk-analytics/
 │  └─ Desk.UserAdmin/        ← CLI: add/list/disable/reset accounts (prints a generated password once)
 ├─ tests/
 │  ├─ Desk.Api.Tests/        ← integration tests on Testcontainers Postgres
-│  └─ Desk.Data.Tests/       ← query-builder and whitelist unit tests
+│  ├─ Desk.Data.Tests/       ← query-builder and whitelist unit tests (phase 3)
+│  └─ Desk.Seeder.Tests/     ← generator unit tests + Testcontainers seeding tests
 ├─ web/                      ← Angular 22 workspace (app + Vitest unit tests)
 ├─ e2e/                      ← Playwright tests + screenshot specs
-├─ perf/                     ← k6 scripts, payload-size script, results/ (committed summaries only)
+├─ perf/                     ← LoadBenchmark (ADR-0004), k6 scripts, payload-size script
 ├─ deploy/
 │  ├─ Dockerfile             ← multi-stage: node build web → dotnet publish → runtime image
 │  └─ start.sh               ← env check → exec app (no migrations at boot)
@@ -238,9 +239,26 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB.
 
+**Measured (phase 1, scale 1.0, SEED=42):**
+- **1,563,791 rows** across 20 tables, loaded in **about 8–10 s** locally.
+- `DB_SIZE_MB=271`.
+- The snapshot is **202 columns**.
+- The total book is about $6.9B market value across 20,001 positions.
+
+See ADR-0003 and ADR-0004.
+
 ### 5.5 Seeder requirements
 
-- A .NET console app (`src/Desk.Seeder`). Options: `--seed`, `--as-of`, `--scale` (0.1 for tests, 1.0 for the default), `--drop`.
+- A .NET console app (`src/Desk.Seeder`). Options:
+  - `--seed` (default 42)
+  - `--as-of yyyy-MM-dd` (default: the last business day)
+  - `--scale` (0.1 for tests, 1.0 default)
+  - `--if-changed` (skip when the version, seed and scale match `app.seed_metadata`)
+  - `--force`
+  - `--size-report`
+  - `--max-mb`
+- The prior business day is generated as the snapshot's second as-of date.
+- **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
 - **Realism:**
@@ -910,8 +928,8 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up (this PR): restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish |
-| API docs (Swagger UI) | #93 | Merged; follow-up (this PR): relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish |
+| API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |
 | 2 Auth and limits | n/a | Not started |
