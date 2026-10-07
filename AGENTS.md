@@ -53,7 +53,6 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
   - No captive dependencies (a scoped context inside a singleton).
 - **Async:** pass the `CancellationToken` everywhere. No `.Result`, `.Wait()` or `async void`.
 - **Money:** use `decimal` / `numeric`. Round only at the display edge. Empty or zero weights return `null`, never `NaN`.
-- **New endpoints get OpenAPI metadata:** `WithName`, `WithSummary`, `WithTags` and `Produces…` for non-200 results, so `/swagger` stays complete.
 - **Angular:**
   - OnPush + signals.
   - `switchMap` for supersedable queries.
@@ -77,7 +76,6 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Add a migration | `dotnet ef migrations add <Name> --project src/Desk.Data --startup-project src/Desk.Data --output-dir App/Migrations` |
 | Seed (local) | `dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0` (`--force` to reseed, `--size-report`) |
 | API | `dotnet run --project src/Desk.Api` (http://localhost:5180) |
-| Try the API (Swagger UI) | http://localhost:5180/swagger (OpenAPI JSON at `/openapi/v1.json`) |
 | API tests | `dotnet test` |
 | Web dev server | `cd web && npm start` (http://localhost:4200, proxies to :5180) |
 | Web lint + unit tests | `cd web && npm run lint && npm test -- --watch=false` |

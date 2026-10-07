@@ -36,9 +36,9 @@ app.MapGet("/health", () => Results.Ok(new HealthResponse("ok", version)))
    .WithName("Health").WithTags("Health")
    .WithSummary("Liveness probe with the deployed build version; never touches the database.");
 
-// Swagger UI for exploring and trying the API (README §8). On by default; set SWAGGER_ENABLED=false to turn it off.
-// Phase 2 moves it behind the admin login.
-if (app.Configuration.GetValue("SWAGGER_ENABLED", true))
+// Swagger UI for exploring and trying the API (README §8, ADR-0019). On in Development; elsewhere only when
+// SWAGGER_ENABLED=true (the site is public and there is no login until phase 2, which moves it behind admin).
+if (app.Configuration.GetValue<bool?>("SWAGGER_ENABLED") ?? app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
     app.UseSwaggerUI(o =>
