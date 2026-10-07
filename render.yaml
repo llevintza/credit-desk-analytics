@@ -1,0 +1,23 @@
+# Render Blueprint (README §13.2). One Docker web service serves the SPA and the API from one origin.
+# Free tier: spins down after ~15 min idle; first request back takes 30-60 s. Use "starter" for always-on.
+services:
+  - type: web
+    name: credit-desk-analytics
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    plan: free
+    region: virginia
+    healthCheckPath: /health
+    # Deploys are triggered by GitHub Actions through the deploy hook, after migrations and seeding (README §14.2).
+    autoDeploy: false
+    envVars:
+      # Neon DIRECT endpoint (not -pooler). URI or Npgsql keyword format both work. Set in the dashboard.
+      - key: DATABASE_URL
+        sync: false
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: MAINTENANCE_MODE
+        value: "false"
+      - key: DEMO_ACCOUNTS_JSON
+        sync: false

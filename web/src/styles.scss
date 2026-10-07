@@ -1,0 +1,16 @@
+/* Design tokens (README §9.1): dark-first, dense, numbers in tabular figures. Light theme lands with the shell in phase 4. */
+:root {
+  color-scheme: dark;
+  --surface-1: #0f1318;
+  --surface-2: #161b22;
+  --surface-3: #212833;
+  --line: #2a313c;
+  --text: #d7dde5;
+  --muted: #8b95a3;
+  --up: #3fb37f;
+  --down: #e5534b;
+  --warn: #d4a72c;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(--text); font: 13px/1.4 var(--font-ui); }
+.num { font-variant-numeric: tabular-nums; }
