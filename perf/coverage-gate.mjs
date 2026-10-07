@@ -8,25 +8,27 @@
  *      numbers and must not sit below the BASE_SHA floor. During bootstrap the
  *      match is a Note (floor is 0/0 from BASE; HEAD JSON cannot relax overall/diff).
  *
- * CI runs THIS FILE from the default-branch checkout (`_default/perf/coverage-gate.mjs`)
- * when that file exists, otherwise (bootstrap only) from the PR head. Thresholds
- * and the floor are loaded with `git show $DEFAULT_SHA:…` / `$BASE_SHA:…` (never
- * from the PR-head worktree). `--base-dir` / `--default-dir` cannot override git.
+ * CI runs THIS FILE from the BASE_SHA checkout (`_base/perf/coverage-gate.mjs`)
+ * when that file exists, otherwise (bootstrap only) from HEAD. Thresholds
+ * and the floor are loaded with `git show $BASE_SHA:…` (never from the commit
+ * under test). `--base-dir` / `--default-dir` cannot override git. On push,
+ * `_default` is pinned to `github.sha`; floor still comes from `_base`.
  *
- * Bootstrap is an explicit one-time signal: HEAD must contain
- * `perf/coverage-bootstrap.json` `{ "allowOnce": true }` AND the default branch
- * must not yet have this script. "Script missing" on a default branch that
- * already has the gate is a hard failure, not a second bootstrap.
+ * Bootstrap is an explicit `{allowOnce:true}` signal: HEAD must contain
+ * `perf/coverage-bootstrap.json` AND BASE_SHA must not yet have this script.
+ * "Script missing" on a base that already has the gate is a hard failure,
+ * not a second bootstrap.
  *
  * After the default branch has the gate, a missing or renamed gate script,
  * thresholds file, or baseline on the default branch, the PR base, or HEAD
  * fails closed. PRs whose base is not the default branch fail closed.
  *
  * Push to main: BASE_SHA is `github.event.before`. Empty `--base-ref` is empty
- * (not "true"). The retarget check runs only on `pull_request`. The push that
- * first introduces the gate (before has no gate, HEAD has the gate and
- * `{allowOnce:true}`) is a one-time bootstrap transition. That path is not
- * available to pull_request events (R3-M2).
+ * (not "true"). The retarget check runs only on `pull_request`. Floor,
+ * thresholds, and the gate script come from `_base` at BASE_SHA so a push
+ * cannot rewrite the rules it is judged by. The introducing push of this PR
+ * (before has no gate, HEAD has the gate and `{allowOnce:true}`) bootstraps.
+ * That path is not available to pull_request events (R3-M2).
  *
  * `perf/coverage-override.json` is applied only when the file differs from
  * BASE_SHA. After #5 merges, delete `perf/coverage-bootstrap.json` and
@@ -267,15 +269,8 @@ export function runGate(options = {}) {
     const headHasBaseline = existsSync(join(repoRoot, baselinePath));
     const bootstrapAllow = readBootstrapAllow(repoRoot, failHard);
 
-    const introducingGateOnPush = isPush && !gateOnBase && headHasGate && bootstrapAllow;
-
     let bootstrapped;
-    if (gateOnDefault && introducingGateOnPush) {
-      // First push to main that lands the gate (event.before has no gate).
-      bootstrapped = true;
-      if (!headHasThresholds) failHard(`bootstrap requires head ${thresholdsPath}.`);
-      if (!headHasBaseline) failHard(`bootstrap requires head ${baselinePath}.`);
-    } else if (gateOnDefault) {
+    if (gateOnDefault) {
       bootstrapped = false;
       if (!headHasGate) failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
       if (!gateOnBase) failHard(`base is missing ${gatePath}; deleting or renaming the gate fails closed.`);
@@ -381,15 +376,15 @@ export function runGate(options = {}) {
     say("");
     if (bootstrapped) {
       say(
-        "**Bootstrap:** the default branch has no `perf/coverage-gate.mjs`. This PR may establish the gate " +
-          "because HEAD contains `perf/coverage-bootstrap.json` `{allowOnce:true}` (explicit one-time signal, " +
+        "**Bootstrap:** BASE_SHA has no `perf/coverage-gate.mjs`. This PR may establish the gate " +
+          "because HEAD contains `perf/coverage-bootstrap.json` `{allowOnce:true}` (explicit signal, " +
           "not 'script missing'). Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
-          "tolerance 0.5. After the default branch has the gate, CI runs `_default/perf/coverage-gate.mjs` and a " +
-          "missing or renamed gate, thresholds, or baseline on default, base, or head **fails closed**. " +
-          "A PR whose base is not the default branch **fails closed**. The first push to main that " +
-          "introduces the gate (event.before has no gate) is a one-time bootstrap transition. " +
+          "tolerance 0.5. After BASE has the gate, CI runs `_base/perf/coverage-gate.mjs` and a " +
+          "missing or renamed gate, thresholds, or baseline on base or head **fails closed**. " +
+          "A PR whose base is not the default branch **fails closed**. The introducing push of this " +
+          "PR (event.before has no gate) bootstraps with `{allowOnce:true}`. " +
           "Lowering the floor after bootstrap requires a dedicated `[workflows]` PR with " +
-          "`perf/coverage-override.json` `{from, to, reason}` matching the default-branch floor and " +
+          "`perf/coverage-override.json` `{from, to, reason}` matching the BASE_SHA floor and " +
           "measured numbers, plus sign-off from Code Reviewer, Tech Coordinator and Helms. " +
           "A PR may raise the committed baseline to match measured coverage. After merge, delete " +
           "`perf/coverage-bootstrap.json` and `perf/coverage-override.json`. The override is applied " +
