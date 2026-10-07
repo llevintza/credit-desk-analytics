@@ -20,3 +20,4 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
 | [0016](0016-continuous-deployment.md) | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Accepted |
+| [0017](0017-deploy-path-safety.md) | Deploy-path safety: pipefail, main-only release, step-scoped DATABASE_URL | 0 Scaffold (follow-up) | Accepted |

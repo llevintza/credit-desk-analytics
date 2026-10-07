@@ -12,6 +12,13 @@ concurrency:
 permissions:
   contents: read
 
+# Explicit `bash` is `bash --noprofile --norc -eo pipefail`. The unspecified default
+# (`bash -e`) ignores a failing command on the left of `|`, so seeder exit 1/2
+# piped to `tee` would not fail the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   secrets:
     # Fails on any credential in ANY commit of the branch, not just the final tree (.gitleaks.toml).
@@ -65,8 +72,11 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    # Job-level defaults.run replaces workflow-level defaults.run entirely, so
+    # shell: bash (pipefail) must be repeated here with working-directory.
     defaults:
       run:
+        shell: bash
         working-directory: web
     steps:
       - uses: actions/checkout@v4
@@ -91,13 +101,29 @@ jobs:
           pw=$(openssl rand -hex 16)
           echo "::add-mask::$pw"
           echo "POSTGRES_PASSWORD=$pw" > .env
-      - run: APP_VERSION=${{ github.sha }} docker compose up -d --build
+      - env:
+          APP_VERSION: ${{ github.sha }}
+        run: docker compose up -d --build
       - name: Smoke
+        env:
+          EXPECT_SHA: ${{ github.sha }}
         run: |
-          for _ in $(seq 1 60); do curl -fsS localhost:8080/health > health.json && break; sleep 2; done
+          i=0
+          while [ "$i" -lt 60 ]; do
+            if curl -fsS localhost:8080/health > health.json; then
+              break
+            fi
+            i=$((i + 1))
+            sleep 2
+          done
+          test -s health.json
           cat health.json
-          test "$(jq -r .version health.json)" = "${{ github.sha }}"
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)" = 200
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)" = 401
+          test "$(jq -r .version health.json)" = "$EXPECT_SHA"
+          root_code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)
+          me_code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)
+          echo "GET / -> $root_code"
+          echo "GET /api/me -> $me_code"
+          test "$root_code" = 200
+          test "$me_code" = 401
       - if: failure()
         run: docker compose logs

@@ -2,6 +2,13 @@ name: Deploy
 
 # README §14.2: on a green CI run for main, migrate Neon -> seed if the seed version changed
 # -> trigger the Render deploy hook -> wait until /health reports the merged commit.
+#
+# workflow_run.branches matches the *triggering run's head_branch*, so a pull_request CI
+# run from a branch named "main" (including a fork's main) also matches. Jobs that reach
+# the production environment / DATABASE_URL are therefore gated below on:
+#   workflow_run: event == push, head_branch == main, head_repository == this repo, conclusion success
+#   workflow_dispatch: github.ref == refs/heads/main (case-sensitive bash; GitHub == is not)
+#   SHA being deployed == current tip of refs/heads/main (blocks re-runs of old CI/deploy)
 on:
   workflow_run:
     workflows: [CI]
@@ -16,12 +23,64 @@ concurrency:
 permissions:
   contents: read
 
+# Explicit `bash` (not the unspecified default) is `bash --noprofile --norc -eo pipefail`.
+# Without pipefail, `cmd | tee file` exits 0 even when cmd fails, so a failed migration
+# would still seed and fire the Render hook (README §14.2 / §14.4).
+defaults:
+  run:
+    shell: bash
+
 env:
   SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  # No production environment and no secrets (only GITHUB_TOKEN). Case-sensitive ref
+  # and "SHA is the tip of main" live here so a re-run of an old payload cannot reach Neon.
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exact main tip
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              if [ "$REF" != refs/heads/main ]; then
+                echo "::error::Deploy dispatch is only allowed from refs/heads/main (this run is $REF)."
+                exit 1
+              fi
+              ;;
+            workflow_run)
+              if [ "$HEAD_BRANCH" != main ]; then
+                echo "::error::Deploy workflow_run is only allowed for head_branch main (this run is $HEAD_BRANCH)."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unexpected event $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$SHA" != "$tip" ]; then
+            echo "::error::Refusing to deploy $SHA; current tip of main is $tip. Re-runs of old CI/deploy runs are blocked."
+            exit 1
+          fi
+
   preflight:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: gate
     runs-on: ubuntu-latest
     environment: production
     outputs:
@@ -46,13 +105,21 @@ jobs:
           fi
 
   release:
-    needs: preflight
+    needs: [gate, preflight]
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     environment: production
-    env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
     steps:
+      - name: Confirm SHA is still the tip of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$SHA" != "$tip" ]; then
+            echo "::error::Refusing to deploy $SHA; current tip of main is $tip."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SHA }}
@@ -61,10 +128,13 @@ jobs:
         uses: ./.github/actions/build-db-tools
 
       - name: Migrate Neon
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: ./dbtools/efbundle | tee migrate.txt
 
       - name: Seed (only if the seed version or scale changed)
         env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           SEED_SCALE: ${{ vars.SEED_SCALE || '1.0' }}
         run: ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" | tee seed.txt
 
@@ -90,8 +160,12 @@ jobs:
             sleep 15
           done
           [ "$v" = "$SHA" ] || { echo "::error::$APP_URL did not report $SHA within 15 minutes"; exit 1; }
-          test "$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/")" = 200
-          test "$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/api/me")" = 401
+          root_code=$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/")
+          me_code=$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/api/me")
+          echo "GET / -> $root_code"
+          echo "GET /api/me -> $me_code"
+          test "$root_code" = 200
+          test "$me_code" = 401
 
       - name: Summary
         if: always()
