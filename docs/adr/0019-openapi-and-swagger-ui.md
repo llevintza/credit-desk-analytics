@@ -17,17 +17,27 @@ The owner wants a page where every API endpoint can be explored and tried (READM
 
 ## Evaluation
 
-Release build, local, 5 runs each, Apple M5:
+Measured with the committed script `perf/swagger-impact.sh`: Release build, Production environment, 5 runs each, Apple M5.
 
 | Criterion | Measured / assessed |
 |---|---|
-| Startup to first `/health` | Swagger off median **207 ms** (203–283) vs on median **218 ms** (210–250): +~10 ms, within noise |
+| Startup to first `/health` | Swagger off median **193 ms** (191–283) vs on median **195 ms** (189–202): no measurable difference. An earlier ad-hoc run gave 207 vs 218 ms, also within noise |
 | OpenAPI document size | **1,076 bytes** today (2 endpoints) |
-| Swagger UI bundle (`swagger-ui-bundle.js`) | 1,586,002 bytes raw, **495,160 bytes with Brotli** (response compression applies). Loaded **only** on `/swagger`; never part of the SPA's initial bundle (README §10 budget unaffected) |
+| Swagger UI bundle (`swagger-ui-bundle.js`) | 1,586,002 bytes raw, **495,160 bytes with Brotli**. Loaded **only** on `/swagger`; the SPA's `index.html` has 0 references to Swagger, so the README §10 bundle budget is unaffected |
 | Packages | `Microsoft.AspNetCore.OpenApi` (framework) + `Swashbuckle.AspNetCore.SwaggerUI` (static UI assets only) |
 | Familiarity / "Try it out" | Standard Swagger UI |
 
-**How to reproduce:** `dotnet build -c Release src/Desk.Api`, then start the DLL with `SWAGGER_ENABLED=true|false` and time the first successful `GET /health`. Fetch `/openapi/v1.json` and `/swagger/swagger-ui-bundle.js` with and without `Accept-Encoding: br`.
+**How to reproduce:**
+
+```
+$ perf/swagger-impact.sh 5
+startup_ms SWAGGER_ENABLED=false runs=5 median=193 min=191 max=283
+startup_ms SWAGGER_ENABLED=true runs=5 median=195 min=189 max=202
+openapi_json_bytes=1076
+swagger_ui_bundle_bytes_raw=1586002
+swagger_ui_bundle_bytes_br=495160
+spa_index_mentions_swagger=0
+```
 
 ## Decision
 
