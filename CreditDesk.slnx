@@ -6,5 +6,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Desk.Api.Tests/Desk.Api.Tests.csproj" />
+    <Project Path="tests/Desk.Seeder.Tests/Desk.Seeder.Tests.csproj" />
   </Folder>
 </Solution>
