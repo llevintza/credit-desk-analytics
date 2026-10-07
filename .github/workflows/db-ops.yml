@@ -59,6 +59,11 @@ jobs:
           if [ "$SHA" != "$tip" ]; then
             echo "::notice::Skipping DB ops at $SHA; current tip of main is $tip. Re-runs of old runs are blocked."
             echo "allowed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### DB ops skipped: SHA is not the tip of main"
+              echo
+              echo "Run SHA: \`$SHA\`. Current tip: \`$tip\`."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "allowed=true" >> "$GITHUB_OUTPUT"
           fi

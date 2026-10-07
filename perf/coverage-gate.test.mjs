@@ -6,16 +6,20 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  BOOTSTRAP_FILE,
   BOOTSTRAP_THRESHOLDS,
   GateFailure,
   canonicalCobertura,
   canonicalLcov,
+  describeCoverageScope,
   finitePercent,
   meetsFloor,
   parseArgs,
   runGate,
   summarizeDotnet,
   validateBaseline,
+  validateBootstrap,
+  validateOverride,
   validateThresholds,
 } from "./coverage-gate.mjs";
 
@@ -92,6 +96,25 @@ function lcov(sf, lines, branches = []) {
 function headJson(dir, measured = { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } }) {
   write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
   write(dir, "perf/coverage-baseline.json", JSON.stringify(measured));
+  write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
+}
+
+function gateArgs(base, extra = []) {
+  return [
+    "--dotnet",
+    "cov/dotnet",
+    "--web",
+    "cov/web",
+    "--base",
+    base,
+    "--default-sha",
+    base,
+    "--default-branch",
+    "main",
+    "--base-ref",
+    "main",
+    ...extra,
+  ];
 }
 
 test("parseArgs reads flags", () => {
@@ -144,6 +167,26 @@ test("schema: valid objects pass", () => {
   validateThresholds(VALID_THRESHOLDS);
   validateBaseline(VALID_BASELINE);
   validateThresholds(BOOTSTRAP_THRESHOLDS);
+  validateBootstrap({ allowOnce: true });
+  validateOverride({
+    from: VALID_BASELINE,
+    to: VALID_BASELINE,
+    reason: "documented re-baseline",
+  });
+});
+
+test("schema: extra or unknown baseline key fails", () => {
+  assert.throws(
+    () => validateBaseline({ ...VALID_BASELINE, extra: 1 }),
+    /exactly \{dotnet, web\}/,
+  );
+});
+
+test("schema: override missing reason fails", () => {
+  assert.throws(
+    () => validateOverride({ from: VALID_BASELINE, to: VALID_BASELINE, reason: "" }),
+    /non-empty string/,
+  );
 });
 
 test("schema: null, array, and non-boolean overallMustNotDrop fail", () => {
@@ -181,8 +224,17 @@ test("path keys: lcov SF maps under web/src", () => {
 test("ci.yml evaluates coverage from a base checkout directory", () => {
   const yml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
   assert.match(yml, /path: _base/);
+  assert.match(yml, /path: _default/);
   assert.match(yml, /persist-credentials: false/);
-  assert.match(yml, /_base\/perf\/coverage-gate\.mjs/);
+  assert.match(yml, /_default\/perf\/coverage-gate\.mjs/);
+  assert.match(yml, /--base-dir _base/);
+  assert.match(yml, /--default-dir _default/);
+  assert.match(yml, /types: \[opened, synchronize, reopened, edited\]/);
+  assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
+  const owners = readFileSync(join(repoRoot, ".github/CODEOWNERS"), "utf8");
+  assert.match(owners, /\/tests\/testconfig\.json/);
+  const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
+  assert.match(agents, /tests\/testconfig\.json/);
 });
 
 function setupPassRepo() {
@@ -212,6 +264,9 @@ function setupPassRepo() {
   write(dir, "web/src/app/app.ts", "export const x = 1;\n");
   headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
   const base = commit(dir, "base");
+  // Head must have the gate during bootstrap; default-sha stays at `base` (no gate).
+  write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+  write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
   return { dir, base };
 }
 
@@ -220,7 +275,7 @@ test("bootstrap: base has no gate script, head copy is allowed", () => {
   try {
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -245,12 +300,12 @@ test("once base has the script, missing thresholds FAIL (no silent bootstrap)", 
     commit(dir, "head adds json");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /refusing to bootstrap/);
+    assert.match(r.output, /missing .*thresholds|missing .*baseline|failing closed|refusing to bootstrap/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -265,7 +320,7 @@ test("head always-pass script is ignored: evaluation uses imported (base) logic"
     commit(dir, "head hacks gate and adds uncovered file");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -300,13 +355,14 @@ test("uncovered changed src file counts as 0% and can fail the 80% diff gate", (
     );
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
     const base = commit(dir, "base");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     const uncovered = Array.from({ length: 20 }, (_, i) => `    public int F${i}() => ${i};`).join("\n");
     write(dir, "src/Desk.New/BrandNew.cs", `namespace Desk.New;\npublic class BrandNew {\n${uncovered}\n}\n`);
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
     commit(dir, "add uncovered file");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -350,7 +406,7 @@ test("overall drop vs a base with the script fails", () => {
     commit(dir, "head drops coverage");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -388,7 +444,7 @@ test("overall line/branch drop vs BASE floor is reported when committed floor is
     write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -412,12 +468,12 @@ test("once base has the script, missing baseline FAIL (no silent bootstrap)", ()
     commit(dir, "head adds baseline");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /refusing to bootstrap/);
+    assert.match(r.output, /missing .*thresholds|missing .*baseline|failing closed|refusing to bootstrap/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -430,7 +486,7 @@ test("PR that turns off overallMustNotDrop or lowers a min fails", () => {
     commit(dir, "turn off no-drop");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -448,7 +504,7 @@ test("PR that lowers diffLineMinPercent vs bootstrap defaults fails", () => {
     commit(dir, "lower min");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -466,7 +522,7 @@ test("PR that lowers diffBranchMinPercent vs bootstrap defaults fails", () => {
     commit(dir, "lower branch min");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -477,26 +533,241 @@ test("PR that lowers diffBranchMinPercent vs bootstrap defaults fails", () => {
   }
 });
 
-test("committed baseline behind measured fails", () => {
-  const { dir, base } = setupPassRepo();
+test("committed baseline behind measured fails once BASE has the script", () => {
+  const dir = initRepo();
   try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 90, branch: 90 }, web: { line: 90, branch: 90 } });
+    const base = commit(dir, "base with floor 90");
     write(
       dir,
-      "perf/coverage-baseline.json",
-      JSON.stringify({
-        dotnet: { line: 90, branch: 90 },
-        web: { line: 90, branch: 90 },
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 1, "100% (2/2)"],
+        ],
       }),
     );
-    commit(dir, "stale baseline");
+    write(
+      dir,
+      "cov/web/lcov.info",
+      lcov("src/app/app.ts", [[1, 1]], [
+        [1, 0, 0, 1],
+        [1, 0, 1, 1],
+      ]),
+    );
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
     assert.match(r.output, /behind measured/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap: committed baseline above measured is a Note, not FAIL", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-dir", "_base"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.bootstrapped, true);
+    assert.equal(r.failed, false);
+    assert.match(r.output, /cannot relax overall\/diff/);
+    assert.match(r.output, /Floor: \*\*0 \/ 0\*\*/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap: head-side baseline lowering does not change overall/diff pass/fail", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    const run = () =>
+      runGate({
+        root: dir,
+        argv: gateArgs(base),
+        stdoutWrite: () => {},
+        stderrWrite: () => {},
+      });
+    const high = run();
+    write(
+      dir,
+      "perf/coverage-baseline.json",
+      JSON.stringify({
+        dotnet: { line: 50, branch: 50 },
+        web: { line: 50, branch: 50 },
+      }),
+    );
+    const low = run();
+    assert.equal(high.bootstrapped, true);
+    assert.equal(low.bootstrapped, true);
+    assert.equal(high.failed, low.failed);
+    assert.equal(low.failed, false);
+    assert.match(low.output, /cannot relax overall\/diff/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("once BASE has a floor, lowering the head JSON to match dropped coverage still fails", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 99, branch: 99 },
+      web: { line: 99, branch: 99 },
+    }));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    const base = commit(dir, "base floor 99");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 50, branch: 0 },
+      web: { line: 0, branch: 0 },
+    }));
+    commit(dir, "head drops coverage and lowers JSON to match");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-dir", dir]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /below the default-branch floor|dropped below main|below main's floor|below BASE_SHA/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("poisoned --base-dir JSON cannot replace the BASE_SHA floor", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 99, branch: 99 },
+      web: { line: 99, branch: 99 },
+    }));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    const base = commit(dir, "base floor 99");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 50, branch: 0 },
+      web: { line: 0, branch: 0 },
+    }));
+    commit(dir, "head drops coverage and lowers JSON");
+    write(dir, "_base/perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "_base/perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "_base/perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 0, branch: 0 },
+      web: { line: 0, branch: 0 },
+    }));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-dir", "_base"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /below the default-branch floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("empty --base-dir cannot force bootstrap once BASE_SHA has the script", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 99, branch: 99 },
+      web: { line: 99, branch: 99 },
+    }));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    const base = commit(dir, "base floor 99");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify({
+      dotnet: { line: 50, branch: 0 },
+      web: { line: 0, branch: 0 },
+    }));
+    commit(dir, "head drops coverage and lowers JSON");
+    mkdirSync(join(dir, "_empty"), { recursive: true });
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-dir", "_empty"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /below the default-branch floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -511,7 +782,7 @@ test("nested lcov.info is discovered", () => {
     rmSync(join(dir, "cov/web/lcov.info"));
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -527,7 +798,7 @@ test("unparseable head JSON fails closed", () => {
     write(dir, "perf/coverage-thresholds.json", "{not-json");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -552,7 +823,7 @@ test("unparseable JSON at BASE_SHA fails closed", () => {
     commit(dir, "head fixes json");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -598,6 +869,7 @@ test("diff branch below 80% fails", () => {
     write(dir, "web/src/app/app.ts", "export const x = 1;\n");
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
     const base = commit(dir, "base");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() { if (true) {} } }\nvoid Extra() {}\n");
     write(
       dir,
@@ -624,7 +896,7 @@ test("diff branch below 80% fails", () => {
     commit(dir, "add poorly covered branch");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -678,7 +950,7 @@ test("widening tolerance vs bootstrap defaults fails", () => {
     commit(dir, "widen tol");
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
@@ -699,12 +971,280 @@ test("unknown cobertura filename fails loudly", () => {
     );
     const r = runGate({
       root: dir,
-      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base],
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot canonicalize/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("after bootstrap, deleting the gate script on head fails closed", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(VALID_BASELINE));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello {}\n");
+    const base = commit(dir, "base with gate");
+    rmSync(join(dir, "perf/coverage-gate.mjs"));
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [[1, 1]],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 1]]));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("after bootstrap, renaming the gate script on head fails closed", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(VALID_BASELINE));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello {}\n");
+    const base = commit(dir, "base with gate");
+    write(dir, "perf/coverage-gate.renamed.mjs", THIS_GATE);
+    rmSync(join(dir, "perf/coverage-gate.mjs"));
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [[1, 1]],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 1]]));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("non-default PR base fails closed (retarget bypass)", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-ref", "old-main"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /not the default branch 'main'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("empty head baseline file fails closed and logs FAIL", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(dir, "perf/coverage-baseline.json", "");
+    let stdout = "";
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: (s) => {
+        stdout += s;
+      },
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(stdout, /\*\*FAIL\*\* cannot parse head/);
+    assert.match(r.output, /cannot parse head/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unknown baseline key on head fails closed and logs FAIL", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(
+      dir,
+      "perf/coverage-baseline.json",
+      JSON.stringify({ ...VALID_BASELINE, extra: 1 }),
+    );
+    let stdout = "";
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: (s) => {
+        stdout += s;
+      },
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(stdout, /\*\*FAIL\*\*.*exactly \{dotnet, web\}/);
+    assert.match(r.output, /exactly \{dotnet, web\}/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI output includes coverage table, scope, and measured JSON", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    let stdout = "";
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: (s) => {
+        stdout += s;
+      },
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false);
+    assert.match(r.output, /## Coverage/);
+    assert.match(r.output, /## Coverage scope/);
+    assert.match(r.output, /\| Project \| Overall line \| Overall branch \| Diff line \| Diff branch \|/);
+    assert.match(r.output, /Base SHA:/);
+    assert.match(stdout, /Measured baseline JSON/);
+    assert.match(stdout, /"dotnet"/);
+    assert.ok(describeCoverageScope(dir).length >= 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("valid scope-change override may lower the floor to measured; a real drop still needs {from,to,reason}", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    const from = { dotnet: { line: 99, branch: 99 }, web: { line: 99, branch: 99 } };
+    const to = { dotnet: { line: 50, branch: 0 }, web: { line: 0, branch: 0 } };
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(from));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    const base = commit(dir, "base floor 99");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(to));
+    write(
+      dir,
+      "perf/coverage-override.json",
+      JSON.stringify({
+        from,
+        to,
+        reason: "Documented change in measurement scope (fixture). Not a real coverage drop.",
+      }),
+    );
+    commit(dir, "scope-change rebaseline");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false);
+    assert.match(r.output, /Re-baseline override/);
+    assert.match(r.output, /ONLY for a documented change in measurement scope/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("override with from not equal to the default-branch floor fails", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    const from = { dotnet: { line: 99, branch: 99 }, web: { line: 99, branch: 99 } };
+    const to = { dotnet: { line: 50, branch: 0 }, web: { line: 0, branch: 0 } };
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(from));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    const base = commit(dir, "base floor 99");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 0],
+        ],
+      }),
+    );
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(to));
+    write(
+      dir,
+      "perf/coverage-override.json",
+      JSON.stringify({
+        from: { dotnet: { line: 80, branch: 80 }, web: { line: 80, branch: 80 } },
+        to,
+        reason: "wrong from",
+      }),
+    );
+    commit(dir, "bad override");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /ONLY for a documented change in measurement scope|from\/to must match/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("missing bootstrap allowOnce is not treated as script-missing bootstrap", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    rmSync(join(dir, BOOTSTRAP_FILE));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /explicit one-time signal/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

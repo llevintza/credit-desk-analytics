@@ -4,15 +4,23 @@
  *   1. New/changed coverable lines vs the merge-base with BASE_SHA >= diffLineMinPercent
  *      (same for branches).
  *   2. Overall line/branch % per project never drops vs the baseline at BASE_SHA.
- *   3. The committed perf/coverage-baseline.json must match the measured numbers.
+ *   3. Once BASE has this script, the committed baseline must match measured
+ *      numbers and must not sit below the BASE_SHA floor. During bootstrap the
+ *      match is a Note (floor is 0/0 from BASE; HEAD JSON cannot relax overall/diff).
  *
- * CI runs THIS FILE from the BASE checkout (`_base/perf/coverage-gate.mjs`) against
- * the PR head's coverage artifacts. Thresholds and the floor are loaded with
- * `git show $BASE_SHA:…`. The PR head cannot rewrite the rules by editing this script.
+ * CI runs THIS FILE from the default-branch checkout (`_default/perf/coverage-gate.mjs`)
+ * when that file exists, otherwise (bootstrap only) from the PR head. Thresholds
+ * and the floor are loaded with `git show $DEFAULT_SHA:…` / `$BASE_SHA:…` (never
+ * from the PR-head worktree). `--base-dir` / `--default-dir` cannot override git.
  *
- * Bootstrap (this PR only): main has no `perf/coverage-gate.mjs`. CI uses the head
- * copy once. After merge, a missing thresholds or baseline file at a base that
- * already has the script is a hard failure (never a silent 0/0 floor).
+ * Bootstrap is an explicit one-time signal: HEAD must contain
+ * `perf/coverage-bootstrap.json` `{ "allowOnce": true }` AND the default branch
+ * must not yet have this script. "Script missing" on a default branch that
+ * already has the gate is a hard failure, not a second bootstrap.
+ *
+ * After the default branch has the gate, a missing or renamed gate script,
+ * thresholds file, or baseline on the default branch, the PR base, or HEAD
+ * fails closed. PRs whose base is not the default branch fail closed.
  *
  * Fail closed: missing/empty/non-numeric/NaN schema, unresolvable BASE_SHA or
  * merge-base, or a git show/diff error. Comparisons use `!(actual >= floor)` so
@@ -34,6 +42,10 @@ export const ZERO_FLOOR = Object.freeze({
   dotnet: Object.freeze({ line: 0, branch: 0 }),
   web: Object.freeze({ line: 0, branch: 0 }),
 });
+
+export const BOOTSTRAP_FILE = "perf/coverage-bootstrap.json";
+export const OVERRIDE_FILE = "perf/coverage-override.json";
+export const TESTCONFIG_FILE = "tests/testconfig.json";
 
 export const NO_DROP_EPS = 1e-9;
 
@@ -120,6 +132,44 @@ export function validateBaseline(obj, label = "baseline") {
   return obj;
 }
 
+export function validateOverride(obj, label = "override") {
+  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) {
+    throw new GateFailure(`${label} must be a JSON object.`);
+  }
+  const keys = Object.keys(obj).sort();
+  if (keys.join(",") !== "from,reason,to") {
+    throw new GateFailure(`${label} must have exactly {from, reason, to}, got keys [${keys.join(", ")}].`);
+  }
+  if (typeof obj.reason !== "string" || !obj.reason.trim()) {
+    throw new GateFailure(`${label}.reason must be a non-empty string.`);
+  }
+  validateBaseline(obj.from, `${label}.from`);
+  validateBaseline(obj.to, `${label}.to`);
+  return obj;
+}
+
+export function validateBootstrap(obj, label = "bootstrap") {
+  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) {
+    throw new GateFailure(`${label} must be a JSON object.`);
+  }
+  const keys = Object.keys(obj).sort();
+  if (keys.join(",") !== "allowOnce") {
+    throw new GateFailure(`${label} must have exactly {allowOnce}, got keys [${keys.join(", ")}].`);
+  }
+  if (obj.allowOnce !== true) {
+    throw new GateFailure(`${label}.allowOnce must be true.`);
+  }
+  return obj;
+}
+
+export function baselinePairEq(a, b) {
+  return round1(a.line) === round1(b.line) && round1(a.branch) === round1(b.branch);
+}
+
+export function baselineEq(a, b) {
+  return baselinePairEq(a.dotnet, b.dotnet) && baselinePairEq(a.web, b.web);
+}
+
 /** NaN-safe: NaN >= x is false, so this FAILS closed. */
 export function meetsFloor(actual, floor, eps = NO_DROP_EPS) {
   return actual + eps >= floor;
@@ -165,6 +215,10 @@ export function runGate(options = {}) {
     const baselinePath = args.baseline ?? "perf/coverage-baseline.json";
     const gatePath = args["gate-script"] ?? "perf/coverage-gate.mjs";
     const baseSha = args.base ?? env("BASE_SHA") ?? "";
+    const defaultBranch = args["default-branch"] ?? env("DEFAULT_BRANCH") ?? "main";
+    const baseRef = String(args["base-ref"] ?? env("GITHUB_BASE_REF") ?? "")
+      .replace(/^refs\/heads\//, "")
+      .trim();
 
     const dotnetDir = resolve(repoRoot, args.dotnet ?? "TestResults/coverage");
     const webDir = resolve(repoRoot, args.web ?? "web/coverage");
@@ -172,34 +226,110 @@ export function runGate(options = {}) {
     requireCommit(repoRoot, baseSha, failHard);
     const mergeBase = requireMergeBase(repoRoot, baseSha, failHard);
 
-    const scriptAtBase = fileExistsAtRef(repoRoot, baseSha, gatePath, failHard);
-    const baseThresholds = loadJsonAtRef(repoRoot, baseSha, thresholdsPath, failHard);
-    const baseBaseline = loadJsonAtRef(repoRoot, baseSha, baselinePath, failHard);
+    if (baseRef && baseRef !== defaultBranch) {
+      failHard(
+        `PR base '${baseRef}' is not the default branch '${defaultBranch}'. ` +
+          `Coverage is only evaluated against ${defaultBranch} (retarget bypass).`,
+      );
+    }
 
-    if (scriptAtBase) {
+    const baseDir = args["base-dir"] ? resolve(repoRoot, args["base-dir"]) : null;
+    const defaultDir = args["default-dir"] ? resolve(repoRoot, args["default-dir"]) : null;
+    const defaultSha =
+      args["default-sha"] ??
+      env("DEFAULT_SHA") ??
+      resolveDefaultSha(repoRoot, defaultBranch, defaultDir, failHard);
+
+    const gateOnDefault = filePresent(repoRoot, defaultDir, defaultSha, gatePath, failHard);
+    const gateOnBase = filePresent(repoRoot, baseDir, baseSha, gatePath, failHard);
+    const headHasGate = existsSync(join(repoRoot, gatePath));
+    const headHasThresholds = existsSync(join(repoRoot, thresholdsPath));
+    const headHasBaseline = existsSync(join(repoRoot, baselinePath));
+    const bootstrapAllow = readBootstrapAllow(repoRoot, failHard);
+
+    let bootstrapped;
+    if (gateOnDefault) {
+      bootstrapped = false;
+      if (!headHasGate) failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
+      if (!gateOnBase) failHard(`base is missing ${gatePath}; deleting or renaming the gate fails closed.`);
+      if (!headHasThresholds) failHard(`head is missing ${thresholdsPath}; refusing to run without thresholds.`);
+      if (!headHasBaseline) failHard(`head is missing ${baselinePath}; refusing to run without a baseline.`);
+    } else if (bootstrapAllow) {
+      bootstrapped = true;
+      if (!headHasGate) failHard(`bootstrap requires head ${gatePath}.`);
+      if (!headHasThresholds) failHard(`bootstrap requires head ${thresholdsPath}.`);
+      if (!headHasBaseline) failHard(`bootstrap requires head ${baselinePath}.`);
+    } else {
+      failHard(
+        `default branch '${defaultBranch}' has no ${gatePath} and head has no ${BOOTSTRAP_FILE} ` +
+          `{allowOnce:true}. Bootstrap is an explicit one-time signal, not 'script missing'.`,
+      );
+    }
+
+    const floorSourceSha = bootstrapped ? null : defaultSha || baseSha;
+    const floorDir = bootstrapped ? null : defaultDir || baseDir;
+    const baseThresholds = loadJsonFromBase(
+      repoRoot,
+      bootstrapped ? null : floorDir,
+      bootstrapped ? baseSha : floorSourceSha,
+      thresholdsPath,
+      failHard,
+    );
+    const baseBaseline = loadJsonFromBase(
+      repoRoot,
+      bootstrapped ? null : floorDir,
+      bootstrapped ? baseSha : floorSourceSha,
+      baselinePath,
+      failHard,
+    );
+
+    if (!bootstrapped) {
       if (!baseThresholds.present) {
-        failHard(`base has ${gatePath} but is missing ${thresholdsPath}; refusing to bootstrap.`);
+        failHard(`default/base has ${gatePath} but is missing ${thresholdsPath}; failing closed.`);
       }
       if (!baseBaseline.present) {
-        failHard(`base has ${gatePath} but is missing ${baselinePath}; refusing to bootstrap.`);
+        failHard(`default/base has ${gatePath} but is missing ${baselinePath}; failing closed.`);
       }
     }
 
-    const bootstrapped = !scriptAtBase;
     const thresholds = validateThresholds(
       bootstrapped || !baseThresholds.present ? { ...BOOTSTRAP_THRESHOLDS } : baseThresholds.value,
-      bootstrapped ? "bootstrap thresholds" : "BASE_SHA thresholds",
+      bootstrapped ? "bootstrap thresholds" : "default-branch thresholds",
     );
     const mainBaseline = validateBaseline(
       bootstrapped || !baseBaseline.present ? structuredClone(ZERO_FLOOR) : baseBaseline.value,
-      bootstrapped ? "bootstrap baseline" : "BASE_SHA baseline",
+      bootstrapped ? "bootstrap baseline" : "default-branch baseline",
     );
 
     const headThresholds = validateThresholds(readHeadJson(repoRoot, thresholdsPath, "thresholds", failHard), "head thresholds");
     const committed = validateBaseline(readHeadJson(repoRoot, baselinePath, "baseline", failHard), "head baseline");
+    const override = readHeadOverride(repoRoot, failHard);
 
     assertThresholdsNotLooser(headThresholds, thresholds, bootstrapped, failHard);
-    if (!bootstrapped) assertBaselineNotLowered(committed, mainBaseline, failHard);
+    let overallFloor = mainBaseline;
+    if (!bootstrapped) {
+      const lowered =
+        !meetsFloor(round1(committed.dotnet.line), round1(mainBaseline.dotnet.line)) ||
+        !meetsFloor(round1(committed.dotnet.branch), round1(mainBaseline.dotnet.branch)) ||
+        !meetsFloor(round1(committed.web.line), round1(mainBaseline.web.line)) ||
+        !meetsFloor(round1(committed.web.branch), round1(mainBaseline.web.branch));
+      if (lowered) {
+        if (
+          !override ||
+          !baselineEq(override.from, mainBaseline) ||
+          !baselineEq(override.to, committed)
+        ) {
+          failHard(
+            `PR lowers the committed baseline below the default-branch floor. ` +
+              `A baseline may be lowered ONLY for a documented change in measurement scope, never to absorb a real coverage drop. ` +
+              `Use ${OVERRIDE_FILE} {from, to, reason} in its own [workflows] PR, with sign-off from Code Reviewer, Tech Coordinator and Helms.`,
+          );
+        }
+        overallFloor = override.to;
+      } else {
+        assertBaselineNotLowered(committed, mainBaseline, failHard);
+      }
+    }
 
     const unknownPaths = [];
     const dotnet = summarizeDotnet(dotnetDir, unknownPaths);
@@ -223,30 +353,38 @@ export function runGate(options = {}) {
     say("");
     if (bootstrapped) {
       say(
-        "**Bootstrap:** BASE_SHA has no `perf/coverage-gate.mjs`. This PR may establish the gate, " +
-          "thresholds, and baseline. Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
-          "tolerance 0.5. After merge, CI runs `_base/perf/coverage-gate.mjs` (the copy at BASE_SHA) and a missing " +
-          "thresholds or baseline file **fails closed**. Future PRs cannot set their own floor. Only a push to " +
-          "`main` ratchets the baseline, and only upward.",
+        "**Bootstrap:** the default branch has no `perf/coverage-gate.mjs`. This PR may establish the gate " +
+          "because HEAD contains `perf/coverage-bootstrap.json` `{allowOnce:true}` (explicit one-time signal, " +
+          "not 'script missing'). Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
+          "tolerance 0.5. After the default branch has the gate, CI runs `_default/perf/coverage-gate.mjs` and a " +
+          "missing or renamed gate, thresholds, or baseline on default, base, or head **fails closed**. " +
+          "A PR whose base is not the default branch **fails closed**. Lowering the floor after bootstrap " +
+          "requires a dedicated `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` " +
+          "matching the default-branch floor and measured numbers, plus sign-off from Helms and Code Reviewer. " +
+          "Otherwise only a push to the default branch ratchets the baseline, and only upward.",
       );
       say("");
     }
+    say("## Coverage scope");
+    say("");
+    for (const line of describeCoverageScope(repoRoot)) say(`- ${line}`);
+    say("");
     say("| Project | Overall line | Overall branch | Diff line | Diff branch | Floor (main) line | Floor (main) branch |");
     say("|---|---:|---:|---:|---:|---:|---:|");
     for (const name of ["dotnet", "web"]) {
       const m = measured[name];
       const d = diff[name];
-      const f = mainBaseline[name];
+      const f = overallFloor[name];
       say(
         `| ${name} | ${pct(m.line)}% | ${pct(m.branch)}% | ${diffPct(d.line)} | ${diffPct(d.branch)} | ${pct(f.line)}% | ${pct(f.branch)}% |`,
       );
     }
     say("");
     const tol = thresholds.baselineMatchTolerancePercent;
-    say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`.`);
-    say(bootstrapped ? "Gate script: **head copy** (bootstrap; absent on BASE_SHA)." : "Gate script: loaded from BASE checkout (not the PR head).");
-    say(bootstrapped ? "Thresholds: **bootstrap defaults**." : "Thresholds: loaded from BASE_SHA (not the PR head).");
-    say(bootstrapped ? "Floor: **0 / 0** (bootstrap)." : "Floor: loaded from BASE_SHA (not the PR head).");
+    say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`. Default branch: \`${defaultBranch}\`${defaultSha ? ` (\`${defaultSha}\`)` : ""}.`);
+    say(bootstrapped ? "Gate script: **head copy** (bootstrap; explicit allowOnce; absent on default branch)." : "Gate script: loaded from the default branch (not the PR head).");
+    say(bootstrapped ? "Thresholds: **bootstrap defaults**." : "Thresholds: loaded from the default branch (not the PR head).");
+    say(bootstrapped ? "Floor: **0 / 0** (bootstrap)." : "Floor: loaded from the default branch (not the PR head).");
     say(
       `Match tolerance at BASE_SHA: ${tol}pp (a PR may not widen it). No-drop uses 1-decimal plus epsilon ${NO_DROP_EPS}.`,
     );
@@ -262,7 +400,7 @@ export function runGate(options = {}) {
 
     for (const name of ["dotnet", "web"]) {
       const m = measured[name];
-      const f = mainBaseline[name];
+      const f = overallFloor[name];
       if (thresholds.overallMustNotDrop) {
         if (!meetsFloor(round1(m.line), round1(f.line))) {
           failed = true;
@@ -291,23 +429,63 @@ export function runGate(options = {}) {
     for (const name of ["dotnet", "web"]) {
       const m = measured[name];
       const c = committed[name];
-      const f = mainBaseline[name];
+      const f = overallFloor[name];
       if (!bootstrapped && (!meetsFloor(round1(c.line), round1(f.line)) || !meetsFloor(round1(c.branch), round1(f.branch)))) {
         failed = true;
         say(`- **FAIL** committed baseline ${name} is below main's floor.`);
       }
-      if (!(round1(c.line) <= round1(m.line) + NO_DROP_EPS) || !(round1(c.branch) <= round1(m.branch) + NO_DROP_EPS)) {
-        failed = true;
+      // Match-to-measured is only enforced once BASE has a floor. During
+      // bootstrap the floor is 0/0 from BASE; a head-side edit of
+      // coverage-baseline.json must not change overall/diff pass/fail
+      // (R2-M1 / R3-H1). After merge, HEAD cannot lower below BASE and
+      // must ratchet the committed file up to measured.
+      if (!bootstrapped) {
+        if (!(round1(c.line) <= round1(m.line) + NO_DROP_EPS) || !(round1(c.branch) <= round1(m.branch) + NO_DROP_EPS)) {
+          failed = true;
+          say(
+            `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is above measured ${pct(m.line)}/${pct(m.branch)}.`,
+          );
+        }
+        if (!meetsFloor(round1(c.line), floor1(m.line)) || !meetsFloor(round1(c.branch), floor1(m.branch))) {
+          failed = true;
+          say(
+            `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is behind measured ${pct(m.line)}/${pct(m.branch)}. Update \`perf/coverage-baseline.json\` to the measured JSON below.`,
+          );
+        }
+      } else if (round1(c.line) !== round1(m.line) || round1(c.branch) !== round1(m.branch)) {
         say(
-          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is above measured ${pct(m.line)}/${pct(m.branch)}.`,
+          `- **Note** head \`${baselinePath}\` ${name} ${pct(c.line)}/${pct(c.branch)} differs from measured ${pct(m.line)}/${pct(m.branch)}. ` +
+            `This PR's floor is the default branch (0/0 while bootstrapping), not the head file. Editing the head JSON cannot relax overall/diff gates.`,
         );
       }
-      if (!meetsFloor(round1(c.line), floor1(m.line)) || !meetsFloor(round1(c.branch), floor1(m.branch))) {
+    }
+
+    if (override) {
+      const measuredBaseline = {
+        dotnet: { line: round1(dotnet.line), branch: round1(dotnet.branch) },
+        web: { line: round1(web.line), branch: round1(web.branch) },
+      };
+      if (!baselineEq(override.to, committed)) {
+        failed = true;
+        say(`- **FAIL** ${OVERRIDE_FILE} \`to\` must equal the committed head baseline.`);
+      }
+      if (!baselineEq(override.to, measuredBaseline)) {
         failed = true;
         say(
-          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is behind measured ${pct(m.line)}/${pct(m.branch)}. Update \`perf/coverage-baseline.json\` to the measured JSON below.`,
+          `- **FAIL** ${OVERRIDE_FILE} \`to\` must equal measured coverage (dotnet ${pct(measuredBaseline.dotnet.line)}/${pct(measuredBaseline.dotnet.branch)}, web ${pct(measuredBaseline.web.line)}/${pct(measuredBaseline.web.branch)}).`,
         );
       }
+      if (!bootstrapped && !baselineEq(override.from, mainBaseline)) {
+        failed = true;
+        say(`- **FAIL** ${OVERRIDE_FILE} \`from\` must equal the default-branch floor.`);
+      }
+      say(
+        `- **Re-baseline override:** ${override.reason.trim()} ` +
+          `(dotnet ${pct(override.from.dotnet.line)}/${pct(override.from.dotnet.branch)} → ${pct(override.to.dotnet.line)}/${pct(override.to.dotnet.branch)}; ` +
+          `web ${pct(override.from.web.line)}/${pct(override.from.web.branch)} → ${pct(override.to.web.line)}/${pct(override.to.web.branch)}). ` +
+          `A baseline may be lowered ONLY for a documented change in measurement scope, never to absorb a real coverage drop. ` +
+          `Requires its own [workflows] PR and sign-off from Code Reviewer, Tech Coordinator and Helms.`,
+      );
     }
 
     if (!failed) say("- All coverage gates passed.");
@@ -326,9 +504,14 @@ export function runGate(options = {}) {
     return { failed, output: body, expected, exitCode: failed ? 1 : 0, bootstrapped, mergeBase, baseSha };
   } catch (e) {
     if (e instanceof GateFailure) {
+      const text = e.output && e.output.trim() ? e.output : `- **FAIL** ${e.message}\n`;
+      if (!e.output) {
+        write(text);
+        writeErr(`FAIL: ${e.message}\n`);
+      }
       const summary = options.summaryPath ?? env("GITHUB_STEP_SUMMARY");
-      if (summary && e.output) appendFileSync(summary, e.output);
-      return { failed: true, output: e.output || e.message, expected: null, exitCode: 1, error: e };
+      if (summary) appendFileSync(summary, text.endsWith("\n") ? text : `${text}\n`);
+      return { failed: true, output: text, expected: null, exitCode: 1, error: e };
     }
     throw e;
   }
@@ -409,6 +592,105 @@ function fileExistsAtRef(root, ref, path, failHard) {
     failHard(`git ls-tree ${ref} -- ${path} failed: ${err}`);
   }
   return listed.length > 0;
+}
+
+function loadJsonFromBase(root, baseDir, ref, path, failHard) {
+  if (ref) {
+    const fromGit = loadJsonAtRef(root, ref, path, failHard);
+    if (fromGit.present) return fromGit;
+  }
+  if (baseDir) {
+    const full = join(baseDir, path);
+    if (existsSync(full)) {
+      try {
+        return { present: true, value: JSON.parse(readFileSync(full, "utf8")) };
+      } catch (e) {
+        failHard(`cannot parse ${path} in base checkout: ${e.message}`);
+      }
+    }
+  }
+  return { present: false, value: null };
+}
+
+function filePresent(root, dir, sha, path, failHard) {
+  if (sha && fileExistsAtRef(root, sha, path, failHard)) return true;
+  if (dir && existsSync(join(dir, path))) return true;
+  return false;
+}
+
+function resolveDefaultSha(root, defaultBranch, defaultDir, failHard) {
+  if (defaultDir) return null;
+  const candidates = [`origin/${defaultBranch}`, defaultBranch];
+  for (const name of candidates) {
+    if (gitOk(root, ["rev-parse", "--verify", `${name}^{commit}`])) {
+      return git(root, ["rev-parse", name], failHard).trim();
+    }
+  }
+  failHard(
+    `cannot resolve default branch '${defaultBranch}' tip; pass --default-sha or --default-dir.`,
+  );
+}
+
+function readBootstrapAllow(root, failHard) {
+  const full = join(root, BOOTSTRAP_FILE);
+  if (!existsSync(full)) return false;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(full, "utf8"));
+  } catch (e) {
+    failHard(`cannot parse head ${BOOTSTRAP_FILE}: ${e.message}`);
+  }
+  try {
+    validateBootstrap(raw);
+    return true;
+  } catch (e) {
+    if (e instanceof GateFailure) failHard(e.message);
+    throw e;
+  }
+}
+
+function readHeadOverride(root, failHard) {
+  const full = join(root, OVERRIDE_FILE);
+  if (!existsSync(full)) return null;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(full, "utf8"));
+  } catch (e) {
+    failHard(`cannot parse head ${OVERRIDE_FILE}: ${e.message}`);
+  }
+  try {
+    return validateOverride(raw);
+  } catch (e) {
+    if (e instanceof GateFailure) failHard(e.message);
+    throw e;
+  }
+}
+
+export function describeCoverageScope(root) {
+  const lines = [
+    "include: `[Desk.*]*`",
+    "excludeByAttribute: `GeneratedCodeAttribute`, `ExcludeFromCodeCoverage` (not `CompilerGeneratedAttribute`)",
+    "excludeByFile: `**/obj/**`, `**/*.generated.cs`",
+  ];
+  const full = join(root, TESTCONFIG_FILE);
+  if (!existsSync(full)) {
+    lines.push(`config: ${TESTCONFIG_FILE} not present; documented defaults above`);
+    return lines;
+  }
+  try {
+    const cfg = JSON.parse(readFileSync(full, "utf8"));
+    const coverlet = cfg?.platformOptions?.Coverlet ?? {};
+    if (coverlet.include) lines[0] = `include: \`${coverlet.include}\``;
+    if (coverlet.excludeByAttribute) {
+      lines[1] =
+        `excludeByAttribute: \`${coverlet.excludeByAttribute}\` (not \`CompilerGeneratedAttribute\`)`;
+    }
+    if (coverlet.excludeByFile) lines[2] = `excludeByFile: \`${coverlet.excludeByFile}\``;
+    lines.push(`config: \`${TESTCONFIG_FILE}\``);
+  } catch {
+    lines.push(`config: ${TESTCONFIG_FILE} present but unreadable`);
+  }
+  return lines;
 }
 
 function loadJsonAtRef(root, ref, path, failHard) {

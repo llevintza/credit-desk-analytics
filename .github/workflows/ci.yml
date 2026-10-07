@@ -2,12 +2,14 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel an in-progress run on main; PR runs may cancel superseded SHAs.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -169,13 +171,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Gate script + thresholds come from BASE, not the PR head (R2-M1).
-      # persist-credentials stays false; if BASE_SHA is missing from the head
-      # clone, fetch it from this local checkout (no origin token).
+      # Gate script + floor come from the default branch and BASE, not the PR head
+      # (R2-M1 / R3-M2 / R3-M3). persist-credentials stays false; fetch missing
+      # SHAs from these local checkouts (no origin token).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           path: _base
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: _default
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -191,6 +198,8 @@ jobs:
       - name: Coverage gates
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
         run: |
           if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             echo "::error::BASE_SHA is missing (merge-base unresolved). Failing closed."
@@ -203,16 +212,28 @@ jobs:
             echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
             exit 1
           fi
+          DEFAULT_SHA=$(git -C _default rev-parse HEAD)
+          if ! git cat-file -e "${DEFAULT_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --no-recurse-submodules "$PWD/_default" "$DEFAULT_SHA"
+          fi
           GATE=perf/coverage-gate.mjs
-          if [ -f _base/perf/coverage-gate.mjs ]; then
-            GATE=_base/perf/coverage-gate.mjs
+          if [ -f _default/perf/coverage-gate.mjs ]; then
+            GATE=_default/perf/coverage-gate.mjs
+          elif [ -f perf/coverage-bootstrap.json ]; then
+            echo "Bootstrap: explicit allowOnce on head; default branch has no gate yet."
           else
-            echo "Bootstrap: BASE_SHA has no perf/coverage-gate.mjs; using the PR-head copy once."
+            echo "::error::Default branch has no coverage gate and head has no perf/coverage-bootstrap.json. Failing closed."
+            exit 1
           fi
           node "$GATE" \
             --dotnet TestResults/coverage \
             --web web/coverage \
-            --base "$BASE_SHA"
+            --base "$BASE_SHA" \
+            --base-dir _base \
+            --default-dir _default \
+            --default-sha "$DEFAULT_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --base-ref "${GITHUB_BASE_REF:-}"
 
   gate-tests:
     runs-on: ubuntu-latest
@@ -227,11 +248,19 @@ jobs:
         with:
           node-version: 22
       - name: Gate script tests (≥80% line/branch)
-        run: >
-          node --test --experimental-test-coverage
-          --test-coverage-lines=80 --test-coverage-branches=80
-          --test-coverage-include=perf/coverage-gate.mjs
-          perf/coverage-gate.test.mjs
+        run: |
+          set -o pipefail
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=perf/coverage-gate.mjs \
+            perf/coverage-gate.test.mjs | tee /tmp/gate-tests.out
+          {
+            echo "## Gate script coverage"
+            echo
+            echo '```'
+            awk '/start of coverage report/,/end of coverage report/' /tmp/gate-tests.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.

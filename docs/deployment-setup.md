@@ -4,7 +4,7 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
 
 > CI → migrate Neon → seed (only if the seed version changed) → Render deploy of the exact commit → smoke test.
 
-> **Before step 4:** set the `production` environment to the `main` branch only, and set the main ruleset (required status checks only; no required approving review; no force-push or deletion). **No required reviewer** on `production`: merges to `main` auto-deploy. Controls are the pre-merge review gate, required checks, `deploy.yml` migrate/smoke, and README §14.4. Don't add production secrets until those protections are on. Don't add `APP_URL` (which turns deploys on) until Tech Coordinator gives the go-ahead.
+> **Before step 4:** set the `production` environment to the `main` branch only, and set the main ruleset (required status checks only; no required approving review; no force-push or deletion). **No required reviewer** on `production`: merges to `main` auto-deploy. Controls are the pre-merge review gate, required checks (once the main ruleset is active), `deploy.yml` migrate/smoke, and README §14.4. Don't add production secrets until those protections are on. Don't add `APP_URL` (which turns deploys on) until Tech Coordinator gives the go-ahead.
 
 **Time needed:** about 30 minutes. **Accounts:** Neon, Render, GitHub (repo admin), Anthropic Console.
 
@@ -102,7 +102,7 @@ Workflow YAML cannot set these. Do them by hand.
 2. **Create `production`** if it does not exist (**New environment**, name `production` exactly), then **Configure environment**.
 3. **Restrict it now:**
    - **Deployment branches and tags:** choose **Selected branches and tags**, then add the rule `main`. Only `main` can deploy.
-   - **Required reviewers:** leave unset. No required reviewer exists; merges to `main` auto-deploy. Controls are the pre-merge review gate, required status checks, `deploy.yml` migrate/smoke, and README §14.4.
+   - **Required reviewers:** leave unset. No required reviewer exists; merges to `main` auto-deploy. Controls are the pre-merge review gate, required status checks (once the main ruleset is active), `deploy.yml` migrate/smoke, and README §14.4.
 4. **Ruleset on `main`** (Settings → Rules → New ruleset, target `main`):
    - **Required status checks:** every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`, `gate-tests`). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
    - **No required approving review.** Every bot acts as `llevintza` and cannot self-approve, so a required PR review would deadlock every merge.
@@ -161,7 +161,7 @@ The review job is **advisory and not a required check**. Leo's decision (2026-10
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile, render.yaml, or `perf/coverage-*` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, or `tests/testconfig.json` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase.
 
