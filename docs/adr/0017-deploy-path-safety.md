@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
-- **Phase / PR:** phase-0 follow-up (deploy-path safety)
+- **Phase / PR:** phase-0 follow-up (#4)
 
 ## Context
 
