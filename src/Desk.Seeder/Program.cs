@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Desk.Data;
 using Desk.Seeder;
 using Microsoft.Extensions.Configuration;
@@ -11,9 +12,25 @@ string connectionString;
 try { connectionString = ConnectionStrings.Resolve(new ConfigurationBuilder().AddEnvironmentVariables().Build(), ConnectionStrings.App); }
 catch (InvalidOperationException e) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
 
-// Ctrl+C / SIGTERM (CI job timeout) cancels cleanly: the seeding transaction rolls back.
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-AppDomain.CurrentDomain.ProcessExit += (_, _) => cts.Cancel();
-try { return await SeedRunner.RunAsync(options, connectionString, Console.Out, Console.Error, cts.Token); }
-catch (OperationCanceledException) { Console.Error.WriteLine("ERROR: cancelled; the seeding transaction was rolled back."); return 130; }
+// Ctrl+C (SIGINT) and SIGTERM (CI job timeout, container stop) cancel cleanly: the seeding transaction rolls back.
+// Both hooks are removed before the CancellationTokenSource is disposed. A process-exit hook would run AFTER
+// Main returns and hit the disposed source (ObjectDisposedException, exit 134 after a successful seed).
+var cts = new CancellationTokenSource();
+ConsoleCancelEventHandler onCtrlC = (_, e) => { e.Cancel = true; cts.Cancel(); };
+Console.CancelKeyPress += onCtrlC;
+var onSigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; cts.Cancel(); });
+try
+{
+    return await SeedRunner.RunAsync(options, connectionString, Console.Out, Console.Error, cts.Token);
+}
+catch (OperationCanceledException) when (cts.IsCancellationRequested)
+{
+    Console.Error.WriteLine("ERROR: cancelled; the seeding transaction was rolled back.");
+    return 130;
+}
+finally
+{
+    Console.CancelKeyPress -= onCtrlC;
+    onSigterm.Dispose();
+    cts.Dispose();
+}
