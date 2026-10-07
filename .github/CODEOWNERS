@@ -1,2 +1,6 @@
-# Workflow and review configuration changes need the owner's explicit review (README §14.5).
+# Advisory visibility only (README §14.5). GitHub cannot enforce this: every bot
+# acts as @llevintza and cannot approve its own PR. Not a merge gate.
 /.github/ @llevintza
+/.claude/ @llevintza
+/CLAUDE.md @llevintza
+/AGENTS.md @llevintza

@@ -749,7 +749,7 @@ services:
 
 ### 13.3 One-time setup (done by hand by the repo owner)
 
-**Detailed, click-by-click guide: [`docs/deployment-setup.md`](docs/deployment-setup.md)** (Neon, Render, the GitHub `production` environment, the Anthropic key for PR reviews, the first deploy, rotation and troubleshooting). The summary:
+**Detailed, click-by-click guide: [`docs/deployment-setup.md`](docs/deployment-setup.md)** (Neon, Render, GitHub protections, then production secrets, the Claude review environment, the first deploy, rotation and troubleshooting). The summary:
 
 1. **Neon:**
    - Create project `credit-desk-analytics` (Postgres 17, region close to Render's).
@@ -758,7 +758,10 @@ services:
    - New → Blueprint → this repo (`render.yaml`).
    - Set `DATABASE_URL` in the dashboard.
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
-3. **GitHub:** create the Environment **`production`** (Settings → Environments). Limit it to the `main` branch and require reviewers (workflow YAML cannot set those). Add:
+3. **GitHub protections first** (before any production secret):
+   - Environment **`production`:** deployment branch `main` only; **required reviewers on** (workflow YAML cannot set those).
+   - Ruleset on `main`: required status checks only (`secrets`, `api`, `web`, `compose-smoke`; **not** `review`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
+4. **Then** add the `production` environment secrets/variables. Don't set `APP_URL` until Tech Coordinator gives the go-ahead (that variable turns deploys on):
 
    | Kind | Name | Value |
    |---|---|---|
@@ -767,8 +770,9 @@ services:
    | variable | `APP_URL` | `https://credit-desk-analytics.onrender.com` (or the assigned URL) |
    | variable | `SEED_SCALE` | `1.0` |
 
-4. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
-5. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
+5. **Claude review (default pending Leo's confirmation):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. The `review` check stays non-required.
+6. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
+7. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
 
 ---
 
@@ -830,18 +834,17 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 ### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
 
 - Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
-- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. **Only a summary authored by `github-actions[bot]` counts.** Anyone who can comment could type the marker, so tooling and agents must check the author (`claude[bot]` if the Claude GitHub App is used instead).
-- It needs the repository secret `ANTHROPIC_API_KEY` (setup guide, step 4).
+- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. That marker is the model's own count. Any workflow running as `github-actions[bot]` can post it.
+- It reads working rules from the PR **base** commit, not the head. The job is **advisory and must not be a required check**. It skips with a notice when the key is missing, and it skips forks and Dependabot.
+- **Default (pending Leo's confirmation):** `ANTHROPIC_API_KEY` lives in a dedicated GitHub environment **`claude-review`** (spend-capped key; no branch restriction; no required reviewers). Never the `production` environment, never a repository secret. It is unknown whether the Claude GitHub App is installed; the workflow does not need it (it passes `github_token`).
 
-**Merge gate:**
-- a review summary **from `github-actions[bot]`** exists for the PR's head commit, with `blocking=0`
-- no unresolved review threads
-- every check green
+Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer). The gate includes all test suites passing with nothing skipped or weakened, coverage collected with main never dropping and ≥80% on new or changed code, and CI governance (workflows, Dockerfile, render.yaml reviewed like code, SHA pins, least privilege, secrets only in the production environment, gitleaks on, nothing loosened).
 
-**Known limit:** with same-repo `pull_request` runs, a PR's own copy of `claude-review.yml` is what runs, so a PR could alter the reviewer and still post as `github-actions[bot]`. The mitigations:
-- `.github/CODEOWNERS` assigns `/.github/` to the repo owner.
-- Any PR touching `.github/` is titled with a `[workflows]` prefix, and its workflow diff gets a manual review before merge.
-- The owner's merge is the human gate. GitHub doesn't allow approving your own PR, so a required-approval rule can't be used here.
+**The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
+
+**Merge gate:** every required check green on the head SHA (tests with none skipped or weakened; coverage reported, ≥80% on new/changed code, no drop on main), Code Reviewer's verdict for the head SHA, and Tech Coordinator merges. Tech Coordinator starts the next phase.
+
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges.
 
 ---
 
@@ -872,7 +875,7 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 - Playwright screenshots for UI changes
 - an updated [§17 Status](#17-status) row
 
-The implementing agent **stops after opening each PR** and waits for review.
+The implementing agent **stops after opening each PR** and waits for review. **Tech Coordinator merges.** After a merge, wait for Tech Coordinator to start the next phase; don't start it yourself.
 
 ---
 
@@ -892,7 +895,8 @@ The implementing agent **stops after opening each PR** and waits for review.
 |---|---|---|
 | Spec | #1 | Merged |
 | 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL) |
-| 1 Data | n/a | Not started |
+| Claude PR review | #3 | Merged; follow-up (this PR): advisory-only review + claude-review.yml hardening |
+| 1 Data | #6 | In review |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |
 | 4 Shell + Positions UI | n/a | Not started |
