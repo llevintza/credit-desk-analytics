@@ -1,0 +1,25 @@
+# Secret scanning (CI job `secrets`). Extends the default gitleaks rules with the shapes this
+# repo actually handles: database connection strings and the local Postgres password.
+title = "credit-desk-analytics"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "connection-string-password"
+description = "Literal password in an ADO.NET/Npgsql connection string"
+# Placeholders like Password=… or Password=<password> are allowed (excluded characters).
+regex = '''(?i)(?:^|[;"'\s])(?:password|pwd)=([^;\s"'$<>{}…]+)'''
+secretGroup = 1
+
+[[rules]]
+id = "postgres-uri-password"
+description = "Literal password in a postgres:// URI"
+regex = '''postgres(?:ql)?://[^:\s/@]+:([^@\s$<>{}]+)@'''
+secretGroup = 1
+
+[[rules]]
+id = "postgres-password-literal"
+description = "Literal POSTGRES_PASSWORD value (must come from .env or CI, never source)"
+regex = '''(?i)POSTGRES_PASSWORD\s*[:=]\s*["']?([A-Za-z0-9_\-+/.]{3,})'''
+secretGroup = 1
