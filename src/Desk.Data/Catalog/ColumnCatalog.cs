@@ -84,7 +84,8 @@ public static class ColumnCatalog
         Add("market_value", holding, ColumnKind.Money, Aggregation.Sum, "Market value");
         Add("accrued", holding, ColumnKind.Money, Aggregation.Sum, "Accrued");
         Add("unrealized_pnl", holding, ColumnKind.Money, Aggregation.Sum, "Unrealized P&L");
-        Add("pct_of_portfolio_mv", holding, ColumnKind.Pct, Aggregation.Sum, "% of port MV");
+        // A share of its OWN portfolio: summing across several books would exceed 100%, so no footer value.
+        Add("pct_of_portfolio_mv", holding, ColumnKind.Pct, Aggregation.None, "% of port MV");
 
         const string pricing = "Pricing";
         Add("price", pricing, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Price");

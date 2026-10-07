@@ -253,11 +253,13 @@ See ADR-0003 and ADR-0004.
   - `--seed` (default 42)
   - `--as-of yyyy-MM-dd` (default: the last business day)
   - `--scale` (0.1 for tests, 1.0 default)
-  - `--if-changed` (skip when the version, seed and scale match `app.seed_metadata`)
-  - `--force`
-  - `--size-report`
+  - **exactly one mode is required** (no mode exits 1, because a reseed truncates every seeded table):
+    - `--if-changed`: skip when the version, seed and scale match `app.seed_metadata` (what the deploy pipeline uses)
+    - `--force`: always reseed (`db-ops` reseed)
+    - `--size-report`
   - `--max-mb`
 - The prior business day is generated as the snapshot's second as-of date.
+- **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.

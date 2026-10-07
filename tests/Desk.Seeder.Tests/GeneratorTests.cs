@@ -85,6 +85,43 @@ public sealed class GeneratorTests
         }
     }
 
+    [Fact]
+    public void Running_without_a_mode_is_refused()
+    {
+        // A reseed truncates every seeded table, so the caller must say --if-changed or --force.
+        var e = Assert.Throws<ArgumentException>(() => SeedOptions.Parse([]));
+        Assert.Contains("--if-changed", e.Message);
+        Assert.True(SeedOptions.Parse(["--if-changed"]).IfChanged);
+        Assert.True(SeedOptions.Parse(["--force"]).Force);
+        Assert.True(SeedOptions.Parse(["--size-report"]).SizeReportOnly);
+    }
+
+    [Fact]
+    public void Generated_names_are_pinned()
+    {
+        // Names are invented words (AGENTS.md: no real company names). Any change to the name set must be
+        // reviewed deliberately: update this pin in the same PR.
+        var u = Universe.Generate(42, 1.0, AsOf);
+        var all = u.Issuers.Select(x => x.Name).Concat(u.Servicers.Select(x => x.Name)).Concat(u.Trustees.Select(x => x.Name)).ToList();
+        Assert.Equal(93, all.Count);
+        Assert.Equal(PinnedNamesHash, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", all))))[..16]);
+    }
+
+    private const string PinnedNamesHash = "69AE5C532A3636EA";
+
+    [Fact]
+    public void Month_end_trades_land_on_a_business_day_on_or_before_as_of()
+    {
+        var u = Universe.Generate(42, 0.2, AsOf);
+        var ny = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        foreach (var row in new Tables(42, 0.2, AsOf, u).TradeRows())
+        {
+            var local = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime((DateTimeOffset)row[3]!, ny).DateTime);
+            Assert.True(local <= AsOf, $"trade {row[0]} on {local}");
+            Assert.False(local.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday, $"trade {row[0]} on a weekend ({local})");
+        }
+    }
+
     private static string Fingerprint(int seed)
     {
         var u = Universe.Generate(seed, 0.05, AsOf);

@@ -2,7 +2,7 @@ using Desk.Data.Catalog;
 
 namespace Desk.Seeder.Generation;
 
-public sealed record Position(long PositionId, Portfolio Portfolio, Bond Bond, Deal Deal, decimal Face, BondAnalytics Analytics, int AccruedDays, int Seq);
+public sealed record Position(long PositionId, Portfolio Portfolio, Bond Bond, Deal Deal, decimal Face, BondAnalytics Analytics, int AccruedDays, int Seq, double BookPrice);
 
 /// <summary>Row generators for every seeded table. Each table draws from its own RNG stream (see <see cref="Rng.For"/>).</summary>
 public sealed class Tables(int seed, double scale, DateOnly asOf, Universe u)
@@ -18,6 +18,13 @@ public sealed class Tables(int seed, double scale, DateOnly asOf, Universe u)
     }
 
     public static DateOnly MonthEnd(int year, int month) => new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+
+    public static DateOnly LastBusinessDayOfMonth(int year, int month)
+    {
+        var d = MonthEnd(year, month);
+        while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) d = d.AddDays(-1);
+        return d;
+    }
 
     private static IEnumerable<DateOnly> BusinessDaysBack(DateOnly end, int count)
     {
@@ -70,7 +77,10 @@ public sealed class Tables(int seed, double scale, DateOnly asOf, Universe u)
                 // Lognormal sizes around $500k (a ~$10-15B book across 20k lines), in $1k increments.
                 var face = Math.Round((decimal)Math.Exp(rng.Normal(Math.Log(500_000), 0.85)) / 1000m, 0) * 1000m;
                 face = Math.Clamp(face, 50_000m, 15_000_000m);
-                positions.Add(new Position(++id, p, b, deals[b.DealId], face, BondAnalytics[b.BondId], rng.Int(1, 30), seq++));
+                var analytics = BondAnalytics[b.BondId];
+                // Cost basis is fixed per position: the same on every as-of date.
+                var bookPrice = Math.Round(Math.Max(1, analytics.Price - rng.Normal(0, 2.5)), 4);
+                positions.Add(new Position(++id, p, b, deals[b.DealId], face, analytics, rng.Int(1, 30), seq++, bookPrice));
             }
         }
         return positions;
@@ -96,7 +106,7 @@ public sealed class Tables(int seed, double scale, DateOnly asOf, Universe u)
             var b = pos.Bond;
             var currentFace = Math.Round(pos.Face * (decimal)b.Factor, 2);
             var mv = Math.Round(currentFace * (decimal)price / 100m, 2);
-            var bookPrice = Math.Round(price - rng.Normal(0, 2.5), 4);
+            var bookPrice = pos.BookPrice;
             var bookValue = Math.Round(currentFace * (decimal)bookPrice / 100m, 2);
             var accrued = Math.Round(currentFace * (decimal)a.CouponCurrent * pos.AccruedDays / 360m, 2);
             var mvD = (double)mv;
@@ -227,8 +237,10 @@ public sealed class Tables(int seed, double scale, DateOnly asOf, Universe u)
             DateTime local;
             if (id % 997 == 0)
             {
-                // README §5.2 edge case: month-end trades booked at 23:59:59.xxx.
-                var me = MonthEnd(day.Year, day.Month);
+                // README §5.2 edge case: month-end trades booked at 23:59:59.xxx, on the month's last business
+                // day that is on or before the as-of date (never in the future, never on a weekend).
+                var me = LastBusinessDayOfMonth(day.Year, day.Month);
+                if (me > AsOf) me = LastBusinessDayOfMonth(day.AddMonths(-1).Year, day.AddMonths(-1).Month);
                 local = me.ToDateTime(new TimeOnly(23, 59, 59)).AddMilliseconds(rng.Int(0, 999));
             }
             else

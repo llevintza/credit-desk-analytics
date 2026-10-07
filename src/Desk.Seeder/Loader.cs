@@ -21,12 +21,15 @@ public static class Loader
         "app.column_catalog",
     ];
 
-    public static long Copy(NpgsqlConnection conn, string table, string[] columns, NpgsqlDbType[] types, IEnumerable<object?[]> rows)
+    public static long Copy(NpgsqlConnection conn, string table, string[] columns, NpgsqlDbType[] types, IEnumerable<object?[]> rows,
+        CancellationToken ct = default)
     {
         using var w = conn.BeginBinaryImport($"COPY {table} ({string.Join(", ", columns)}) FROM STDIN (FORMAT BINARY)");
         long n = 0;
         foreach (var r in rows)
         {
+            // Disposing the importer without Complete() cancels the COPY server-side; the caller's transaction rolls back.
+            if ((n & 4095) == 0) ct.ThrowIfCancellationRequested();
             w.StartRow();
             for (var i = 0; i < columns.Length; i++)
             {
@@ -51,18 +54,20 @@ public static class Loader
     };
 
     /// <summary>Truncates and reloads every seeded table inside the caller's transaction.</summary>
-    public static List<LoadStat> LoadAll(NpgsqlConnection conn, Universe u, Tables t)
+    public static List<LoadStat> LoadAll(NpgsqlConnection conn, Universe u, Tables t, CancellationToken ct = default)
     {
         var stats = new List<LoadStat>();
         void Load(string table, string cols, NpgsqlDbType[] types, Func<IEnumerable<object?[]>> rows)
         {
+            ct.ThrowIfCancellationRequested();
             var sw = Stopwatch.StartNew();
-            var n = Copy(conn, table, cols.Split(',', StringSplitOptions.TrimEntries), types, rows());
+            var n = Copy(conn, table, cols.Split(',', StringSplitOptions.TrimEntries), types, rows(), ct);
             stats.Add(new LoadStat(table, n, sw.Elapsed));
         }
         const NpgsqlDbType I = NpgsqlDbType.Integer, L = NpgsqlDbType.Bigint, T = NpgsqlDbType.Text, D = NpgsqlDbType.Date,
             N = NpgsqlDbType.Numeric, F = NpgsqlDbType.Double, B = NpgsqlDbType.Boolean, C = NpgsqlDbType.Char, TS = NpgsqlDbType.TimestampTz;
 
+        // TRUNCATE is transactional in Postgres: a cancellation or failure after this point restores every table.
         using (var cmd = new NpgsqlCommand($"TRUNCATE {string.Join(", ", SeededTables)}", conn)) cmd.ExecuteNonQuery();
 
         Load("reference.issuer", "issuer_id, name, country", [I, T, T], () => u.Issuers.Select(x => new object?[] { x.Id, x.Name, x.Country }));

@@ -16,7 +16,8 @@ public sealed record Bond(
 
 /// <summary>
 /// The fixed "world" every table is generated from: funds, portfolios, reference entities, deals and bonds.
-/// All names are fictional (AGENTS.md: no real company or person names).
+/// All names are fictional (AGENTS.md: no real company or person names). The stems are invented words;
+/// a unit test pins the generated name set so any change to it is reviewed.
 /// </summary>
 public sealed class Universe
 {
@@ -45,7 +46,7 @@ public sealed class Universe
         ("BB", "BB", "Ba2", "BB"), ("B", "B", "B2", "B"), ("CCC", "CCC", "Caa2", "CCC"), ("NR", "NR", "NR", "NR"),
     ];
 
-    private static readonly string[] NameA = ["Harbor", "Granite", "Juniper", "Summit", "Beacon", "Cedar", "Northgate", "Silverline", "Bluestone", "Ironwood", "Westbrook", "Lakeshore", "Redwood", "Fairhaven", "Kestrel", "Meridian", "Copperfield", "Stonebridge", "Windmere", "Highmark"];
+    private static readonly string[] NameA = ["Quillmere", "Tarnhollow", "Vexford", "Brindlecove", "Corvantis", "Dunmarrow", "Elstrava", "Fennwick", "Glaucet", "Hollisbrae", "Iverhaze", "Jessamere", "Kilnwright", "Lumareth", "Marrowdale", "Norvaine", "Orrisbeck", "Plaitwell", "Rennacre", "Sablemoor"];
     private static readonly string[] NameB = ["Point", "Ridge", "Crest", "Bay", "Hollow", "Field", "Park", "Rock", "Vale", "Gate"];
     private static readonly string[] Suffix = ["Capital", "Credit Partners", "Asset Management", "Funding", "Advisors", "Lending"];
 

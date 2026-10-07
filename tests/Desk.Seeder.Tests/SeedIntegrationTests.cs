@@ -18,13 +18,15 @@ public sealed class SeededDatabase : IAsyncLifetime
         await _pg.StartAsync();
         await using (var db = NewContext()) await db.Database.MigrateAsync();
         var o = new StringWriter();
-        var code = await SeedRunner.RunAsync(Options(), ConnectionString, o, new StringWriter());
+        var code = await SeedRunner.RunAsync(Options(), ConnectionString, o, new StringWriter(), TestContext.Current.CancellationToken);
         FirstRunOutput = o.ToString();
         if (code != 0) throw new InvalidOperationException($"seed failed ({code}): {FirstRunOutput}");
     }
 
-    public static SeedOptions Options(bool ifChanged = true) =>
-        new(Seed: 42, Scale: 0.1m, IfChanged: ifChanged, Force: false, SizeReportOnly: false, MaxMegabytes: 400, AsOf: new DateOnly(2026, 10, 6));
+    public static readonly DateOnly AsOf = new(2026, 10, 6);
+
+    public static SeedOptions Options(bool force = false) =>
+        new(Seed: 42, Scale: 0.1m, IfChanged: !force, Force: force, SizeReportOnly: false, MaxMegabytes: 400, AsOf: AsOf);
 
     public AppDbContext NewContext() => new(new DbContextOptionsBuilder<AppDbContext>()
         .UseNpgsql(ConnectionString, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options);
@@ -49,7 +51,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     public async Task Second_run_with_if_changed_is_a_no_op()
     {
         var o = new StringWriter();
-        Assert.Equal(0, await SeedRunner.RunAsync(SeededDatabase.Options(), db.ConnectionString, o, new StringWriter()));
+        Assert.Equal(0, await SeedRunner.RunAsync(SeededDatabase.Options(), db.ConnectionString, o, new StringWriter(), TestContext.Current.CancellationToken));
         Assert.Contains("SEED_ACTION=skipped", o.ToString());
     }
 
@@ -99,6 +101,46 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     }
 
     [Fact]
+    public async Task No_trade_is_after_the_as_of_date_or_on_a_weekend()
+    {
+        // Month-end 23:59:59 trades must sit on a business day on or before as-of.
+        Assert.Equal(0L, await db.ScalarAsync<long>(
+            "SELECT count(*) FROM core.trade WHERE (trade_ts AT TIME ZONE 'America/New_York')::date > DATE '2026-10-06'"));
+        Assert.Equal(0L, await db.ScalarAsync<long>(
+            "SELECT count(*) FROM core.trade WHERE extract(isodow FROM trade_ts AT TIME ZONE 'America/New_York') IN (6, 7)"));
+    }
+
+    [Fact]
+    public async Task Cost_basis_is_the_same_on_both_as_of_dates() =>
+        Assert.Equal(0L, await db.ScalarAsync<long>(
+            "SELECT count(*) FROM core.position_snapshot a " +
+            "JOIN core.position_snapshot b ON b.position_id = a.position_id AND b.as_of_date < a.as_of_date " +
+            "WHERE a.book_price IS DISTINCT FROM b.book_price"));
+
+    [Fact]
+    public async Task Cancelling_mid_seed_rolls_back_to_the_previous_data()
+    {
+        var before = await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot");
+        var runs = await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata");
+        using var cts = new CancellationTokenSource();
+        // Cancel when generation is announced: the TRUNCATE then runs and the first COPY sees the token.
+        var output = new CancelOnWrite("Generating", cts);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            SeedRunner.RunAsync(SeededDatabase.Options(force: true), db.ConnectionString, output, new StringWriter(), cts.Token));
+        Assert.Equal(before, await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot"));
+        Assert.Equal(runs, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    private sealed class CancelOnWrite(string marker, CancellationTokenSource cts) : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value?.Contains(marker, StringComparison.Ordinal) == true) cts.Cancel();
+        }
+    }
+
+    [Fact]
     public async Task Database_stays_inside_the_size_budget() =>
         Assert.True(await db.ScalarAsync<long>("SELECT pg_database_size(current_database())") < 400L * 1024 * 1024);
 }
@@ -113,7 +155,7 @@ public sealed class UnmigratedDatabaseTests : IAsyncLifetime
     public async Task Seeder_refuses_to_run_before_migrations()
     {
         var err = new StringWriter();
-        Assert.Equal(1, await SeedRunner.RunAsync(SeededDatabase.Options(), _pg.GetConnectionString(), new StringWriter(), err));
+        Assert.Equal(1, await SeedRunner.RunAsync(SeededDatabase.Options(), _pg.GetConnectionString(), new StringWriter(), err, TestContext.Current.CancellationToken));
         Assert.Contains("pending migrations", err.ToString());
     }
 }

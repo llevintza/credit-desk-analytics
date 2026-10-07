@@ -24,6 +24,9 @@ public sealed record SeedOptions(int Seed, decimal Scale, bool IfChanged, bool F
         }
         if (o.Scale is <= 0 or > 2) throw new ArgumentException("--scale must be in (0, 2]");
         if (o.IfChanged && o.Force) throw new ArgumentException("--if-changed and --force are mutually exclusive");
+        // Be explicit about intent: a reseed truncates every seeded table (README §14.3).
+        if (!o.IfChanged && !o.Force && !o.SizeReportOnly)
+            throw new ArgumentException("choose a mode: --if-changed (skip when version/seed/scale already loaded), --force (always reseed) or --size-report");
         return o;
     }
 
