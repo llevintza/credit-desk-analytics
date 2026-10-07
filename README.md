@@ -536,6 +536,11 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
   - MessagePack variant on `Accept: application/x-msgpack` (ADR-0007 decides whether it stays on by default).
+- **API docs and testing:** the OpenAPI document is at **`/openapi/v1.json`** (built-in `AddOpenApi`), with **Swagger UI at `/swagger`** for trying every endpoint. Every endpoint has a name, summary and tag.
+  - It's on in **Development**. Elsewhere it's off unless `SWAGGER_ENABLED=true`, which you can set in the Render dashboard to try the deployed API.
+  - Phase 2 puts it behind the admin login, since the site is public (#94).
+  - The choice is recorded in ADR-0019.
+  - The phase-2 CSP must allow Swagger UI's assets on `/swagger` only.
 - **Response compression:** Brotli and gzip, on HTTPS too.
 - **Caching:** `IMemoryCache` with a size limit, keyed per the P1 rules, expiring at the next batch time (06:30 America/New_York), plus `ETag` / `If-None-Match`.
 - **Observability:**
@@ -908,6 +913,7 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 |---|---|---|
 | Spec | #1 | Merged |
 | 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up (this PR): coverage gates + CI hardening |
+| API docs (Swagger UI) | #93 | Merged |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |
 | 2 Auth and limits | n/a | Not started |
