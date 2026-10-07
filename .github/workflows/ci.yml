@@ -127,3 +127,20 @@ jobs:
           test "$me_code" = 401
       - if: failure()
         run: docker compose logs
+
+  db-tools:
+    # Build-only rehearsal of deploy/db-ops (README §14.2 / §14.3): same composite
+    # action, clean checkout, no prior restore/build, no secrets, no production
+    # environment, no database. The api job also calls this action, but only after
+    # `dotnet build`, which hid NETSDK1004 on production's first real release.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build migrations bundle and seeder
+        uses: ./.github/actions/build-db-tools
+      - name: Assert artifacts
+        run: |
+          test -x dbtools/efbundle
+          test -x dbtools/seeder/Desk.Seeder

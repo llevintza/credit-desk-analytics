@@ -1,6 +1,7 @@
 # .NET
 bin/
 obj/
+dbtools/
 *.user
 *.suo
 .vs/
