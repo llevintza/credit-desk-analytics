@@ -113,6 +113,9 @@ jobs:
           # Use the workflow's own token (comments post as github-actions[bot]) instead of the default
           # OIDC -> Claude GitHub App exchange, which requires installing that app on the repo.
           github_token: ${{ github.token }}
+          # Default allowed_bots is empty (no bots). Agent pushes arrive as cursor[bot] and
+          # would fail the action; Dependabot is already excluded at the job `if:`.
+          allowed_bots: cursor[bot]
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
