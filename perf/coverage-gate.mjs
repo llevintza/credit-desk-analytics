@@ -214,9 +214,12 @@ export function runGate(options = {}) {
     else process.stderr.write(s);
   };
 
+  let decisionPath = "fail/unknown";
   const failHard = (msg) => {
-    const text = `- **FAIL** ${msg}\n`;
-    collected.push(text.trimEnd());
+    const mark = `gate-path: ${decisionPath}`;
+    const text = `${mark}\n- **FAIL** ${msg}\n`;
+    collected.push(mark);
+    collected.push(`- **FAIL** ${msg}`);
     write(text);
     writeErr(`FAIL: ${msg}\n`);
     throw new GateFailure(msg, collected.join("\n") + "\n");
@@ -245,10 +248,12 @@ export function runGate(options = {}) {
     const dotnetDir = resolve(repoRoot, args.dotnet ?? "TestResults/coverage");
     const webDir = resolve(repoRoot, args.web ?? "web/coverage");
 
+    decisionPath = "fail/missing-base-sha";
     requireCommit(repoRoot, baseSha, failHard);
     const mergeBase = requireMergeBase(repoRoot, baseSha, failHard);
 
     if (isPullRequest && baseRef && baseRef !== defaultBranch) {
+      decisionPath = "fail/retarget";
       failHard(
         `PR base '${baseRef}' is not the default branch '${defaultBranch}'. ` +
           `Coverage is only evaluated against ${defaultBranch} (retarget bypass).`,
@@ -272,16 +277,35 @@ export function runGate(options = {}) {
     let bootstrapped;
     if (gateOnDefault) {
       bootstrapped = false;
-      if (!headHasGate) failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
-      if (!gateOnBase) failHard(`base is missing ${gatePath}; deleting or renaming the gate fails closed.`);
+      decisionPath = isPush ? "push/base" : "pr/default";
+      if (!headHasGate) {
+        decisionPath = "fail/missing-head-gate";
+        failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
+      }
+      if (!gateOnBase) {
+        decisionPath = "fail/missing-base-gate";
+        failHard(`base is missing ${gatePath}; deleting or renaming the gate fails closed.`);
+      }
       if (!headHasThresholds) failHard(`head is missing ${thresholdsPath}; refusing to run without thresholds.`);
       if (!headHasBaseline) failHard(`head is missing ${baselinePath}; refusing to run without a baseline.`);
     } else if (bootstrapAllow) {
+      if (gateOnBase) {
+        decisionPath = "fail/bootstrap-unreachable";
+        failHard(
+          `Bootstrap is unreachable now that BASE_SHA has ${gatePath}. ` +
+            `The introducing path is only for a base that never had the gate.`,
+        );
+      }
       bootstrapped = true;
-      if (!headHasGate) failHard(`bootstrap requires head ${gatePath}.`);
+      decisionPath = isPush ? "push/bootstrap" : "pr/bootstrap";
+      if (!headHasGate) {
+        decisionPath = "fail/missing-head-gate";
+        failHard(`bootstrap requires head ${gatePath}.`);
+      }
       if (!headHasThresholds) failHard(`bootstrap requires head ${thresholdsPath}.`);
       if (!headHasBaseline) failHard(`bootstrap requires head ${baselinePath}.`);
     } else {
+      decisionPath = "fail/no-bootstrap-signal";
       failHard(
         `default branch '${defaultBranch}' has no ${gatePath} and head has no ${BOOTSTRAP_FILE} ` +
           `{allowOnce:true}. Bootstrap is an explicit one-time signal, not 'script missing'.`,
@@ -375,14 +399,16 @@ export function runGate(options = {}) {
     say("## Coverage");
     say("");
     if (bootstrapped) {
+      const who = isPush ? "This push" : "This PR";
       say(
-        "**Bootstrap:** BASE_SHA has no `perf/coverage-gate.mjs`. This PR may establish the gate " +
+        `**Bootstrap:** BASE_SHA has no \`perf/coverage-gate.mjs\`. ${who} may establish the gate ` +
           "because HEAD contains `perf/coverage-bootstrap.json` `{allowOnce:true}` (explicit signal, " +
           "not 'script missing'). Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
           "tolerance 0.5. After BASE has the gate, CI runs `_base/perf/coverage-gate.mjs` and a " +
           "missing or renamed gate, thresholds, or baseline on base or head **fails closed**. " +
-          "A PR whose base is not the default branch **fails closed**. The introducing push of this " +
-          "PR (event.before has no gate) bootstraps with `{allowOnce:true}`. " +
+          "A PR whose base is not the default branch **fails closed**. The introducing push " +
+          "(event.before has no gate) bootstraps with `{allowOnce:true}`. This path is unreachable " +
+          "once BASE_SHA has the gate. " +
           "Lowering the floor after bootstrap requires a dedicated `[workflows]` PR with " +
           "`perf/coverage-override.json` `{from, to, reason}` matching the BASE_SHA floor and " +
           "measured numbers, plus sign-off from Code Reviewer, Tech Coordinator and Helms. " +
@@ -408,10 +434,21 @@ export function runGate(options = {}) {
     }
     say("");
     const tol = thresholds.baselineMatchTolerancePercent;
+    say(`gate-path: ${decisionPath}`);
     say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`. Default branch: \`${defaultBranch}\`${defaultSha ? ` (\`${defaultSha}\`)` : ""}.`);
-    say(bootstrapped ? "Gate script: **head copy** (bootstrap; explicit allowOnce; absent on default branch)." : "Gate script: loaded from the default branch (not the PR head).");
-    say(bootstrapped ? "Thresholds: **bootstrap defaults**." : "Thresholds: loaded from the default branch (not the PR head).");
-    say(bootstrapped ? "Floor: **0 / 0** (bootstrap)." : "Floor: loaded from the default branch (not the PR head).");
+    if (bootstrapped) {
+      say(
+        `Gate script: HEAD \`${gatePath}\` (introducing bootstrap; BASE_SHA has no gate). ` +
+          `This path is unreachable once BASE_SHA has the gate.`,
+      );
+      say("Thresholds: bootstrap defaults (diff ≥ 80/80), not a file at BASE_SHA.");
+      say("Floor: **0 / 0** (introducing bootstrap; BASE_SHA has no baseline).");
+    } else {
+      const src = `\`${gatePath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`)`;
+      say(`Gate script: ${src}.`);
+      say(`Thresholds: \`${thresholdsPath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`).`);
+      say(`Floor: \`${baselinePath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`).`);
+    }
     say(
       `Match tolerance at BASE_SHA: ${tol}pp (a PR may not widen it). No-drop uses 1-decimal plus epsilon ${NO_DROP_EPS}.`,
     );
@@ -482,7 +519,7 @@ export function runGate(options = {}) {
       } else if (round1(c.line) !== round1(m.line) || round1(c.branch) !== round1(m.branch)) {
         say(
           `- **Note** head \`${baselinePath}\` ${name} ${pct(c.line)}/${pct(c.branch)} differs from measured ${pct(m.line)}/${pct(m.branch)}. ` +
-            `This PR's floor is the default branch (0/0 while bootstrapping), not the head file. Editing the head JSON cannot relax overall/diff gates.`,
+            `This ${isPush ? "push" : "PR"}'s floor is 0/0 from BASE_SHA while bootstrapping, not the head file. Editing the head JSON cannot relax overall/diff gates.`,
         );
       }
     }
