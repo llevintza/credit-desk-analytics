@@ -1,5 +1,7 @@
 using Desk.Data;
 using Desk.Data.App;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Desk.Data.Tests;
 
@@ -14,7 +16,12 @@ public sealed class AppDbContextDesignFactoryTests
             ("ConnectionStrings__App", null));
 
         using var ctx = new AppDbContextDesignFactory().CreateDbContext([]);
-        Assert.NotNull(ctx);
+        var cs = ctx.Database.GetConnectionString();
+        Assert.False(string.IsNullOrWhiteSpace(cs));
+        var b = new NpgsqlConnectionStringBuilder(cs);
+        Assert.Equal("localhost", b.Host);
+        Assert.Equal("creditdesk", b.Database);
+        Assert.Equal("desk", b.Username);
     }
 
     [Fact]
@@ -25,7 +32,12 @@ public sealed class AppDbContextDesignFactoryTests
             ("ConnectionStrings__App", "Host=app-host;Database=app;Username=desk"));
 
         using var ctx = new AppDbContextDesignFactory().CreateDbContext(["ignored"]);
-        Assert.NotNull(ctx);
+        var cs = ctx.Database.GetConnectionString();
+        Assert.False(string.IsNullOrWhiteSpace(cs));
+        var b = new NpgsqlConnectionStringBuilder(cs);
+        Assert.Equal("app-host", b.Host);
+        Assert.Equal("app", b.Database);
+        Assert.Equal("desk", b.Username);
     }
 
     [Fact]

@@ -61,7 +61,9 @@ public static class ConnectionStrings
     internal static SslMode ParseSslMode(string value)
     {
         var token = value.Replace("-", "", StringComparison.Ordinal);
-        if (!Enum.TryParse<SslMode>(token, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+        // Enum.TryParse accepts numeric tokens ("3" → Require). Reject those.
+        if (token.Length == 0 || token.All(char.IsDigit) ||
+            !Enum.TryParse<SslMode>(token, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
             throw new ArgumentException($"Unknown sslmode '{value}'.");
         return mode;
     }

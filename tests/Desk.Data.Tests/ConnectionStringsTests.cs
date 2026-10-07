@@ -57,6 +57,17 @@ public sealed class ConnectionStringsTests
         Assert.Contains("sslmode", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("3")]
+    [InlineData("03")]
+    public void Normalize_numeric_sslmode_throws(string sslmode)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ConnectionStrings.Normalize($"postgres://desk@localhost/db?sslmode={sslmode}"));
+        Assert.Contains("sslmode", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Normalize_uri_without_userinfo_and_query_flag_without_value()
     {

@@ -64,18 +64,25 @@ public sealed class StartScriptTests
     {
         var fake = Path.Combine(Path.GetTempPath(), "desk-fake-dotnet-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fake);
-        var dotnet = Path.Combine(fake, "dotnet");
-        await File.WriteAllTextAsync(dotnet, """
-            #!/bin/sh
-            echo "APP_VERSION=$APP_VERSION"
-            echo "PORTS=$ASPNETCORE_HTTP_PORTS"
-            """);
-        var chmod = Process.Start(new ProcessStartInfo("chmod", $"+x {dotnet}") { RedirectStandardOutput = true, RedirectStandardError = true });
-        Assert.NotNull(chmod);
-        await chmod.WaitForExitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var dotnet = Path.Combine(fake, "dotnet");
+            await File.WriteAllTextAsync(dotnet, """
+                #!/bin/sh
+                echo "APP_VERSION=$APP_VERSION"
+                echo "PORTS=$ASPNETCORE_HTTP_PORTS"
+                """);
+            var chmod = Process.Start(new ProcessStartInfo("chmod", $"+x {dotnet}") { RedirectStandardOutput = true, RedirectStandardError = true });
+            Assert.NotNull(chmod);
+            await chmod.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        extraEnv["PATH"] = fake + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
-        return await RunAsync(extraEnv);
+            extraEnv["PATH"] = fake + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            return await RunAsync(extraEnv);
+        }
+        finally
+        {
+            Directory.Delete(fake, recursive: true);
+        }
     }
 
     static async Task<(int Code, string Stdout, string Stderr)> RunAsync(Dictionary<string, string?> extraEnv)
