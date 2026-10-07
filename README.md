@@ -749,6 +749,8 @@ services:
 
 ### 13.3 One-time setup (done by hand by the repo owner)
 
+**Detailed, click-by-click guide: [`docs/deployment-setup.md`](docs/deployment-setup.md)** (Neon, Render, the GitHub `production` environment, the Anthropic key for PR reviews, the first deploy, rotation and troubleshooting). The summary:
+
 1. **Neon:**
    - Create project `credit-desk-analytics` (Postgres 17, region close to Render's).
    - Copy the **direct** connection string.
@@ -808,6 +810,17 @@ Inputs:
 - `confirm`: must equal `RESEED-PRODUCTION` for `reseed`; otherwise the job fails before touching the database
 
 `reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
+
+### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
+
+- Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
+- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`.
+- It needs the repository secret `ANTHROPIC_API_KEY` (setup guide, step 4).
+
+**Merge gate:**
+- a review summary exists for the PR's head commit, with `blocking=0`
+- no unresolved review threads
+- every check green
 
 ### 14.4 Migration rules (because migrations run *before* the new app version starts)
 

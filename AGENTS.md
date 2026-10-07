@@ -17,7 +17,12 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    - Playwright screenshots for UI changes (dark + light)
    - the test list
    - an updated README §17 Status row
-6. **Stop after opening each PR** and wait for review. Don't start the next phase on top of an unmerged one. After a merge, branch from fresh `origin/main` (merges are squash merges).
+6. **Every PR is reviewed by the Claude review workflow** (README §14.5). After opening a PR, watch it:
+   - **The review posts [blocking] comments:** fix them on the same branch, push (which triggers a re-review), and resolve the threads.
+   - **A check fails:** fix it and push.
+   - **The gate is met** (review summary for the head SHA with `blocking=0`, no unresolved threads, all checks green) **and the PR is merged:** branch from fresh `origin/main` and start the next phase in §15.
+   - **The PR is closed without merging:** stop and ask.
+7. **Stop after opening each PR** and wait for review. Don't start the next phase on top of an unmerged one. After a merge, branch from fresh `origin/main` (merges are squash merges).
 
 ## Hard rules
 
