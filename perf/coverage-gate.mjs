@@ -192,15 +192,17 @@ function summarizeDotnet(dir) {
         const number = Number(attr(attrs, "number"));
         const hits = Number(attr(attrs, "hits") ?? "0");
         if (!Number.isFinite(number)) continue;
-        file.lines[number] = (file.lines[number] ?? 0) + hits;
+        file.lines[number] = Math.max(file.lines[number] ?? 0, hits);
         const cond = attr(attrs, "condition-coverage");
         if (cond) {
           const m = cond.match(/\((\d+)\/(\d+)\)/);
           if (m) {
-            file.branches[number] = {
-              hit: (file.branches[number]?.hit ?? 0) + Number(m[1]),
-              total: (file.branches[number]?.total ?? 0) + Number(m[2]),
-            };
+            const hit = Number(m[1]);
+            const total = Number(m[2]);
+            const prev = file.branches[number];
+            file.branches[number] = prev
+              ? { hit: Math.max(prev.hit, hit), total: Math.max(prev.total, total) }
+              : { hit, total };
           }
         }
       }

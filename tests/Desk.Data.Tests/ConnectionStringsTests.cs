@@ -58,6 +58,17 @@ public sealed class ConnectionStringsTests
     }
 
     [Fact]
+    public void Normalize_uri_without_userinfo_and_query_flag_without_value()
+    {
+        var n = ConnectionStrings.Normalize("postgres://localhost/creditdesk?sslmode=disable&bare");
+        var b = new NpgsqlConnectionStringBuilder(n);
+        Assert.Equal("localhost", b.Host);
+        Assert.Equal(5432, b.Port);
+        Assert.True(string.IsNullOrEmpty(b.Username));
+        Assert.Equal(SslMode.Disable, b.SslMode);
+    }
+
+    [Fact]
     public void Normalize_ignores_channel_binding_and_unknown_query()
     {
         var n = ConnectionStrings.Normalize(
