@@ -23,14 +23,14 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
    1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
    2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-   3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, or `tests/testconfig.json` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+   3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
    Tech Coordinator merges and starts the next phase.
 
    - Fix [blocking] comments on the same branch and push. Don't resolve a reviewer thread you haven't fixed.
    - **Tech Coordinator merges. Never merge a PR yourself, including your own.** A Claude `blocking=0` marker, self-resolved threads, or green checks without coverage are not the gate and do not authorize a merge or the next phase.
    - **After a merge, wait for Tech Coordinator to start the next phase.** Don't start it yourself.
-   - Changes to `.github/`, `.claude/`, `CLAUDE.md`, `AGENTS.md`, README §14, `perf/coverage-*`, or `tests/testconfig.json` go in their own `[workflows]` PR, reviewed by hand by Tech Coordinator and Leo. CODEOWNERS and the `[workflows]` title prefix are advisory only: no GitHub protection enforces them (every bot acts as the owner and cannot approve its own PR).
+   - Changes to `.github/`, `.claude/`, `CLAUDE.md`, `AGENTS.md`, README §14, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` go in their own `[workflows]` PR, reviewed by hand by Tech Coordinator and Leo. CODEOWNERS and the `[workflows]` title prefix are advisory only: no GitHub protection enforces them (every bot acts as the owner and cannot approve its own PR).
    - **The PR is closed without merging:** stop and ask.
 7. **Stop after opening each PR** and wait for review. Don't start the next phase on top of an unmerged one. After Tech Coordinator merges, wait for Tech Coordinator to start the next phase, then branch from fresh `origin/main` (squash by default; a merge commit is also fine).
 
@@ -101,7 +101,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 - The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-  3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, or `tests/testconfig.json` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+  3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.
 - README §17 Status is updated. Nothing secret is in the diff.

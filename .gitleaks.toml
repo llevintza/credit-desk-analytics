@@ -31,5 +31,5 @@ secretGroup = 1
 [[allowlists]]
 description = "Coverlet ExcludeFromCodeCoverageAttribute is not a Codecov token"
 targetRules = ["codecov-access-token"]
-regexTarget = "match"
-regexes = ['''ExcludeFromCodeCoverageAttribute''']
+regexTarget = "secret"
+regexes = ['''^ExcludeFromCodeCoverageAttribute$''']
