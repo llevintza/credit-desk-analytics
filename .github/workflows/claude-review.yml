@@ -83,8 +83,13 @@ jobs:
           cp -- AGENTS.md README.md .review-pr/ 2>/dev/null || true
           cp -- .review-base/AGENTS.md ./AGENTS.md
           cp -- .review-base/README.md ./README.md
-          find . -path ./.review-base -prune -o -path ./.git -prune -o -path ./.review-pr -prune -o \
-            \( -name CLAUDE.md -o -name CLAUDE.local.md \) -type f ! -path ./CLAUDE.md -print -delete
+          # -delete implies -depth, so do not combine with -prune (GNU find exits 1).
+          find . \( -name CLAUDE.md -o -name CLAUDE.local.md \) -type f \
+            ! -path './CLAUDE.md' \
+            ! -path './.review-base/*' \
+            ! -path './.git/*' \
+            ! -path './.review-pr/*' \
+            -print -delete
 
       # Give the reviewer the existing comments (read-only, fetched here) so a re-review after a push
       # doesn't re-post issues that already have a thread.
