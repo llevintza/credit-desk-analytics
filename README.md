@@ -749,6 +749,8 @@ services:
 
 ### 13.3 One-time setup (done by hand by the repo owner)
 
+**Detailed, click-by-click guide: [`docs/deployment-setup.md`](docs/deployment-setup.md)** (Neon, Render, the GitHub `production` environment, the Anthropic key for PR reviews, the first deploy, rotation and troubleshooting). The summary:
+
 1. **Neon:**
    - Create project `credit-desk-analytics` (Postgres 17, region close to Render's).
    - Copy the **direct** connection string.
@@ -824,6 +826,22 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
   - Never rename or drop in the same release that stops using a column; drop in a later PR.
 - **Migrations are generated, reviewed and committed** in the PR that needs them. CI fails on pending model changes.
 - **Seed data is never written by migrations,** only by the seeder. The exception is the column catalog, which is reference data; the seeder owns it too.
+
+### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
+
+- Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
+- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. **Only a summary authored by `github-actions[bot]` counts.** Anyone who can comment could type the marker, so tooling and agents must check the author (`claude[bot]` if the Claude GitHub App is used instead).
+- It needs the repository secret `ANTHROPIC_API_KEY` (setup guide, step 4).
+
+**Merge gate:**
+- a review summary **from `github-actions[bot]`** exists for the PR's head commit, with `blocking=0`
+- no unresolved review threads
+- every check green
+
+**Known limit:** with same-repo `pull_request` runs, a PR's own copy of `claude-review.yml` is what runs, so a PR could alter the reviewer and still post as `github-actions[bot]`. The mitigations:
+- `.github/CODEOWNERS` assigns `/.github/` to the repo owner.
+- Any PR touching `.github/` is titled with a `[workflows]` prefix, and its workflow diff gets a manual review before merge.
+- The owner's merge is the human gate. GitHub doesn't allow approving your own PR, so a required-approval rule can't be used here.
 
 ---
 
