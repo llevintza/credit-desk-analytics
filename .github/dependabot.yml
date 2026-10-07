@@ -9,14 +9,20 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/build-db-tools
     schedule:
       interval: weekly
   - package-ecosystem: docker
-    directory: /deploy
+    directories:
+      - /deploy
+      - /deploy/ci-images/gitleaks
+      - /deploy/ci-images/actionlint
+      - /deploy/ci-images/shellcheck
     schedule:
       interval: weekly
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
