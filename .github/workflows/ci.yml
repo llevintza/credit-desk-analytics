@@ -160,9 +160,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          # Token is used only to fetch BASE_SHA if it is not already in the clone
-          # (history rewrite / stale event SHA). Job permissions stay contents: read.
-          persist-credentials: true
+          persist-credentials: false
+      # Gate script + thresholds come from BASE, not the PR head (R2-M1).
+      # persist-credentials stays false; if BASE_SHA is missing from the head
+      # clone, fetch it from this local checkout (no origin token).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          path: _base
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -183,16 +189,41 @@ jobs:
             exit 1
           fi
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags origin "$BASE_SHA"
+            git fetch --no-tags --no-recurse-submodules "$PWD/_base" "$BASE_SHA"
           fi
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
             exit 1
           fi
-          node perf/coverage-gate.mjs \
+          GATE=perf/coverage-gate.mjs
+          if [ -f _base/perf/coverage-gate.mjs ]; then
+            GATE=_base/perf/coverage-gate.mjs
+          else
+            echo "Bootstrap: BASE_SHA has no perf/coverage-gate.mjs; using the PR-head copy once."
+          fi
+          node "$GATE" \
             --dotnet TestResults/coverage \
             --web web/coverage \
             --base "$BASE_SHA"
+
+  gate-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Gate script tests (≥80% line/branch)
+        run: >
+          node --test --experimental-test-coverage
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-include=perf/coverage-gate.mjs
+          perf/coverage-gate.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
