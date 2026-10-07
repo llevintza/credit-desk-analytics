@@ -32,7 +32,7 @@ Action majors with a Node 24 runtime (checkout v7, setup-dotnet v6, setup-node v
 
 Option 2.
 
-- Test projects reference `coverlet.MTP` (not `coverlet.collector`, `Microsoft.NET.Test.Sdk`, or `xunit.runner.visualstudio`). Coverlet include is `[Desk.*]*` so a new `src/Desk.*` project is measured instead of silently skipped.
+- Test projects reference `coverlet.MTP` (not `coverlet.collector`, `Microsoft.NET.Test.Sdk`, or `xunit.runner.visualstudio`). Coverlet include is `[Desk.*]*` so a new `src/Desk.*` project is measured instead of silently skipped. Source-generated OpenAPI (`OpenApiXmlCommentSupport.generated.cs`, `[GeneratedCode]`) and `obj/` are excluded via `tests/testconfig.json` (`excludeByAttribute: GeneratedCodeAttribute` **without** `CompilerGeneratedAttribute`, which would drop `Program.cs` lambdas) plus `--coverlet-exclude-by-file '**/obj/**'` and `'**/*.generated.cs'`. The config file is authoritative so coverlet.MTP's CLI default `CompilerGeneratedAttribute` is not merged. Do not use `dotnet test --collect "XPlat Code Coverage"` (VSTest).
 - Gates (`perf/coverage-gate.mjs`):
   - CI checks out BASE_SHA into `_base` (`persist-credentials: false`) and runs `_base/perf/coverage-gate.mjs` when that file exists, so the PR head cannot rewrite the rules. Thresholds, tolerance, and `coverage-baseline.json` are loaded with `git show $BASE_SHA:…`. The PR head cannot lower a min, turn off `overallMustNotDrop`, widen the tolerance, or drop the committed floor below the base.
   - Diff coverage is vs `git merge-base $BASE_SHA HEAD`. Overall no-drop is vs the baseline **at BASE_SHA**.

@@ -76,7 +76,8 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Add a migration | `dotnet ef migrations add <Name> --project src/Desk.Data --startup-project src/Desk.Data --output-dir App/Migrations` |
 | Seed (local) | `dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0` (`--force` to reseed, `--size-report`) |
 | API | `dotnet run --project src/Desk.Api` (http://localhost:5180) |
-| API tests | `dotnet test` (coverlet: add `-- --coverlet --coverlet-output-format cobertura`) |
+| API tests | `dotnet test` (coverlet.MTP, not `--collect "XPlat Code Coverage"`) |
+| Coverlet (local) | `dotnet test -- --coverlet --coverlet-output-format cobertura --coverlet-include '[Desk.*]*' --coverlet-exclude-by-file '**/obj/**' --coverlet-exclude-by-file '**/*.generated.cs' --coverlet-exclude-assemblies-without-sources MissingAll` (GeneratedCodeAttribute exclusions live in `tests/testconfig.json`; do **not** add `CompilerGeneratedAttribute`, which strips `Program.cs` lambdas) |
 | Coverage gates | `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main` |
 | Gate-script tests | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/coverage-gate.mjs perf/coverage-gate.test.mjs` |
 | Web dev server | `cd web && npm start` (http://localhost:4200, proxies to :5180) |

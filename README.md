@@ -787,7 +787,7 @@ services:
 
 1. **api:**
    - `dotnet build -warnaserror`
-   - `dotnet test` with **coverlet.MTP** Cobertura (Testcontainers needs Docker, available on `ubuntu-latest`)
+   - `dotnet test` with **coverlet.MTP** Cobertura (Testcontainers needs Docker, available on `ubuntu-latest`). Generated OpenAPI / `obj` sources are excluded (`GeneratedCodeAttribute`, `**/obj/**`, `**/*.generated.cs` in `tests/testconfig.json` and the same `--coverlet-exclude-by-file` flags). Do **not** exclude `CompilerGeneratedAttribute` (that drops `Program.cs` lambdas). Do not use `dotnet test --collect "XPlat Code Coverage"` (VSTest collector; this repo is MTP).
    - `dotnet ef migrations has-pending-model-changes` must be false
 2. **web:**
    - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
