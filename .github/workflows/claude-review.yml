@@ -1,6 +1,6 @@
 name: Claude review
 
-# Automated code review on every PR (README §15 workflow). The review ends with a marker comment
+# Automated code review on every PR (README §14.5). The review ends with a marker comment
 # `<!-- claude-review sha=<head sha> blocking=<n> -->`; the merge gate is: review done for the
 # head SHA, 0 blocking issues, no unresolved threads, all checks green.
 on:
