@@ -911,7 +911,7 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 |---|---|---|
 | Spec | #1 | Merged |
 | 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up (this PR): restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish |
-| API docs (Swagger UI) | #93 | In review |
+| API docs (Swagger UI) | #93 | Merged; follow-up (this PR): relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |
 | 2 Auth and limits | n/a | Not started |
