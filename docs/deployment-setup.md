@@ -104,7 +104,7 @@ Workflow YAML cannot set these. Do them by hand.
    - **Deployment branches and tags:** choose **Selected branches and tags**, then add the rule `main`. Only `main` can deploy.
    - **Required reviewers:** add `llevintza` (**required**). `deploy.yml` has both `preflight` and `release` on `environment: production`, so each deploy waits for **two** approvals, and every merge's preflight waits even while `APP_URL` is unset. Leave "Prevent self-review" off: you're the only reviewer. Every bot acts as `llevintza`, so this is a deliberate step and an audit trail, not separation of duties.
 4. **Ruleset on `main`** (Settings → Rules → New ruleset, target `main`):
-   - **Required status checks:** every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
+   - **Required status checks:** every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
    - **No required approving review.** Every bot acts as `llevintza` and cannot self-approve, so a required PR review would deadlock every merge.
    - Block force-pushes and deletions of `main`.
 
@@ -220,3 +220,5 @@ From now on, merging a PR into `main` runs all of this automatically. When CI on
 | Claude review job skipped with a missing-key notice | Add `ANTHROPIC_API_KEY` to the `claude-review` environment (step 5). The job stays green; it is not a required check |
 | Claude review job waits on a deployment approval | The `claude-review` environment must have **no** required reviewers and **no** branch restriction |
 | Site takes 30–60 s to load the first time | The free instance spins down after about 15 min idle. Expected; the page shows "Waking the server…" |
+| `NETSDK1004` / assets file not found while bundling | `dotnet tool restore` does not write `project.assets.json`. The composite action restores `Desk.Data` and `Desk.Seeder` for `linux-x64` on a clean checkout (CI `db-tools`, deploy, db-ops) |
+| `No connection string named 'App'` / `No connection string for source App` | `AppDbContextDesignFactory` needs `DATABASE_URL` or `ConnectionStrings__App` at bundle time. The composite sets a password-less design-time `DATABASE_URL` only for that step; production `DATABASE_URL` stays on migrate/seed |

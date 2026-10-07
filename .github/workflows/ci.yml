@@ -243,10 +243,13 @@ jobs:
     # environment, no database. The api job also calls this action, but only after
     # `dotnet build`, which hid NETSDK1004 on production's first real release.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build migrations bundle and seeder
         uses: ./.github/actions/build-db-tools
       - name: Assert artifacts
