@@ -4,8 +4,8 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 
 | ADR | Title | Phase | Status |
 |---|---|---|---|
-| 0001 | Stack: .NET 10 + Postgres + Angular 22 | 0 Scaffold | Planned |
-| 0002 | Hosting: single Render service + Neon (vs static site + API, vs GitHub Pages) | 0 Scaffold | Planned |
+| [0001](0001-stack.md) | Stack: .NET 10 + Postgres + Angular 22 | 0 Scaffold | Accepted |
+| [0002](0002-hosting.md) | Hosting: single Render service + Neon (vs static site + API, vs GitHub Pages) | 0 Scaffold | Accepted |
 | 0003 | Wide position snapshot + narrow history | 1 Data | Planned |
 | 0004 | Bulk load: Npgsql binary COPY vs EF `AddRange` (measured) | 1 Data | Planned |
 | 0005 | Auth: same-origin cookie vs JWT | 2 Auth and limits | Planned |
@@ -19,4 +19,4 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
-| 0016 | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Planned |
+| [0016](0016-continuous-deployment.md) | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Accepted |
