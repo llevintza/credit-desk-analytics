@@ -819,17 +819,6 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 
 `reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
 
-### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
-
-- Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
-- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`.
-- It needs the repository secret `ANTHROPIC_API_KEY` (setup guide, step 4).
-
-**Merge gate:**
-- a review summary exists for the PR's head commit, with `blocking=0`
-- no unresolved review threads
-- every check green
-
 ### 14.4 Migration rules (because migrations run *before* the new app version starts)
 
 - **Every migration MUST be backward compatible with the currently running app** (expand → deploy → contract):
@@ -837,6 +826,17 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
   - Never rename or drop in the same release that stops using a column; drop in a later PR.
 - **Migrations are generated, reviewed and committed** in the PR that needs them. CI fails on pending model changes.
 - **Seed data is never written by migrations,** only by the seeder. The exception is the column catalog, which is reference data; the seeder owns it too.
+
+### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
+
+- Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
+- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. **Only a summary authored by `github-actions[bot]` counts.** Anyone who can comment could type the marker, so tooling and agents must check the author (`claude[bot]` if the Claude GitHub App is used instead).
+- It needs the repository secret `ANTHROPIC_API_KEY` (setup guide, step 4).
+
+**Merge gate:**
+- a review summary **from `github-actions[bot]`** exists for the PR's head commit, with `blocking=0`
+- no unresolved review threads
+- every check green
 
 ---
 
