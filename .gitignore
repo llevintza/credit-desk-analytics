@@ -1,0 +1,30 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+coverage/
+playwright-report/
+test-results/
+
+# Local data and secrets
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.pfx
+secrets/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
