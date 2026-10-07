@@ -838,6 +838,11 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 - no unresolved review threads
 - every check green
 
+**Known limit:** with same-repo `pull_request` runs, a PR's own copy of `claude-review.yml` is what runs, so a PR could alter the reviewer and still post as `github-actions[bot]`. The mitigations:
+- `.github/CODEOWNERS` assigns `/.github/` to the repo owner.
+- Any PR touching `.github/` is titled with a `[workflows]` prefix, and its workflow diff gets a manual review before merge.
+- The owner's merge is the human gate. GitHub doesn't allow approving your own PR, so a required-approval rule can't be used here.
+
 ---
 
 ## 15. Delivery plan: one PR per phase

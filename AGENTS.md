@@ -22,6 +22,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    - **A check fails:** fix it and push.
    - **The gate is met** (a review summary **authored by `github-actions[bot]`** for the head SHA with `blocking=0`, no unresolved threads, all checks green) **and the PR is merged:** branch from fresh `origin/main` and start the next phase in §15.
    - **Resolve [suggestion] threads too,** by applying the suggestion or replying with the reason not to, so the gate's "no unresolved threads" holds.
+   - **Never change `.github/` in a feature PR.** Workflow or CODEOWNERS changes go in their own PR, titled with a `[workflows]` prefix, so the owner reviews that diff by hand. The bot review can't vouch for a PR that edits the reviewer.
    - **The PR is closed without merging:** stop and ask.
 7. **Stop after opening each PR** and wait for review. Don't start the next phase on top of an unmerged one. After a merge, branch from fresh `origin/main` (merges are squash merges).
 

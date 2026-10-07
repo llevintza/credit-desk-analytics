@@ -130,7 +130,12 @@ Keep the Neon tab open: you'll paste the connection string in steps 2 and 3.
 - It posts inline comments marked **[blocking]** or **[suggestion]**.
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head> blocking=<n> -->`.
 
-**The merge gate:** that summary exists for the head commit with `blocking=0`, there are no unresolved review threads, and all checks are green.
+**The merge gate:**
+- that summary exists for the head commit with `blocking=0`, **and is authored by `github-actions[bot]`** (anyone can type the marker in a comment)
+- there are no unresolved review threads
+- all checks are green
+
+**One limit:** a PR can change `claude-review.yml` itself, and its own run would still post as `github-actions[bot]`. PRs that touch `.github/` are therefore titled with a **`[workflows]`** prefix, and their workflow diff is reviewed by hand before merge. Your merge is the human gate; you can't formally approve your own PRs on GitHub.
 
 ---
 
