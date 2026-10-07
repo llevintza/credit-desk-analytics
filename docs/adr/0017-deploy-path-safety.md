@@ -62,4 +62,4 @@ GitHub expression `==` is case-insensitive, so `MAIN` would pass `== 'main'`. Th
 
 - A failed migration or seed fails its step and stops the job in CI, deploy, and db-ops. The running app keeps serving the old schema, which is the ADR-0016 / §14.4 promise.
 - `workflow_run` still *starts* for any completed CI run whose `head_branch` is `main` (GitHub's filter cannot see `event` or the head repository). Jobs that use the `production` environment `need` the no-secrets `gate` job. A human **must** set the GitHub `production` environment to the `main` branch with required reviewers **before any production secret is added**: `workflow_dispatch` runs the selected ref's YAML, so a branch that deletes the gate would otherwise still see those secrets. A ruleset on `main` (required checks, one review, squash only) is the same class of dashboard setting. Those cannot be expressed in workflow YAML.
-- SHA-pinning Actions, Dependabot, coverage, and a scheduled full-history gitleaks scan stay out of this PR.
+- SHA-pinning Actions, Dependabot, coverage, and a scheduled full-history gitleaks scan stay out of this PR; they landed in ADR-0018.

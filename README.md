@@ -500,7 +500,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `Permissions-Policy` minimal.
 - **Errors:** ProblemDetails everywhere, with no stack traces outside Development.
 - **Logs:** structured, with no secrets and no full connection strings.
-- Dependabot for NuGet, npm and GitHub Actions.
+- Dependabot for NuGet, npm, GitHub Actions and Docker.
 
 ---
 
@@ -736,8 +736,8 @@ services:
 
 - **`deploy/Dockerfile`**, multi-stage:
   1. `node:22` builds `web/` (`npm ci && npm run build`).
-  2. `mcr.microsoft.com/dotnet/sdk:10.0` publishes `Desk.Api` and copies the SPA into `wwwroot`, and builds an **EF migrations bundle** (`dotnet ef migrations bundle`).
-  3. `mcr.microsoft.com/dotnet/aspnet:10.0` is the runtime, as a non-root user. `ASPNETCORE_URLS=http://0.0.0.0:${PORT}`.
+  2. `mcr.microsoft.com/dotnet/sdk:10.0` publishes `Desk.Api` and copies the SPA into `wwwroot`. The **EF migrations bundle** is built in GitHub Actions (`deploy.yml` / `db-ops.yml`), not in this image (ADR-0016).
+  3. `mcr.microsoft.com/dotnet/aspnet:10.0` is the runtime, as a non-root user. `ASPNETCORE_HTTP_PORTS=${PORT:-8080}` via `start.sh`.
 - **`deploy/start.sh`** only starts the app: it fails fast with a clear message if `DATABASE_URL` is missing, then runs `exec dotnet Desk.Api.dll`.
   - **Migrations and seeding are not done at boot.** GitHub Actions runs them before triggering the deploy (§14.2).
   - That way a cold start on the free tier never runs DDL, and a failed migration never reaches a running container.
@@ -776,15 +776,17 @@ services:
 
 1. **api:**
    - `dotnet build -warnaserror`
-   - `dotnet test` (Testcontainers needs Docker, available on `ubuntu-latest`)
+   - `dotnet test` with **coverlet.MTP** Cobertura (Testcontainers needs Docker, available on `ubuntu-latest`)
    - `dotnet ef migrations has-pending-model-changes` must be false
 2. **web:**
-   - `npm ci && npm run lint && npm test -- --run && npm run build`
+   - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
+   - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
    - the bundle budget is enforced by `angular.json` budgets
-3. **e2e:**
-   - `docker compose up -d --build`, seed at `--scale 0.2`, run Playwright
-   - upload the report and screenshots as artifacts
-4. **budgets:** `node perf/payload-size.mjs` against the compose stack; fail if over budget.
+3. **coverage:** job summary of line/branch % per project; **diff coverage ≥ 80%** vs the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at that base. Thresholds are in `perf/coverage-thresholds.json`.
+4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
+5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
+6. **workflows:** actionlint + shellcheck
+7. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -796,7 +798,7 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 - **`workflow_dispatch`:** ref is exactly `refs/heads/main` (case-sensitive bash in the no-secrets `gate` job; GitHub's expression `==` is case-insensitive)
 - **SHA:** `workflow_run.head_sha` or `github.sha` equals the current tip of `main` (re-runs of old successful CI/deploy runs are refused)
 
-`DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). The workflow runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
+`DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). Deploy and db-ops share `concurrency: group: production` with `cancel-in-progress: false`: an **in-progress** run is never cancelled; GitHub keeps a single pending run in the group, so a **newer pending run cancels the older pending one**. That is fail-safe (the newer main tip wins) but means a db-ops dispatch can drop a pending deploy and vice versa. A SHA that is no longer the tip of `main` is skipped (neutral), not failed.
 
 | Job | Steps |
 |---|---|
@@ -873,7 +875,7 @@ The implementing agent **stops after opening each PR** and waits for review.
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL) |
+| 0 Scaffold | #2 | Merged; follow-up #4 deploy-path safety; follow-up (this PR): coverage gates + CI hardening |
 | 1 Data | n/a | Not started |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |

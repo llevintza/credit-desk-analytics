@@ -59,7 +59,8 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Add a migration | `dotnet ef migrations add <Name> --project src/Desk.Data --startup-project src/Desk.Data --output-dir App/Migrations` |
 | Seed (local) | `dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0` (`--force` to reseed, `--size-report`) |
 | API | `dotnet run --project src/Desk.Api` (http://localhost:5180) |
-| API tests | `dotnet test` |
+| API tests | `dotnet test` (coverlet: add `-- --coverlet --coverlet-output-format cobertura`) |
+| Coverage gates | `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main --baseline-ref origin/main` |
 | Web dev server | `cd web && npm start` (http://localhost:4200, proxies to :5180) |
 | Web lint + unit tests | `cd web && npm run lint && npm test -- --watch=false` |
 | Whole stack | `docker compose up --build` (http://localhost:8080) |
