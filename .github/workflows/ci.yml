@@ -12,6 +12,13 @@ concurrency:
 permissions:
   contents: read
 
+# Explicit `bash` is `bash --noprofile --norc -eo pipefail`. The unspecified default
+# (`bash -e`) ignores a failing command on the left of `|`, so seeder exit 1/2
+# piped to `tee` would not fail the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   secrets:
     # Fails on any credential in ANY commit of the branch, not just the final tree (.gitleaks.toml).
@@ -65,8 +72,11 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    # Job-level defaults.run replaces workflow-level defaults.run entirely, so
+    # shell: bash (pipefail) must be repeated here with working-directory.
     defaults:
       run:
+        shell: bash
         working-directory: web
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +108,6 @@ jobs:
           cat health.json
           test "$(jq -r .version health.json)" = "${{ github.sha }}"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)" = 200
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me")" = 401
       - if: failure()
         run: docker compose logs

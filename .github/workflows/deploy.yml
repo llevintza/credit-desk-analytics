@@ -2,6 +2,12 @@ name: Deploy
 
 # README §14.2: on a green CI run for main, migrate Neon -> seed if the seed version changed
 # -> trigger the Render deploy hook -> wait until /health reports the merged commit.
+#
+# workflow_run.branches matches the *triggering run's head_branch*, so a pull_request CI
+# run from a branch named "main" (including a fork's main) also matches. Jobs that reach
+# the production environment / DATABASE_URL are therefore gated below on:
+#   workflow_run: event == push, head_branch == main, head_repository == this repo, conclusion success
+#   workflow_dispatch: github.ref == refs/heads/main
 on:
   workflow_run:
     workflows: [CI]
@@ -16,12 +22,36 @@ concurrency:
 permissions:
   contents: read
 
+# Explicit `bash` (not the unspecified default) is `bash --noprofile --norc -eo pipefail`.
+# Without pipefail, `cmd | tee file` exits 0 even when cmd fails, so a failed migration
+# would still seed and fire the Render hook (README §14.2 / §14.4).
+defaults:
+  run:
+    shell: bash
+
 env:
   SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  # Loud failure for a human who dispatched from the wrong ref (no secrets).
+  refuse-dispatch:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Deploy dispatch is only allowed from refs/heads/main (this run is ${{ github.ref }})."
+          exit 1
+
   preflight:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (
+        github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     environment: production
     outputs:
@@ -47,11 +77,20 @@ jobs:
 
   release:
     needs: preflight
-    if: needs.preflight.outputs.configured == 'true'
+    if: >-
+      needs.preflight.outputs.configured == 'true'
+      && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        || (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      )
     runs-on: ubuntu-latest
     environment: production
-    env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,10 +100,13 @@ jobs:
         uses: ./.github/actions/build-db-tools
 
       - name: Migrate Neon
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: ./dbtools/efbundle | tee migrate.txt
 
       - name: Seed (only if the seed version or scale changed)
         env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           SEED_SCALE: ${{ vars.SEED_SCALE || '1.0' }}
         run: ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" | tee seed.txt
 
