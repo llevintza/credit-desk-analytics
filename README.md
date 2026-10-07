@@ -536,6 +536,10 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
   - MessagePack variant on `Accept: application/x-msgpack` (ADR-0007 decides whether it stays on by default).
+- **API docs and testing:** the OpenAPI document is at **`/openapi/v1.json`** (built-in `AddOpenApi`), with **Swagger UI at `/swagger`** for trying every endpoint. Every endpoint has a name, summary and tag.
+  - It's on by default. Set `SWAGGER_ENABLED=false` to turn it off.
+  - Phase 2 puts it behind the admin login, since the site is public.
+  - The phase-2 CSP must allow Swagger UI's assets on `/swagger` only.
 - **Response compression:** Brotli and gzip, on HTTPS too.
 - **Caching:** `IMemoryCache` with a size limit, keyed per the P1 rules, expiring at the next batch time (06:30 America/New_York), plus `ETag` / `If-None-Match`.
 - **Observability:**
