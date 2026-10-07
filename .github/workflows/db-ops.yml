@@ -2,7 +2,7 @@ name: DB ops
 
 # README §14.3: manual, guarded operations on the production database.
 # DATABASE_URL is only injected on the steps that talk to Neon. Dispatch is
-# refused unless the run is from refs/heads/main in this repository.
+# refused unless the run is from refs/heads/main (case-sensitive) at the current tip.
 on:
   workflow_dispatch:
     inputs:
@@ -32,16 +32,27 @@ defaults:
     shell: bash
 
 jobs:
-  refuse-dispatch:
-    if: github.ref != 'refs/heads/main'
+  gate:
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          echo "::error::DB ops is only allowed from refs/heads/main (this run is ${{ github.ref }})."
-          exit 1
+      - name: Require exact main tip
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::DB ops is only allowed from refs/heads/main (this run is $REF)."
+            exit 1
+          fi
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$SHA" != "$tip" ]; then
+            echo "::error::Refusing DB ops at $SHA; current tip of main is $tip. Re-runs of old runs are blocked."
+            exit 1
+          fi
 
   run:
-    if: github.ref == 'refs/heads/main'
+    needs: gate
     runs-on: ubuntu-latest
     environment: production
     env:
