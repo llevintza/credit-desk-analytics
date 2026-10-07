@@ -22,6 +22,16 @@
  * thresholds file, or baseline on the default branch, the PR base, or HEAD
  * fails closed. PRs whose base is not the default branch fail closed.
  *
+ * Push to main: BASE_SHA is `github.event.before`. Empty `--base-ref` is empty
+ * (not "true"). The retarget check runs only on `pull_request`. The push that
+ * first introduces the gate (before has no gate, HEAD has the gate and
+ * `{allowOnce:true}`) is a one-time bootstrap transition. That path is not
+ * available to pull_request events (R3-M2).
+ *
+ * `perf/coverage-override.json` is applied only when the file differs from
+ * BASE_SHA. After #5 merges, delete `perf/coverage-bootstrap.json` and
+ * `perf/coverage-override.json` so they are not left on main.
+ *
  * Fail closed: missing/empty/non-numeric/NaN schema, unresolvable BASE_SHA or
  * merge-base, or a git show/diff error. Comparisons use `!(actual >= floor)` so
  * NaN/undefined fail.
@@ -71,7 +81,9 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a.startsWith("--")) {
       const key = a.slice(2);
-      const val = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : "true";
+      const next = argv[i + 1];
+      // Empty string is a value: push CI passes `--base-ref ""`.
+      const val = next !== undefined && !String(next).startsWith("--") ? argv[++i] : "true";
       out[key] = val;
     }
   }
@@ -219,6 +231,14 @@ export function runGate(options = {}) {
     const baseRef = String(args["base-ref"] ?? env("GITHUB_BASE_REF") ?? "")
       .replace(/^refs\/heads\//, "")
       .trim();
+    const eventName = String(args.event ?? env("GITHUB_EVENT_NAME") ?? "")
+      .trim()
+      .toLowerCase();
+    const isPush = eventName === "push";
+    const isPullRequest =
+      eventName === "pull_request" ||
+      eventName === "pull_request_target" ||
+      (!isPush && Boolean(baseRef));
 
     const dotnetDir = resolve(repoRoot, args.dotnet ?? "TestResults/coverage");
     const webDir = resolve(repoRoot, args.web ?? "web/coverage");
@@ -226,7 +246,7 @@ export function runGate(options = {}) {
     requireCommit(repoRoot, baseSha, failHard);
     const mergeBase = requireMergeBase(repoRoot, baseSha, failHard);
 
-    if (baseRef && baseRef !== defaultBranch) {
+    if (isPullRequest && baseRef && baseRef !== defaultBranch) {
       failHard(
         `PR base '${baseRef}' is not the default branch '${defaultBranch}'. ` +
           `Coverage is only evaluated against ${defaultBranch} (retarget bypass).`,
@@ -247,8 +267,15 @@ export function runGate(options = {}) {
     const headHasBaseline = existsSync(join(repoRoot, baselinePath));
     const bootstrapAllow = readBootstrapAllow(repoRoot, failHard);
 
+    const introducingGateOnPush = isPush && !gateOnBase && headHasGate && bootstrapAllow;
+
     let bootstrapped;
-    if (gateOnDefault) {
+    if (gateOnDefault && introducingGateOnPush) {
+      // First push to main that lands the gate (event.before has no gate).
+      bootstrapped = true;
+      if (!headHasThresholds) failHard(`bootstrap requires head ${thresholdsPath}.`);
+      if (!headHasBaseline) failHard(`bootstrap requires head ${baselinePath}.`);
+    } else if (gateOnDefault) {
       bootstrapped = false;
       if (!headHasGate) failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
       if (!gateOnBase) failHard(`base is missing ${gatePath}; deleting or renaming the gate fails closed.`);
@@ -303,7 +330,8 @@ export function runGate(options = {}) {
 
     const headThresholds = validateThresholds(readHeadJson(repoRoot, thresholdsPath, "thresholds", failHard), "head thresholds");
     const committed = validateBaseline(readHeadJson(repoRoot, baselinePath, "baseline", failHard), "head baseline");
-    const override = readHeadOverride(repoRoot, failHard);
+    const overrideChanged = fileChangedVsBase(repoRoot, baseSha, OVERRIDE_FILE, failHard);
+    const override = overrideChanged ? readHeadOverride(repoRoot, failHard) : null;
 
     assertThresholdsNotLooser(headThresholds, thresholds, bootstrapped, failHard);
     let overallFloor = mainBaseline;
@@ -358,10 +386,14 @@ export function runGate(options = {}) {
           "not 'script missing'). Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
           "tolerance 0.5. After the default branch has the gate, CI runs `_default/perf/coverage-gate.mjs` and a " +
           "missing or renamed gate, thresholds, or baseline on default, base, or head **fails closed**. " +
-          "A PR whose base is not the default branch **fails closed**. Lowering the floor after bootstrap " +
-          "requires a dedicated `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` " +
-          "matching the default-branch floor and measured numbers, plus sign-off from Helms and Code Reviewer. " +
-          "Otherwise only a push to the default branch ratchets the baseline, and only upward.",
+          "A PR whose base is not the default branch **fails closed**. The first push to main that " +
+          "introduces the gate (event.before has no gate) is a one-time bootstrap transition. " +
+          "Lowering the floor after bootstrap requires a dedicated `[workflows]` PR with " +
+          "`perf/coverage-override.json` `{from, to, reason}` matching the default-branch floor and " +
+          "measured numbers, plus sign-off from Code Reviewer, Tech Coordinator and Helms. " +
+          "A PR may raise the committed baseline to match measured coverage. After merge, delete " +
+          "`perf/coverage-bootstrap.json` and `perf/coverage-override.json`. The override is applied " +
+          "only when that file differs from BASE_SHA.",
       );
       say("");
     }
@@ -649,6 +681,11 @@ function readBootstrapAllow(root, failHard) {
   }
 }
 
+function fileChangedVsBase(root, baseSha, path, failHard) {
+  const named = git(root, ["diff", "--name-only", baseSha, "--", path], failHard);
+  return Boolean(named && named.trim());
+}
+
 function readHeadOverride(root, failHard) {
   const full = join(root, OVERRIDE_FILE);
   if (!existsSync(full)) return null;
@@ -747,7 +784,7 @@ function assertBaselineNotLowered(head, base, failHard) {
     const b = base[name];
     if (!meetsFloor(round1(h.line), round1(b.line)) || !meetsFloor(round1(h.branch), round1(b.branch))) {
       failHard(
-        `PR lowers the committed ${name} baseline below BASE_SHA (${pct(h.line)}/${pct(h.branch)} < ${pct(b.line)}/${pct(b.branch)}). Only a push to main may ratchet, and only upward.`,
+        `PR lowers the committed ${name} baseline below BASE_SHA (${pct(h.line)}/${pct(h.branch)} < ${pct(b.line)}/${pct(b.branch)}). A PR may not lower the floor except via a documented ${OVERRIDE_FILE} override.`,
       );
     }
   }

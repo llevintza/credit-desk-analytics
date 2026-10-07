@@ -113,12 +113,37 @@ function gateArgs(base, extra = []) {
     "main",
     "--base-ref",
     "main",
+    "--event",
+    "pull_request",
+    ...extra,
+  ];
+}
+
+function pushArgs(base, extra = []) {
+  return [
+    "--dotnet",
+    "cov/dotnet",
+    "--web",
+    "cov/web",
+    "--base",
+    base,
+    "--default-branch",
+    "main",
+    "--base-ref",
+    "",
+    "--event",
+    "push",
     ...extra,
   ];
 }
 
 test("parseArgs reads flags", () => {
   assert.deepEqual(parseArgs(["--base", "abc", "--dotnet", "x"]), { base: "abc", dotnet: "x" });
+});
+
+test("parseArgs treats empty --base-ref as empty string, not true", () => {
+  assert.deepEqual(parseArgs(["--base-ref", "", "--event", "push"]), { "base-ref": "", event: "push" });
+  assert.equal(parseArgs(["--verbose"]).verbose, "true");
 });
 
 test("meetsFloor is NaN-safe (NaN fails closed)", () => {
@@ -231,10 +256,14 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.match(yml, /--default-dir _default/);
   assert.match(yml, /types: \[opened, synchronize, reopened, edited\]/);
   assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
+  assert.ok(yml.includes("GITHUB_EVENT_NAME: ${{ github.event_name }}"));
+  assert.ok(yml.includes('--event "${GITHUB_EVENT_NAME:-}"'));
   const owners = readFileSync(join(repoRoot, ".github/CODEOWNERS"), "utf8");
   assert.match(owners, /\/tests\/testconfig\.json/);
+  assert.match(owners, /\/\.gitleaks\.toml/);
   const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
   assert.match(agents, /tests\/testconfig\.json/);
+  assert.match(agents, /\.gitleaks\.toml/);
 });
 
 function setupPassRepo() {
@@ -1245,6 +1274,169 @@ test("missing bootstrap allowOnce is not treated as script-missing bootstrap", (
     });
     assert.equal(r.failed, true);
     assert.match(r.output, /explicit one-time signal/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function writePassCoverage(dir) {
+  write(
+    dir,
+    "cov/dotnet/a.cobertura.xml",
+    cobertura({
+      source: join(dir, "src"),
+      pkg: "Desk.Api",
+      filename: "Desk.Api/Hello.cs",
+      lines: [
+        [1, 1],
+        [2, 1, "100% (2/2)"],
+      ],
+    }),
+  );
+  write(
+    dir,
+    "cov/web/lcov.info",
+    lcov("src/app/app.ts", [[1, 1]], [
+      [1, 0, 0, 1],
+      [1, 0, 1, 1],
+    ]),
+  );
+}
+
+function writeStaleOverride(dir, to) {
+  write(
+    dir,
+    "perf/coverage-override.json",
+    JSON.stringify({
+      from: { dotnet: { line: 98.3, branch: 97.1 }, web: { line: 81.8, branch: 100 } },
+      to,
+      reason: "Documented change in measurement scope (fixture leftover). Not a real coverage drop.",
+    }),
+  );
+}
+
+test("first push that introduces the gate passes once (event.before has no gate)", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const before = commit(dir, "pre-gate main");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    writeStaleOverride(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const head = commit(dir, "merge introducing gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: pushArgs(before, ["--default-sha", head]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false, r.output);
+    assert.equal(r.bootstrapped, true);
+    assert.match(r.output, /first push to main that introduces the gate|Bootstrap/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("push to main after a normal PR merge passes with leftover override", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    writeStaleOverride(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    const merged = commit(dir, "main already has the gate");
+    write(dir, "README.md", "# docs only\n");
+    const head = commit(dir, "docs follow-up");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: pushArgs(merged, ["--default-sha", head]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false, r.output);
+    assert.equal(r.bootstrapped, false);
+    assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("docs-only PR after merge ignores leftover override whose from no longer matches the floor", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    writeStaleOverride(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    const main = commit(dir, "main after #5");
+    write(dir, "docs/note.md", "docs only\n");
+    commit(dir, "docs-only PR");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(main),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false, r.output);
+    assert.doesNotMatch(r.output, /Re-baseline override/);
+    assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("PR cannot use the introducing-gate push path (R3-M2)", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const before = commit(dir, "pre-gate");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    const head = commit(dir, "default now has the gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(before, ["--default-sha", head]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /base is missing perf\/coverage-gate\.mjs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("push with empty --base-ref does not treat PR base as true", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    const merged = commit(dir, "main has gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: pushArgs(merged, ["--default-sha", merged]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false, r.output);
+    assert.doesNotMatch(r.output, /PR base 'true'/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
