@@ -23,3 +23,13 @@ id = "postgres-password-literal"
 description = "Literal POSTGRES_PASSWORD value (must come from .env or CI, never source)"
 regex = '''(?i)POSTGRES_PASSWORD\s*[:=]\s*["']?([A-Za-z0-9_\-+/.]{3,})'''
 secretGroup = 1
+
+# Default codecov-access-token matches "(?i)codecov" inside "CodeCoverage" and
+# then a 32-char token. Coverlet's ExcludeFromCodeCoverageAttribute is 32
+# letters, so 7a9c9b3's excludeByAttribute list was a false positive. Not a
+# token; do not rewrite history for it.
+[[allowlists]]
+description = "Coverlet ExcludeFromCodeCoverageAttribute is not a Codecov token"
+targetRules = ["codecov-access-token"]
+regexTarget = "secret"
+regexes = ['''^ExcludeFromCodeCoverageAttribute$''']

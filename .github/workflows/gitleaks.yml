@@ -1,0 +1,39 @@
+name: Gitleaks (full history)
+
+# Weekly scan of every branch, tag, and pull-request head (`git log --all` after
+# fetching `refs/pull/*/head`). A clone never contains unreachable / dangling
+# objects, so this does **not** prove rewritten history is gone. The throwaway
+# dev password from PR #2 MUST-FIX 3 must still be rotated regardless of a green
+# scan. Dispatch-able. The PR `secrets` job in ci.yml (`--log-opts=HEAD`) is unchanged.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # Needed to fetch refs/pull/*/head on a private repo. contents: read only.
+          persist-credentials: true
+      - name: Fetch pull-request heads
+        run: git fetch --no-tags origin '+refs/pull/*/head:refs/remotes/pull/*'
+      # Image pin tracked in deploy/ci-images/gitleaks/Dockerfile for Dependabot.
+      - name: gitleaks (branches, tags, and PR heads)
+        run: >
+          docker run --rm -v "$PWD":/repo
+          zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
+          git /repo --config /repo/.gitleaks.toml --redact --no-banner -v --log-opts=--all

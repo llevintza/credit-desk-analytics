@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/build-db-tools
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directories:
+      - /deploy
+      - /deploy/ci-images/gitleaks
+      - /deploy/ci-images/actionlint
+      - /deploy/ci-images/shellcheck
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
