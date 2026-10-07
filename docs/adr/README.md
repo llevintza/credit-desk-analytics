@@ -17,5 +17,6 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | 0011 | Fund performance: long format + edge pivot vs SQL pivot | 5 Fund Performance | Planned |
 | 0012 | Insights: per-source endpoints + per-task DbContext vs 20 calls vs one call (measured) | 6 Insights Board | Planned |
 | 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
-| 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Deploy | Planned |
+| 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
+| 0016 | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Planned |

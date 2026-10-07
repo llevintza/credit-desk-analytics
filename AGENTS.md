@@ -62,6 +62,13 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Payload budget | `node perf/payload-size.mjs` |
 | Whole stack | `docker compose up --build` |
 
+## Deployment
+
+- **Merging to `main` deploys** (README §14.2): CI → migrate Neon → seed if the seed version changed → Render deploy hook → smoke test on `/health` version.
+- **Bump `SeedVersion`** in the seeder whenever the generator or seeded schema changes. Otherwise production keeps the old data.
+- **Migrations must be backward compatible** with the running app (expand → contract, README §14.4).
+- **Never run DDL or seeding from the app at startup.**
+
 ## Definition of done for any PR
 
 - CI is green: build, tests, lint, e2e, budgets.

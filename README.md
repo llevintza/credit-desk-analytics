@@ -154,12 +154,12 @@ credit-desk-analytics/
 ├─ perf/                     ← k6 scripts, payload-size script, results/ (committed summaries only)
 ├─ deploy/
 │  ├─ Dockerfile             ← multi-stage: node build web → dotnet publish → runtime image
-│  └─ start.sh               ← migrations → optional seed → exec app
-├─ render.yaml               ← Render Blueprint (one service)
+│  └─ start.sh               ← env check → exec app (no migrations at boot)
+├─ render.yaml               ← Render Blueprint (one service, autoDeploy off)
 ├─ docker-compose.yml
 ├─ .env.example              ← key names only, never values
 └─ .github/
-   ├─ workflows/             ← ci.yml (api, web, e2e, budgets)
+   ├─ workflows/             ← ci.yml (api, web, e2e, budgets), deploy.yml (migrate → seed → deploy → smoke), db-ops.yml
    └─ pull_request_template.md
 ```
 
@@ -715,7 +715,7 @@ services:
     plan: free            # bump to "starter" for always-on during a demo window
     region: virginia
     healthCheckPath: /health
-    autoDeploy: true      # deploys on merge to main
+    autoDeploy: false     # deploys are triggered by GitHub Actions (deploy hook) after migrations, see §14.2
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -733,25 +733,41 @@ services:
   1. `node:22` builds `web/` (`npm ci && npm run build`).
   2. `mcr.microsoft.com/dotnet/sdk:10.0` publishes `Desk.Api` and copies the SPA into `wwwroot`, and builds an **EF migrations bundle** (`dotnet ef migrations bundle`).
   3. `mcr.microsoft.com/dotnet/aspnet:10.0` is the runtime, as a non-root user. `ASPNETCORE_URLS=http://0.0.0.0:${PORT}`.
-- **`deploy/start.sh`** (the free tier has no pre-deploy hook, so migrations ride on startup):
-  1. Fail fast with a clear message if `DATABASE_URL` is missing.
-  2. Run the migrations bundle (a no-op when current).
-  3. If `SEED_DEMO=true` **and** `app.seed_metadata` is empty, run the seeder. A failed seed logs `ERROR` loudly but doesn't stop the app.
-  4. `exec dotnet Desk.Api.dll`.
+- **`deploy/start.sh`** only starts the app: it fails fast with a clear message if `DATABASE_URL` is missing, then runs `exec dotnet Desk.Api.dll`.
+  - **Migrations and seeding are not done at boot.** GitHub Actions runs them before triggering the deploy (§14.2).
+  - That way a cold start on the free tier never runs DDL, and a failed migration never reaches a running container.
 - **Free-tier realities:**
   - The instance spins down after about 15 min idle, and the next request takes about 30–60 s. The login page's "Waking the server…" state covers it.
   - Monthly free instance hours are limited, so **no keep-awake pinger.**
   - For a scheduled demo or review window, switch `plan` to `starter` temporarily.
-- **After the first deploy:**
-  1. Run the seeder once against Neon from a local machine (`--scale 1.0`) or with `SEED_DEMO=true` for one deploy.
-  2. Create reviewer accounts with the UserAdmin CLI (§7.1).
-  3. Verify `/health`, log in, and check the P1 budget numbers on the Performance Lab.
+- **`/health` returns the build's git SHA** (`{"status":"ok","version":"<sha>"}`, baked in with a Docker build arg), so the pipeline can confirm the new build is live.
+
+### 13.3 One-time setup (done by hand by the repo owner)
+
+1. **Neon:**
+   - Create project `credit-desk-analytics` (Postgres 17, region close to Render's).
+   - Copy the **direct** connection string.
+2. **Render:**
+   - New → Blueprint → this repo (`render.yaml`).
+   - Set `DATABASE_URL` in the dashboard.
+   - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
+3. **GitHub:** create the Environment **`production`** (Settings → Environments), with required reviewers optional. Add:
+
+   | Kind | Name | Value |
+   |---|---|---|
+   | secret | `NEON_DATABASE_URL` | Neon direct connection string (Npgsql format) |
+   | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
+   | variable | `APP_URL` | `https://credit-desk-analytics.onrender.com` (or the assigned URL) |
+   | variable | `SEED_SCALE` | `1.0` |
+
+4. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
+5. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
 
 ---
 
-## 14. CI
+## 14. CI/CD
 
-GitHub Actions, `.github/workflows/ci.yml`, on every PR and on `main`:
+### 14.1 CI: `.github/workflows/ci.yml`, on every PR and on `main`
 
 1. **api:**
    - `dotnet build -warnaserror`
@@ -765,7 +781,36 @@ GitHub Actions, `.github/workflows/ci.yml`, on every PR and on `main`:
    - upload the report and screenshots as artifacts
 4. **budgets:** `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
-Render auto-deploys `main` after merge. Nothing deploys from PR branches.
+Nothing deploys from PR branches.
+
+### 14.2 CD: `.github/workflows/deploy.yml`, on push to `main` (after CI passes)
+
+Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by `workflow_dispatch`. It runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
+
+| Job | Steps |
+|---|---|
+| **1. build-tools** | Build the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and publish the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). Upload both as artifacts. |
+| **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
+| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it reseeds inside a transaction per table and updates the metadata. The step prints the DB size and fails over budget (§5.4). |
+| **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
+| **5. smoke** | Poll `$APP_URL/health` (up to 15 min, every 15 s; the free tier builds slowly and cold-starts) until `version` equals `github.sha`. Then `GET /` returns 200 HTML, and `GET /api/me` returns 401 (auth enforced). The workflow summary shows URL, version, migration list, seed action (skipped / reseeded) and DB size. |
+
+### 14.3 Manual database operations: `.github/workflows/db-ops.yml` (`workflow_dispatch` only, `production` environment)
+
+Inputs:
+- `operation`: `migrate` | `reseed` | `size-report`
+- `scale`: default `1.0`
+- `confirm`: must equal `RESEED-PRODUCTION` for `reseed`; otherwise the job fails before touching the database
+
+`reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
+
+### 14.4 Migration rules (because migrations run *before* the new app version starts)
+
+- **Every migration MUST be backward compatible with the currently running app** (expand → deploy → contract):
+  - Add columns as nullable or with defaults.
+  - Never rename or drop in the same release that stops using a column; drop in a later PR.
+- **Migrations are generated, reviewed and committed** in the PR that needs them. CI fails on pending model changes.
+- **Seed data is never written by migrations,** only by the seeder. The exception is the column catalog, which is reference data; the seeder owns it too.
 
 ---
 
@@ -776,7 +821,7 @@ Render auto-deploys `main` after merge. Nothing deploys from PR branches.
 | PR | Branch | Scope | ADRs (in `docs/adr/`) | Definition of done |
 |---|---|---|---|---|
 | 1 | `docs/spec` | This README, AGENTS.md, ADR + PR templates | n/a | Reviewed and merged |
-| 2 | `phase-0/scaffold` | Solution + projects, Angular workspace, compose, CI skeleton, `.env.example` | **0001** stack; **0002** hosting (single Render service + Neon vs static site + API vs GitHub Pages) | `docker compose up` serves a placeholder page and `/health`; CI green |
+| 2 | `phase-0/scaffold` | Solution + projects, Angular workspace, compose, `.env.example`, **Dockerfile, render.yaml, CI + deploy + db-ops workflows**, initial migration (`app.seed_metadata`), seeder `--if-changed` skeleton | **0001** stack; **0002** hosting (single Render service + Neon vs static site + API vs GitHub Pages); **0016** CD: Actions-driven migrate → seed → deploy hook → smoke | `docker compose up` serves a placeholder page and `/health`; CI green; **after the §13.3 setup, merging deploys a live placeholder whose `/health` reports the merged SHA** |
 | 3 | `phase-1/data` | Schemas, EF migrations, column catalog, deterministic seeder, size check | **0003** wide snapshot + narrow history; **0004** COPY vs EF `AddRange` (**measured**) | Seed < 90 s; DB < 350 MB; edge cases present (tests) |
 | 4 | `phase-2/auth-and-limits` | Identity, login, UserAdmin CLI, rate limiting, maintenance mode, audit, security headers | **0005** same-origin cookie vs JWT | All auth tests in §11 pass |
 | 5 | `phase-3/positions-api` | Grid query builder, P1 endpoints, cache/ETag, export | **0006** Dapper vs EF for the dynamic grid (**measured**: ms, allocations); **0007** row JSON vs columnar vs MessagePack (**measured**: bytes, parse ms); **0008** offset vs keyset paging | P1 API tests pass; payload budget met |
@@ -785,7 +830,7 @@ Render auto-deploys `main` after merge. Nothing deploys from PR branches.
 | 8 | `phase-6/insights-board` | P3 per-source endpoints, parallel per-task contexts, progressive UI | **0012** per-source endpoints + per-task DbContext vs 20 calls vs one call (**measured**) | Progressive-render and isolation e2e |
 | 9 | `phase-7/deal-explorer` | P4 | **0013** LATERAL vs ROW_NUMBER (`EXPLAIN ANALYZE`) | Zero-bond and grain tests |
 | 10 | `phase-8/performance-lab` | P5 | n/a | Real measurements shown, copyable |
-| 11 | `phase-9/deploy` | Dockerfile, start.sh, render.yaml, Neon setup, production hardening | **0014** free-tier guardrails | Live on Render; budgets checked on the live site |
+| 11 | `phase-9/hardening` | Production hardening: security headers review, rate-limit tuning, cache sizing, cold-start UX, budgets measured on the live site | **0014** free-tier guardrails | Budgets checked on the live site; reviewer accounts issued |
 | 12 | `phase-10/intraday-overlay` (stretch) | P6 | **0015** SSE vs polling vs WebSockets | Stale-event test |
 
 **Every PR:**
@@ -824,5 +869,5 @@ The implementing agent **stops after opening each PR** and waits for review.
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
-| 9 Deploy | n/a | Not started |
+| 9 Hardening | n/a | Not started |
 | 10 Intraday overlay (stretch) | n/a | Not started |
