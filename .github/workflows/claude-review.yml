@@ -7,6 +7,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# Explicit bash = `bash --noprofile --norc -eo pipefail` (the unspecified default has no pipefail; ADR-0017).
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -38,8 +43,9 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           mkdir -p .review-context
+          # --jq runs per page, so emit one object per comment and merge all pages into ONE array with jq -s.
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments" --paginate \
-            --jq '[.[] | {path, line, body, author: .user.login}]' > .review-context/inline-comments.json
+            --jq '.[] | {path, line, body, author: .user.login}' | jq -s '.' > .review-context/inline-comments.json
           echo "REVIEW_CONTEXT=.review-context/inline-comments.json" >> "$GITHUB_ENV"
 
       - uses: anthropics/claude-code-action@v1
