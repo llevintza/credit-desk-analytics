@@ -94,11 +94,19 @@ jobs:
           mkdir -p TestResults/coverage
           for proj in tests/Desk.Api.Tests tests/Desk.Data.Tests tests/Desk.Seeder.Tests; do
             name=$(basename "$proj")
+            # Generated OpenAPI XML-comment support is [GeneratedCode] and
+            # *.generated.cs (PDB path is not under obj/ unless emitted). Do not
+            # pass CompilerGeneratedAttribute: that strips Program.cs lambdas.
+            # tests/testconfig.json is authoritative for exclude-by-attribute
+            # so coverlet.MTP CLI defaults (which include CompilerGenerated) are not merged.
+            # Do not use `dotnet test --collect "XPlat Code Coverage"` (VSTest).
             dotnet test "$proj" -c Release --no-build -- \
               --coverlet \
               --coverlet-output-format cobertura \
               --coverlet-file-prefix "$name" \
               --coverlet-include '[Desk.*]*' \
+              --coverlet-exclude-by-file '**/obj/**' \
+              --coverlet-exclude-by-file '**/*.generated.cs' \
               --coverlet-exclude-assemblies-without-sources MissingAll \
               --results-directory "$PWD/TestResults/coverage"
           done

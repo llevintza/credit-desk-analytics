@@ -1,0 +1,11 @@
+{
+  "platformOptions": {
+    "Coverlet": {
+      "include": "[Desk.*]*",
+      "excludeByAttribute": "GeneratedCodeAttribute,ExcludeFromCodeCoverage,ExcludeFromCodeCoverageAttribute",
+      "excludeByFile": "**/obj/**,**/*.generated.cs",
+      "format": "cobertura",
+      "excludeAssembliesWithoutSources": "MissingAll"
+    }
+  }
+}

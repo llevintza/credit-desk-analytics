@@ -8,5 +8,7 @@
     <PackageReference Include="coverlet.MTP" Version="10.1.0" />
     <PackageReference Include="xunit.v3" Version="4.0.1" />
     <Using Include="Xunit" />
+    <!-- Authoritative coverlet settings (no CompilerGeneratedAttribute default). -->
+    <None Include="$(MSBuildThisFileDirectory)testconfig.json" Link="testconfig.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
