@@ -749,6 +749,8 @@ services:
 
 ### 13.3 One-time setup (done by hand by the repo owner)
 
+**Detailed, click-by-click guide: [`docs/deployment-setup.md`](docs/deployment-setup.md)** (Neon, Render, GitHub protections, then production secrets, the Claude review environment, the first deploy, rotation and troubleshooting). The summary:
+
 1. **Neon:**
    - Create project `credit-desk-analytics` (Postgres 17, region close to Render's).
    - Copy the **direct** connection string.
@@ -756,17 +758,21 @@ services:
    - New → Blueprint → this repo (`render.yaml`).
    - Set `DATABASE_URL` in the dashboard.
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
-3. **GitHub:** create the Environment **`production`** (Settings → Environments). Limit it to the `main` branch and require reviewers (workflow YAML cannot set those). Add:
+3. **GitHub protections first** (before any production secret):
+   - Environment **`production`:** deployment branch `main` only; **required reviewers on** (workflow YAML cannot set those).
+   - Ruleset on `main`: required status checks: every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
+4. **Then** add the `production` environment secrets (not `APP_URL` yet):
 
    | Kind | Name | Value |
    |---|---|---|
    | secret | `NEON_DATABASE_URL` | Neon direct connection string (Npgsql format) |
    | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
-   | variable | `APP_URL` | `https://credit-desk-analytics.onrender.com` (or the assigned URL) |
    | variable | `SEED_SCALE` | `1.0` |
 
-4. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
-5. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
+5. **Claude review (Leo's decision, 2026-10-07):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. The `review` check stays non-required.
+6. **Last:** after Tech Coordinator's go-ahead, set `production` environment variable `APP_URL` to the service URL (no trailing slash). That variable turns deploys on.
+7. **Merge to `main`.** The deploy workflow migrates, seeds, deploys and smoke-tests.
+8. **Create reviewer accounts** with the UserAdmin CLI locally, pointed at Neon (§7.1). Share credentials out of band.
 
 ---
 
@@ -786,7 +792,8 @@ services:
 4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
 5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
 6. **workflows:** actionlint + shellcheck
-7. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
+7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
+8. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -802,7 +809,7 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 
 | Job | Steps |
 |---|---|
-| **1. build-tools** | Build the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and publish the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). Upload both as artifacts. |
+| **1. db-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
 | **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
 | **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it reseeds inside a transaction per table and updates the metadata. The step prints the DB size and fails over budget (§5.4). |
 | **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
@@ -826,6 +833,24 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
   - Never rename or drop in the same release that stops using a column; drop in a later PR.
 - **Migrations are generated, reviewed and committed** in the PR that needs them. CI fails on pending model changes.
 - **Seed data is never written by migrations,** only by the seeder. The exception is the column catalog, which is reference data; the seeder owns it too.
+
+### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
+
+- Claude reviews the diff against AGENTS.md and this spec, and posts inline **[blocking]** / **[suggestion]** comments.
+- It ends with a summary comment whose first line is `<!-- claude-review sha=<head sha> blocking=<n> -->`. That marker is the model's own count. Any workflow running as `github-actions[bot]` can post it.
+- Before the action runs, the job removes planted `.review-base` / `.review-pr` / `.review-context` dirs, removes symlinks outside `.git`/`.review-base`, overlays the base `AGENTS.md` and `README.md` on the working tree (so `CLAUDE.md`'s `@AGENTS.md` import cannot load the PR head), deletes nested `CLAUDE.md` / `AGENTS.md` files and nested `.claude/` dirs, and copies base `.claude` / top-level `CLAUDE.md`. Checkout credentials are not persisted; `Read`/`Grep`/`Glob` of `.git/**` (and `.review-base/.git/**`, `.review-pr/.git/**`) are denied (the action still writes its own job token into `.git/config`). The job is **advisory and must not be a required check**. It skips with a notice when the key is missing. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip.
+- **Leo's decision (2026-10-07):** `ANTHROPIC_API_KEY` lives in a dedicated GitHub environment **`claude-review`** (spend-capped key; no branch restriction; no required reviewers). Never the `production` environment, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. It is unknown whether the Claude GitHub App is installed; the workflow does not need it (it passes `github_token`).
+
+**The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
+
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
+Tech Coordinator merges and starts the next phase.
+
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
 ---
 
@@ -858,6 +883,13 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 
 The implementing agent **stops after opening each PR** and waits for review.
 
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
+Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
+
 ---
 
 ## 16. Out of scope / later
@@ -875,8 +907,9 @@ The implementing agent **stops after opening each PR** and waits for review.
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4 deploy-path safety; follow-up (this PR): coverage gates + CI hardening |
-| 1 Data | n/a | Not started |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up (this PR): coverage gates + CI hardening |
+| Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
+| 1 Data | #6 | In review |
 | 2 Auth and limits | n/a | Not started |
 | 3 Positions API | n/a | Not started |
 | 4 Shell + Positions UI | n/a | Not started |

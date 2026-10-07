@@ -1,0 +1,6 @@
+# Advisory visibility only (README §14.5). GitHub cannot enforce this: every bot
+# acts as @llevintza and cannot approve its own PR. Not a merge gate.
+/.github/ @llevintza
+/.claude/ @llevintza
+/CLAUDE.md @llevintza
+/AGENTS.md @llevintza
