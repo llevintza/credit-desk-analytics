@@ -31,6 +31,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Image pin tracked in deploy/ci-images/gitleaks/Dockerfile for Dependabot.
       - name: gitleaks (full history of this SHA)
         run: >
           docker run --rm -v "$PWD":/repo
@@ -46,10 +47,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Image pin tracked in deploy/ci-images/actionlint/Dockerfile for Dependabot.
       - name: actionlint
         run: >
           docker run --rm -v "$PWD":/repo -w /repo
           rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+      # Image pin tracked in deploy/ci-images/shellcheck/Dockerfile for Dependabot.
       - name: shellcheck
         run: >
           docker run --rm -v "$PWD":/repo -w /repo
@@ -95,9 +98,7 @@ jobs:
               --coverlet \
               --coverlet-output-format cobertura \
               --coverlet-file-prefix "$name" \
-              --coverlet-include '[Desk.Api]*' \
-              --coverlet-include '[Desk.Data]*' \
-              --coverlet-include '[Desk.Seeder]*' \
+              --coverlet-include '[Desk.*]*' \
               --coverlet-exclude-assemblies-without-sources MissingAll \
               --results-directory "$PWD/TestResults/coverage"
           done
@@ -159,7 +160,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          persist-credentials: false
+          # Token is used only to fetch BASE_SHA if it is not already in the clone
+          # (history rewrite / stale event SHA). Job permissions stay contents: read.
+          persist-credentials: true
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -175,14 +178,21 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            BASE_SHA=$(git rev-parse HEAD^)
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::BASE_SHA is missing (merge-base unresolved). Failing closed."
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$BASE_SHA"
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
+            exit 1
           fi
           node perf/coverage-gate.mjs \
             --dotnet TestResults/coverage \
             --web web/coverage \
-            --base "$BASE_SHA" \
-            --baseline-ref "$BASE_SHA"
+            --base "$BASE_SHA"
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.

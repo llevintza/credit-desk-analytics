@@ -2,5 +2,5 @@
   "diffLineMinPercent": 80,
   "diffBranchMinPercent": 80,
   "overallMustNotDrop": true,
-  "baselineMatchTolerancePercent": 1.0
+  "baselineMatchTolerancePercent": 0.5
 }

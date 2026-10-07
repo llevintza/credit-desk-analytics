@@ -782,7 +782,7 @@ services:
    - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
    - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
    - the bundle budget is enforced by `angular.json` budgets
-3. **coverage:** job summary of line/branch % per project; **diff coverage ≥ 80%** vs the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at that base. Thresholds are in `perf/coverage-thresholds.json`.
+3. **coverage:** job summary of line/branch % per project; **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at that base. Thresholds, tolerance, and the floor are read from the **base commit** (`git show $BASE_SHA:…`), never from the PR head. A PR that lowers a min, turns off `overallMustNotDrop`, widens the tolerance, or drops the committed baseline fails. Only a push to `main` ratchets the baseline, and only upward. **Bootstrap (this first coverage PR):** `main` has no those files, so the gate uses hardcoded defaults (diff ≥ 80/80, no-drop on, tolerance 0.5) and a 0/0 floor while this PR establishes the files; future PRs cannot set their own floor. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
 4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
 5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
 6. **workflows:** actionlint + shellcheck
