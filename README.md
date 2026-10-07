@@ -764,8 +764,8 @@ services:
    - Set `DATABASE_URL` in the dashboard.
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
 3. **GitHub protections first** (before any production secret):
-   - Environment **`production`:** deployment branch `main` only; **required reviewers on** (workflow YAML cannot set those).
-   - Ruleset on `main`: required status checks: every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
+   - Environment **`production`:** deployment branch `main` only. **No required reviewers** — none exists that could approve, and merges to `main` auto-deploy. Controls are the pre-merge review gate, required status checks, `deploy.yml` migrate/smoke, and README §14.4.
+   - Ruleset on `main`: required status checks: every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`, `gate-tests`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
 4. **Then** add the `production` environment secrets (not `APP_URL` yet):
 
    | Kind | Name | Value |
@@ -793,12 +793,13 @@ services:
    - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
    - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
    - the bundle budget is enforced by `angular.json` budgets
-3. **coverage:** job summary of line/branch % per project; **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at that base. Thresholds, tolerance, and the floor are read from the **base commit** (`git show $BASE_SHA:…`), never from the PR head. A PR that lowers a min, turns off `overallMustNotDrop`, widens the tolerance, or drops the committed baseline fails. Only a push to `main` ratchets the baseline, and only upward. **Bootstrap (this first coverage PR):** `main` has no those files, so the gate uses hardcoded defaults (diff ≥ 80/80, no-drop on, tolerance 0.5) and a 0/0 floor while this PR establishes the files; future PRs cannot set their own floor. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
+3. **coverage:** job summary of line/branch % per project; **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at that base. CI checks out BASE_SHA into `_base` (`persist-credentials: false`) and runs **`_base/perf/coverage-gate.mjs`** when that file exists, so the PR head cannot rewrite the rules. Thresholds, tolerance, and the floor are read from the **base commit** (`git show $BASE_SHA:…`), never from the PR head. Exact JSON schema; NaN-safe comparisons (`!(actual >= floor)`). A PR that lowers a min, turns off `overallMustNotDrop`, widens the tolerance, or drops the committed baseline fails. Only a push to `main` ratchets the baseline, and only upward. **Bootstrap (this first coverage PR):** `main` has no gate script, so CI uses the head copy once, with hardcoded defaults (diff ≥ 80/80, no-drop on, tolerance 0.5) and a 0/0 floor while this PR establishes the files. After merge, a missing thresholds or baseline file at a base that already has the script **fails closed**. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
 4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
 5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
 6. **workflows:** actionlint + shellcheck
 7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
-8. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
+8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**.
+9. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -851,7 +852,7 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, or `perf/coverage-*` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase.
 
@@ -891,7 +892,7 @@ The implementing agent **stops after opening each PR** and waits for review.
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, or `perf/coverage-*` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
