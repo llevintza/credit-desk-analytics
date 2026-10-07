@@ -24,6 +24,14 @@
 
 <!-- Playwright screenshots, dark and light. -->
 
+## Coverage
+
+<!-- coverlet and Vitest: paste the CI coverage-job summary link. Missing coverage means REQUEST CHANGES. -->
+| Project | Line | Branch | New/changed | Δ vs main |
+|---|---|---|---|---|
+| .NET (coverlet) | | | | |
+| web (Vitest) | | | | |
+
 ## Tests
 
 - [ ] Unit
@@ -38,3 +46,4 @@
 - [ ] No secrets, no real company or person names in the diff
 - [ ] README §17 Status updated
 - [ ] CI green (build, tests, lint, e2e, budgets)
+- [ ] Coverage ≥80% on new/changed code; main not dropped

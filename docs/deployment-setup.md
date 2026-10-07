@@ -4,12 +4,16 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
 
 > CI → migrate Neon → seed (only if the seed version changed) → Render deploy of the exact commit → smoke test.
 
+> **Before step 4:** set the `production` environment to the `main` branch only **and** add a required reviewer (step 3), and set the main ruleset (required status checks only; no required approving review; no force-push or deletion). Don't add production secrets until those protections are on. Don't add `APP_URL` (which turns deploys on) until Tech Coordinator gives the go-ahead.
+
 **Time needed:** about 30 minutes. **Accounts:** Neon, Render, GitHub (repo admin), Anthropic Console.
 
 > **Secrets rule:**
 > - Connection strings, deploy hook URLs and API keys go **only** into the Neon, Render and GitHub dashboards.
 > - Never paste them into the repo, a PR, an issue, a chat or a terminal command that gets logged.
 > - Copy them straight from one dashboard to the other.
+> - Production deploy/DB secrets live only in the GitHub `production` environment (never as repository secrets).
+> - The Claude review key lives only in the GitHub `claude-review` environment (never `production`, never a repository secret).
 
 ---
 
@@ -17,11 +21,11 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
 
 | Value | Created in | Stored in | Used by |
 |---|---|---|---|
-| Neon **direct** connection string | Neon (step 1) | Render env var `DATABASE_URL` **and** GitHub environment secret `NEON_DATABASE_URL` | The running app; the deploy pipeline's migrations and seeding |
-| Render **Deploy Hook URL** | Render (step 2) | GitHub environment secret `RENDER_DEPLOY_HOOK_URL` | The deploy pipeline, to start a deploy |
-| Render **service URL** | Render (step 2) | GitHub environment variable `APP_URL` | The deploy pipeline's smoke test |
-| `SEED_SCALE` = `1.0` | n/a | GitHub environment variable | The seeder |
-| Anthropic API key | Anthropic Console (step 4) | GitHub **repository** secret `ANTHROPIC_API_KEY` | The Claude review workflow on every PR |
+| Neon **direct** connection string | Neon (step 1) | Render env var `DATABASE_URL` **and** GitHub `production` environment secret `NEON_DATABASE_URL` | The running app; the deploy pipeline's migrations and seeding |
+| Render **Deploy Hook URL** | Render (step 2) | GitHub `production` environment secret `RENDER_DEPLOY_HOOK_URL` | The deploy pipeline, to start a deploy |
+| Render **service URL** | Render (step 2) | GitHub `production` environment variable `APP_URL` | The deploy pipeline's smoke test |
+| `SEED_SCALE` = `1.0` | n/a | GitHub `production` environment variable | The seeder |
+| Anthropic API key | Anthropic Console (step 5) | GitHub **`claude-review` environment** secret `ANTHROPIC_API_KEY` (Leo's decision, 2026-10-07; never `production`, never a repository secret) | The Claude review workflow on same-repo PRs (forks and Dependabot skip) |
 
 ---
 
@@ -60,7 +64,7 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
    - **Settings → Compute:** the free plan scales the compute to zero after 5 minutes idle. That's expected: the first query after idle takes about 0.5–1 s extra, and the app's cache-first design hides most of it.
    - **Storage limit** on the free plan is 0.5 GB per project. The seeder fails the deploy above 400 MB (README §5.4).
 
-Keep the Neon tab open: you'll paste the connection string in steps 2 and 3.
+Keep the Neon tab open: you'll paste the connection string in steps 2 and 4.
 
 ---
 
@@ -90,58 +94,86 @@ Keep the Neon tab open: you'll paste the connection string in steps 2 and 3.
 
 ---
 
-## Step 3: GitHub `production` environment (used by the deploy pipeline)
+## Step 3: GitHub protections (do this before any production secret)
 
-1. Open <https://github.com/llevintza/credit-desk-analytics> → **Settings** → **Environments** → **New environment**.
-2. **Name:** `production`, exactly (the workflows reference it), then **Configure environment**.
-3. **Recommended:**
+Workflow YAML cannot set these. Do them by hand.
+
+1. Open <https://github.com/llevintza/credit-desk-analytics> → **Settings** → **Environments**.
+2. **Create `production`** if it does not exist (**New environment**, name `production` exactly), then **Configure environment**.
+3. **Restrict it now:**
    - **Deployment branches and tags:** choose **Selected branches and tags**, then add the rule `main`. Only `main` can deploy.
-   - **Required reviewers:** optional. If you add yourself, every deploy waits for your click in the Actions tab.
-4. **Environment secrets** → **Add environment secret**, once for each:
+   - **Required reviewers:** add `llevintza` (**required**). `deploy.yml` has both `preflight` and `release` on `environment: production`, so each deploy waits for **two** approvals, and every merge's preflight waits even while `APP_URL` is unset. Leave "Prevent self-review" off: you're the only reviewer. Every bot acts as `llevintza`, so this is a deliberate step and an audit trail, not separation of duties.
+4. **Ruleset on `main`** (Settings → Rules → New ruleset, target `main`):
+   - **Required status checks:** every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
+   - **No required approving review.** Every bot acts as `llevintza` and cannot self-approve, so a required PR review would deadlock every merge.
+   - Block force-pushes and deletions of `main`.
+
+Confirm `NEON_DATABASE_URL` and `RENDER_DEPLOY_HOOK_URL` will be **environment** secrets on `production`, not repository secrets.
+
+---
+
+## Step 4: Production secrets (only after step 3)
+
+1. Environment **`production`** → **Environment secrets** → **Add environment secret**, once for each:
 
    | Name | Value |
    |---|---|
    | `NEON_DATABASE_URL` | the Neon **direct** connection string (same as Render's `DATABASE_URL`) |
    | `RENDER_DEPLOY_HOOK_URL` | the Render Deploy Hook URL from step 2.6 |
 
-5. **Environment variables** → **Add environment variable**:
+2. **Environment variables** → **Add environment variable**:
 
    | Name | Value |
    |---|---|
-   | `APP_URL` | the service URL from step 2.5, **without** a trailing slash |
    | `SEED_SCALE` | `1.0` |
+
+3. **Don't add `APP_URL` yet.** That variable is what lets the deploy workflow run its release job. Wait for Tech Coordinator's go-ahead, then set it to the service URL from step 2.5, **without** a trailing slash.
 
 ---
 
-## Step 4: Anthropic API key (used by the Claude review on every PR)
+## Step 5: Anthropic API key (Claude review; Leo's decision, 2026-10-07)
+
+The review job is **advisory and not a required check**. Leo's decision (2026-10-07): a dedicated `claude-review` GitHub environment holding a spend-capped key. Not `production` (that environment is main-only; PR jobs must never see it). Not a repository secret. Same-repo PRs use this key. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip. Each run creates a GitHub deployment on the PR (no reviewers, no branch restriction, so those jobs can read the key).
 
 1. Sign in at <https://console.anthropic.com> → **Settings → API Keys** → **Create Key**.
    - **Name:** `credit-desk-analytics PR review`.
+   - Use a **dedicated** key (or workspace) that nothing else uses.
    - Copy the key. It's shown once.
-   - Under **Settings → Limits**, consider a monthly spend limit. Reviews are billed per token.
-2. GitHub repo → **Settings → Secrets and variables → Actions** → **Repository secrets** → **New repository secret**:
-   - **Name:** `ANTHROPIC_API_KEY`
-   - **Value:** the key
-3. This is a **repository** secret, not a `production` environment secret, because reviews run on PR branches.
-4. No GitHub App installation is needed. The workflow passes its own `GITHUB_TOKEN` to the action, so review comments appear as **github-actions[bot]**. If you install the Claude GitHub App (<https://github.com/apps/claude>) instead and remove `github_token:` from the workflow, comments post as **claude[bot]**.
+   - Under **Settings → Limits**, **Set** a monthly spend limit (**required**). Reviews are billed per token.
+2. If `ANTHROPIC_API_KEY` already exists as a **repository** secret, delete it after step 3 of this list succeeds (rotate if there is any suspicion it was exposed).
+3. GitHub repo → **Settings** → **Environments** → **New environment**:
+   - **Name:** `claude-review` exactly (the workflow references it).
+   - **No** deployment-branch restriction (PR branches must be able to use it).
+   - **No** required reviewers.
+   - **Environment secrets** → **Add environment secret**:
+     - **Name:** `ANTHROPIC_API_KEY`
+     - **Value:** the key
+4. It is unknown whether the Claude GitHub App (<https://github.com/apps/claude>) is installed on this repo. The workflow passes its own `GITHUB_TOKEN`, so no App install is required and review comments appear as **github-actions[bot]**. If you later install the App and remove `github_token:` from the workflow, comments post as **claude[bot]** and the job would need `id-token: write`.
 
 **What the review does:**
-- It runs on every PR push (`.github/workflows/claude-review.yml`).
+- It runs on every same-repo, non-draft PR against `main` (`.github/workflows/claude-review.yml`).
 - It posts inline comments marked **[blocking]** or **[suggestion]**.
 - It ends with a summary comment whose first line is `<!-- claude-review sha=<head> blocking=<n> -->`.
+- If the key is missing, the job **skips with a notice** and stays green. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; forks, Dependabot and other bots skip. Keep `review` **out** of the required checks on `main`.
 
-**The merge gate:**
-- that summary exists for the head commit with `blocking=0`, **and is authored by `github-actions[bot]`** (anyone can type the marker in a comment)
-- there are no unresolved review threads
-- all checks are green
+**The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
 
-**One limit:** a PR can change `claude-review.yml` itself, and its own run would still post as `github-actions[bot]`. PRs that touch `.github/` are therefore titled with a **`[workflows]`** prefix, and their workflow diff is reviewed by hand before merge. Your merge is the human gate; you can't formally approve your own PRs on GitHub.
+The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+
+Tech Coordinator merges and starts the next phase.
+
+**Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
 ---
 
-## Step 5: First deploy
+## Step 6: First deploy
 
-1. GitHub → **Actions** → **Deploy** → **Run workflow** (branch `main`) → **Run workflow**.
+**Prerequisite:** Tech Coordinator's go-ahead, then step 4.3 (`APP_URL`); approve both `production` prompts (`preflight` and `release`).
+
+1. GitHub → **Actions** → **Deploy** → **Run workflow** (branch **main**) → **Run workflow**.
 2. Open the run. The **preflight** job should report all values present. Then **release** runs:
    - **Build migrations bundle and seeder:** about 2 min.
    - **Migrate Neon:** prints `Applying migration '…_InitialAppSchema'`, then `Done.`
@@ -154,7 +186,7 @@ Keep the Neon tab open: you'll paste the connection string in steps 2 and 3.
    SELECT version, seed, scale, completed_at, database_size_bytes FROM app.seed_metadata ORDER BY id;
    ```
 
-From now on, merging a PR into `main` runs all of this automatically. When CI on `main` passes, **Deploy** starts by itself.
+From now on, merging a PR into `main` runs all of this automatically. When CI on `main` passes, **Deploy** starts by itself (and still waits for the `production` environment's required reviewer).
 
 ---
 
@@ -163,7 +195,7 @@ From now on, merging a PR into `main` runs all of this automatically. When CI on
 | Task | How |
 |---|---|
 | See what's deployed | `<APP_URL>/health` shows the commit SHA |
-| Re-run a deploy | Actions → **Deploy** → Run workflow |
+| Re-run a deploy | Actions → **Deploy** → Run workflow (branch **main**) |
 | Database size | Actions → **DB ops** → operation `size-report` |
 | Apply migrations only | Actions → **DB ops** → `migrate` |
 | Reload the synthetic data | Actions → **DB ops** → `reseed`, `scale` `1.0`, `confirm` `RESEED-PRODUCTION`. This never touches accounts. |
@@ -174,16 +206,17 @@ From now on, merging a PR into `main` runs all of this automatically. When CI on
 
 - **Neon password:** Neon → **Roles** → `neondb_owner` → **Reset password**. Then update **both** Render `DATABASE_URL` and GitHub `NEON_DATABASE_URL`, then re-run **Deploy**.
 - **Render deploy hook:** Render → Settings → Deploy Hook → **Regenerate**. Then update GitHub `RENDER_DEPLOY_HOOK_URL`.
-- **Anthropic key:** create a new key, update `ANTHROPIC_API_KEY`, then revoke the old key.
+- **Anthropic key:** create a new spend-capped key, update the `claude-review` environment secret `ANTHROPIC_API_KEY`, then revoke the old key. Remove any leftover repository secret of the same name.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| Deploy summary: *"Deploy skipped: production environment not configured. Missing: …"* | A secret or variable from step 3 is missing or misnamed (names are case-sensitive; the environment must be called `production`) |
+| Deploy summary: *"Deploy skipped: production environment not configured. Missing: …"* | A secret or variable from step 4 is missing or misnamed (names are case-sensitive; the environment must be called `production`). `APP_URL` is omitted on purpose until Tech Coordinator says go |
 | Migrate step: `password authentication failed` | Wrong or rotated password, or the string was edited. Copy it again from Neon → Connect |
 | Migrate step: errors mentioning prepared statements or `-pooler` | The **pooled** string was used. Copy it again with pooling **off** |
 | Smoke test times out | Check Render → **Events / Logs**: a build failure, or the service failing to start (`DATABASE_URL is not set`) |
 | `/health` shows an older SHA | The deploy is still building; free builds are slow. A failed build keeps the previous version running |
-| Claude review job fails at "Require ANTHROPIC_API_KEY" | Add the repository secret from step 4 |
+| Claude review job skipped with a missing-key notice | Add `ANTHROPIC_API_KEY` to the `claude-review` environment (step 5). The job stays green; it is not a required check |
+| Claude review job waits on a deployment approval | The `claude-review` environment must have **no** required reviewers and **no** branch restriction |
 | Site takes 30–60 s to load the first time | The free instance spins down after about 15 min idle. Expected; the page shows "Waking the server…" |
