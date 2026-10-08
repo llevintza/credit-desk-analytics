@@ -823,7 +823,7 @@ services:
 7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
 8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**.
 9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10).
-10. **e2e** (phase 4): Playwright against the compose stack.
+10. **e2e:** the compose stack (with `e2e/docker-compose.e2e.yml`: higher per-user limits for one automated user) migrated and seeded at scale 0.2, a throwaway viewer (generated, masked password), then Playwright: log in, the P1 acceptance flows, no console or CSP errors, and dark/light screenshots of every page. The report and screenshots are uploaded as artifacts.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
