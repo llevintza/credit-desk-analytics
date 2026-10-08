@@ -2,52 +2,73 @@ using Desk.Api.Audit;
 using Desk.Data.App;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
+using Npgsql;
 
 namespace Desk.Api.Tests;
 
 /// <summary>
 /// #114 / ADR-0022: audit rows are kept for <c>AUDIT_RETENTION_DAYS</c> (default 90) and purged on a schedule.
-/// Each test marks its rows with its own endpoint so it never counts or depends on another test's rows.
+/// The purge is table-wide, so direct purge tests run on their own migrated database in the same container.
+/// The end-to-end test purges the shared <c>app.audit</c> with a 30-day window on the shared clock: only its own
+/// rows are that old, and its assertions read only its own marked rows.
 /// </summary>
 [Collection(ApiCollection.Name)]
 public sealed class AuditRetentionTests(PostgresApiFactory api)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private async Task<string> InsertAsync(params DateTimeOffset[] at)
+    /// <summary>A migrated, empty database in the shared container, so a table-wide purge touches no other test's rows.</summary>
+    private async Task<string> IsolatedDatabaseAsync()
+    {
+        var cs = new NpgsqlConnectionStringBuilder(api.ConnectionString) { Database = $"audit_{Guid.NewGuid():N}" }.ConnectionString;
+        await using (var conn = new NpgsqlConnection(api.ConnectionString))
+        {
+            await conn.OpenAsync(Ct);
+            await using var cmd = new NpgsqlCommand($"CREATE DATABASE \"{new NpgsqlConnectionStringBuilder(cs).Database}\"", conn);
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+        await using var db = Context(cs);
+        await db.Database.MigrateAsync(Ct);
+        return cs;
+    }
+
+    /// <summary>A context on <paramref name="cs"/>, or on the shared database when it is null.</summary>
+    private AppDbContext Context(string? cs = null) => cs is null ? api.NewContext() : new(new DbContextOptionsBuilder<AppDbContext>()
+        .UseNpgsql(cs, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options);
+
+    private async Task<string> InsertAsync(string? cs, params DateTimeOffset[] at)
     {
         var marker = $"GET /retention-test/{Guid.NewGuid():N}";
-        await using var db = api.NewContext();
+        await using var db = Context(cs);
         db.Audit.AddRange(at.Select(a => new AuditEntry { At = a, Kind = AuditKinds.Request, Endpoint = marker, Status = 200 }));
         await db.SaveChangesAsync(Ct);
         return marker;
     }
 
-    private async Task<List<DateTimeOffset>> RemainingAsync(string marker)
+    private async Task<List<DateTimeOffset>> RemainingAsync(string marker, string? cs = null)
     {
-        await using var db = api.NewContext();
+        await using var db = Context(cs);
         return await db.Audit.AsNoTracking().Where(a => a.Endpoint == marker).OrderBy(a => a.At).Select(a => a.At).ToListAsync(Ct);
     }
 
     [Fact]
     public async Task The_purge_deletes_rows_older_than_90_days_and_keeps_the_rest()
     {
-        // Own clock, a year ahead of the shared one: other tests move the shared clock, and the shared host's own
-        // 90-day purge must not reach these rows.
-        var now = api.Time.GetUtcNow().AddDays(365);
+        var cs = await IsolatedDatabaseAsync();
+        var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
         var retention = AuditTests.Retention(time: new FakeTimeProvider(now));
         var window = TimeSpan.FromDays(90);
-        var marker = await InsertAsync(
+        var marker = await InsertAsync(cs,
             now - window - TimeSpan.FromDays(30),
             now - window - TimeSpan.FromSeconds(1),
             now - window,                          // exactly 90 days old: kept ("older than" the window)
             now - window + TimeSpan.FromSeconds(1),
             now);
 
-        await using (var db = api.NewContext())
-            Assert.True(await retention.PurgeIfDueAsync(db, Ct) >= 2);
+        await using (var db = Context(cs))
+            Assert.Equal(2, await retention.PurgeIfDueAsync(db, Ct));
 
-        Assert.Equal([now - window, now - window + TimeSpan.FromSeconds(1), now], await RemainingAsync(marker));
+        Assert.Equal([now - window, now - window + TimeSpan.FromSeconds(1), now], await RemainingAsync(marker, cs));
     }
 
     [Fact]
@@ -55,7 +76,7 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
     {
         await using var host = api.WithSettings((AuditRetention.DaysConfigKey, "30"));
         var now = api.Time.GetUtcNow();
-        var marker = await InsertAsync(now - TimeSpan.FromDays(32), now - TimeSpan.FromDays(28));
+        var marker = await InsertAsync(null, now - TimeSpan.FromDays(32), now - TimeSpan.FromDays(28));
 
         // A login writes an audit row; this host's writer then runs its first purge (30-day window).
         var user = await api.CreateUserAsync();
