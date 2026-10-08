@@ -11,8 +11,10 @@ namespace Desk.Api.Limits;
 /// In production a request travels client → Cloudflare edge → Render's load balancer → app. The socket peer is
 /// Render's balancer (10.0.0.0/8), which appends the address that connected to it (a Cloudflare edge) to
 /// <c>X-Forwarded-For</c>. Keying on either of those puts every client behind one edge in the same bucket, so one
-/// client could lock everyone out of login. The real client is what Cloudflare reports in <c>CF-Connecting-IP</c>
-/// (<c>True-Client-IP</c> on some plans), or, failing that, the entry Cloudflare appended just left of its own.
+/// client could lock everyone out of login. The real client is what Cloudflare reports in <c>CF-Connecting-IP</c>,
+/// which Cloudflare always writes and overwrites. <c>True-Client-IP</c> and the rest of <c>X-Forwarded-For</c> are
+/// not used: a client can write either and have it passed through. Without <c>CF-Connecting-IP</c> the key is the
+/// edge (the old shared window, failing closed rather than letting the caller pick its key).
 /// </para>
 /// <para>
 /// Every header is believed only when it was written by a hop we trust: the peer must be Render's network, and the
@@ -26,7 +28,9 @@ public sealed class ClientAddress(bool behindProxy)
     /// <summary>Render's private network: the load balancer that connects to the app.</summary>
     internal static readonly IPNetwork[] Render = [IPNetwork.Parse("10.0.0.0/8")];
 
-    /// <summary>https://www.cloudflare.com/ips-v4 and /ips-v6 (checked 2026-10-08).</summary>
+    /// <summary>
+    /// https://www.cloudflare.com/ips-v4 and /ips-v6 (checked 2026-10-08; kept current by the scheduled check in #161).
+    /// </summary>
     internal static readonly IPNetwork[] Cloudflare =
     [
         .. new[]
@@ -57,11 +61,8 @@ public sealed class ClientAddress(bool behindProxy)
         if (!In(Cloudflare, hop))
             return hop; // reached Render directly: that hop is the client, and any CF-* header is its own invention
 
-        foreach (var header in (string[])["CF-Connecting-IP", "True-Client-IP"])
-            if (IPAddress.TryParse(headers[header].ToString(), out var client))
-                return client;
-        // Cloudflare appends the client just left of the edge it came through.
-        return chain.Length >= 2 && IPAddress.TryParse(chain[^2], out var left) ? left : hop;
+        // Only Cloudflare's own header; without it, the edge (R160-01).
+        return IPAddress.TryParse(headers["CF-Connecting-IP"].ToString(), out var client) ? client : hop;
     }
 
     private static bool In(IPNetwork[] networks, IPAddress ip)

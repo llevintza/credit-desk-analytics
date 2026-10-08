@@ -38,21 +38,21 @@ public sealed class ClientAddressTests
     }
 
     [Fact]
-    public void Without_cloudflare_headers_the_entry_left_of_the_edge_is_the_client()
+    public void Without_cf_connecting_ip_the_key_is_the_edge_never_a_header_the_client_can_write()
     {
-        Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {Client}, {CfEdge}")));
-        Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {Client}, {CfEdge}"), ("CF-Connecting-IP", "not-an-ip")));
-        // Across several header lines, as some proxies send it.
-        Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", Spoof), ("X-Forwarded-For", $"{Client}, {CfEdge}")));
-        // Nothing left of the edge, or junk there: the edge is all we know.
+        // True-Client-IP and the XFF entries left of the edge pass through from the client unless Cloudflare writes
+        // them: believing them would let a caller rotate its key or pin a victim's (R160-01).
+        Assert.Equal(CfEdge, Resolve(RenderLb, true, ("X-Forwarded-For", $"198.51.100.8, {CfEdge}"), ("True-Client-IP", "198.51.100.7")));
+        Assert.Equal(CfEdge, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {Client}, {CfEdge}")));
+        Assert.Equal(CfEdge, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {Client}, {CfEdge}"), ("CF-Connecting-IP", "not-an-ip")));
         Assert.Equal(CfEdge, Resolve(RenderLb, true, ("X-Forwarded-For", CfEdge)));
-        Assert.Equal(CfEdge, Resolve(RenderLb, true, ("X-Forwarded-For", $"junk, {CfEdge}")));
+        // Across several header lines, as some proxies send it: the rightmost entry is still the hop.
+        Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", Spoof), ("X-Forwarded-For", $"{Client}, {CfEdge}"), ("CF-Connecting-IP", Client)));
     }
 
     [Fact]
-    public void True_client_ip_is_the_fallback_and_ipv6_edges_count()
+    public void Ipv6_edges_count_and_ipv4_mapped_peers_are_render()
     {
-        Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {CfEdge}"), ("True-Client-IP", Client)));
         Assert.Equal("2001:db8::7", Resolve(RenderLb, true, ("X-Forwarded-For", $"2001:db8::7, {CfEdgeV6}"), ("CF-Connecting-IP", "2001:db8::7")));
         // Kestrel on a dual-stack socket reports IPv4 peers as IPv4-mapped IPv6.
         Assert.Equal(Client, Resolve($"::ffff:{RenderLb}", true, ("X-Forwarded-For", $"{Client}, {CfEdge}"), ("CF-Connecting-IP", Client)));
@@ -96,6 +96,7 @@ public sealed class ClientAddressTests
         var http = new DefaultHttpContext();
         http.Connection.RemoteIpAddress = IPAddress.Parse(RenderLb);
         http.Request.Headers["X-Forwarded-For"] = $"{Client}, {CfEdge}";
+        http.Request.Headers["CF-Connecting-IP"] = Client;
         Assert.Equal(behind ? Client : RenderLb, ClientAddress.From(config).For(http));
     }
 

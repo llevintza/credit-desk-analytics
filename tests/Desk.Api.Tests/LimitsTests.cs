@@ -107,6 +107,19 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Through_cloudflare_without_cf_connecting_ip_rotating_other_headers_buys_nothing()
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 6; i++)
+        {
+            var req = Login(RenderLb, $"198.51.100.{i}, {CfEdge}");
+            req.Headers.Add("True-Client-IP", $"198.51.100.{i + 100}");
+            Assert.Equal(i < 5 ? HttpStatusCode.Unauthorized : HttpStatusCode.TooManyRequests, (await client.SendAsync(req, Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task Anonymous_callers_behind_one_edge_get_their_own_token_bucket()
     {
         await using var host = BehindCloudflare(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "2"));
