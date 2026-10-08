@@ -22,7 +22,7 @@ if (!builder.Environment.IsDevelopment())
 builder.Services.AddDeskData(builder.Configuration);
 builder.Services.AddDeskAuth();
 builder.Services.AddSingleton<DemoAccounts>();
-builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration));
+builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddSingleton<GridRepository>();
