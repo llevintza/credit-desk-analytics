@@ -291,7 +291,8 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.equal(existsSync(join(repoRoot, "perf/coverage-bootstrap.json")), false);
   assert.equal(existsSync(join(repoRoot, "perf/coverage-override.json")), false);
   assert.match(yml, /types: \[opened, synchronize, reopened, edited\]/);
-  assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
+  // Main push runs are never cancelled (#207; full wiring in .github/scripts/concurrency-wiring.test.mjs).
+  assert.match(yml, /^  cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}$/m);
   assert.ok(yml.includes("GITHUB_EVENT_NAME: ${{ github.event_name }}"));
   assert.ok(yml.includes('--event "${GITHUB_EVENT_NAME:-}"'));
   assert.match(yml, /permissions:\s*\n\s*contents: read/);

@@ -6,10 +6,14 @@ on:
   push:
     branches: [main]
 
+# #207: GitHub keeps one pending run per group and a new one cancels it, so a shared
+# main group dropped back-to-back merges unstarted. Each push gets its own group (every
+# main sha runs and can deploy). PRs group by number, never by ref: a merged PR's
+# `edited` event resolves to refs/heads/main and must not land in a main group.
 concurrency:
-  group: ci-${{ github.ref }}
-  # Never cancel an in-progress run on main; PR runs may cancel superseded SHAs.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.sha) || format('ci-pr-{0}', github.event.pull_request.number) }}
+  # Only PR runs cancel a superseded sha; push runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -348,6 +352,8 @@ jobs:
             awk '/start of coverage report/,/end of coverage report/' /tmp/changes-tests.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: CI/Deploy concurrency wiring tests (#207)
+        run: node --test .github/scripts/concurrency-wiring.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
