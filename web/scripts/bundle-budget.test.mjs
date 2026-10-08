@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { brotliCompressSync, constants } from 'node:zlib';
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -44,6 +45,29 @@ test('fails an oversize main bundle', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /over the 500 KB budget/);
 });
+
+// #236: README §10 says "< 500 KB", so exactly 500 KB (512000 bytes) fails and one byte under passes. Random bytes
+// barely compress, so trimming the input by the measured overshoot lands the q1 output on the exact byte count.
+const brotliQ1 = (buffer) => brotliCompressSync(buffer, { params: { [constants.BROTLI_PARAM_QUALITY]: 1 } }).length;
+const compressesTo = (bytes) => {
+  const pool = randomBytes(bytes + 1024);
+  for (let n = bytes, i = 0; i < 20; i++) {
+    const over = brotliQ1(pool.subarray(0, n)) - bytes;
+    if (over === 0) return pool.subarray(0, n);
+    n -= over;
+  }
+  assert.fail(`no fixture compresses to exactly ${bytes} bytes at q1`);
+};
+for (const [label, bytes, status] of [
+  ['fails at exactly 500 KB', 500 * 1024, 1],
+  ['passes one byte under 500 KB', 500 * 1024 - 1, 0],
+]) {
+  test(`${label} compressed`, () => {
+    const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': compressesTo(bytes) });
+    assert.equal(r.status, status, r.stdout + r.stderr);
+    if (status === 1) assert.match(r.stderr, /500\.0 KB compressed is at or over the 500 KB budget/);
+  });
+}
 
 // #203: the API serves Brotli at CompressionLevel.Fastest (quality 1). A 400 KB random block repeated once is
 // ~600 KB at q1, which misses the distant repeat, but ~300 KB at q4, which finds it: only measuring at q1 fails.
@@ -128,7 +152,9 @@ test('terminates on an import cycle and counts each chunk once', () => {
 });
 
 test('fails when index.html is missing', () => {
-  assert.notEqual(run({ 'main-A1.js': 'void 0;' }).status, 0);
+  const r = run({ 'main-A1.js': 'void 0;' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /index\.html is missing/);
 });
 
 // #204 F4: every relative static import is followed, resolved against its importer, whatever the file is called.
