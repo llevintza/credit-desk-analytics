@@ -11,7 +11,7 @@ AG Grid's Infinite Row Model asks for blocks by row number (`startRow`, `endRow`
 - **Be stable:** concatenating all blocks gives every position exactly once under any sort (README §11).
 - **Be fast at any depth:** API p95 ≤ 150 ms.
 
-The snapshot rows are wide: about 2.5 rows per 8 KB page, 20,001 rows in about 7,800 pages per as-of.
+The snapshot rows are wide: about 5 rows per 8 KB page. The table's two as-of dates (40,002 rows at scale 1.0) fill about 8,060 pages, which a seq scan reads in full.
 
 ## Options considered
 
@@ -38,21 +38,22 @@ The page query alone: 200 rows × the Risk columns, sort `market_value DESC`, wi
 | `(as_of_date, market_value DESC NULLS LAST, position_id)` | 203 | 0.6 ms, but ascending fell back to a seq scan (17.5 ms) |
 | `(as_of_date, market_value, position_id)` with the tie-breaker in the first key's direction and default NULL placement | — | **0.18 ms DESC (backward scan), 0.35 ms ASC** |
 
-**All four sort indexes** (#133, carrying #48 AC1). Seed 42, scale 1.0 (20,001 rows on 2026-10-06), Postgres 17, local. First block (200 rows) of the unfiltered Risk view across every portfolio, in the exact shape `GridSqlBuilder.Build` emits. Each plan is the second of two runs, so the cache is warm. "Before" drops the index in a transaction that is rolled back.
+**All four sort indexes** (#133, carrying #48 AC1). Seed 42, scale 1.0 (20,001 rows on the latest as-of date, 2026-10-06), PostgreSQL 17.11 in Docker, Apple M5, local. First block (200 rows) of the unfiltered Risk view across every portfolio, in the exact shape `GridSqlBuilder.Build` emits. Each plan is the second of two runs, so the cache is warm. "Before" drops the index in a transaction that is rolled back.
 
 | Index | Direction | Before: plan | Before: buffers / ms | After: plan | After: buffers / ms |
 |---|---|---|---:|---|---:|
-| `ix_snapshot_sort_market_value` | DESC | seq scan + top-N heapsort | 8,064 / 29.8 | Index Scan Backward | 204 / 0.16 |
-| | ASC | seq scan + top-N heapsort | 8,064 / 18.7 | Index Scan | 199 / 0.14 |
-| `ix_snapshot_sort_spread_bp` | DESC | seq scan + top-N heapsort | 8,064 / 17.8 | Index Scan Backward | 205 / 0.15 |
-| | ASC | seq scan + top-N heapsort | 8,064 / 20.8 | Index Scan | 204 / 0.21 |
-| `ix_snapshot_sort_dv01` | DESC | seq scan + top-N heapsort | 8,064 / 20.9 | Index Scan Backward | 205 / 0.17 |
-| | ASC | seq scan + top-N heapsort | 8,064 / 18.6 | Index Scan | 200 / 0.15 |
-| `ix_snapshot_sort_deal_name` | DESC | seq scan + top-N heapsort | 8,064 / 18.0 | Index Scan Backward | 205 / 0.16 |
-| | ASC | seq scan + top-N heapsort | 8,064 / 22.9 | Index Scan | 204 / 0.19 |
+| `ix_snapshot_sort_market_value` | DESC | seq scan + top-N heapsort | 8,064 / 25.6 | Index Scan Backward | 204 / 0.15 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 16.3 | Index Scan | 199 / 0.14 |
+| `ix_snapshot_sort_spread_bp` | DESC | seq scan + top-N heapsort | 8,064 / 16.7 | Index Scan Backward | 205 / 0.14 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 18.5 | Index Scan | 204 / 0.15 |
+| `ix_snapshot_sort_dv01` | DESC | seq scan + top-N heapsort | 8,064 / 19.9 | Index Scan Backward | 205 / 0.15 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 38.6 | Index Scan | 200 / 1.66 |
+| `ix_snapshot_sort_deal_name` | DESC | seq scan + top-N heapsort | 8,064 / 17.8 | Index Scan Backward | 205 / 0.15 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 18.5 | Index Scan | 204 / 0.13 |
 
-- The planner uses every index for the first block in both directions, so none is dropped (#133's rule: an index with no plan using it at production-shaped volume would be removed).
-- The full plan text is in the #133 PR body.
+- The planner uses every index for the first block in both directions, so none is dropped (#133's rule: an index with no plan using it at production-shaped volume would be removed). The dv01 ASC rows (38.6 ms before, 1.66 ms after) are a slower run of the same plans; buffers are unchanged.
+- **Scope:** unfiltered, every portfolio, first block. The Index Cond is `as_of_date` only; `portfolio_id` and any grid filter are heap Filters, so a portfolio subset, a filtered view or a deep page reads more rows than this. Those cases weren't measured here (a follow-up for Tech Coordinator to file).
+- The full plan text is committed: [`perf/evidence/explain-sort-indexes-scale1.txt`](../../perf/evidence/explain-sort-indexes-scale1.txt).
 - One btree serves both directions, at ~1.6 MB per index at scale 1.0.
 - Beyond about 10k rows the planner switches OFFSET to a parallel seq scan + sort, which is why the last block (14.8 ms) is cheaper than the middle (24.4 ms).
 - With all four indexes the database is 278 MB, under the 350 MB budget.
@@ -61,7 +62,7 @@ The page query alone: 200 rows × the Risk columns, sort `market_value DESC`, wi
 
 ```
 DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200
-# local stack only; every index, both directions, before and after:
+# local compose stack only (the script refuses any other database); every index, both directions, before and after:
 docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-sort-indexes.sql
 ```
 
