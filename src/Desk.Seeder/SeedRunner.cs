@@ -76,7 +76,10 @@ public static class SeedRunner
                     err.WriteLine($"ERROR: reseed peak estimate is {peakEstMb} MB (current database {dbBefore / 1024 / 1024} MB + new data ~{NewDataMegabytes(options.Scale)} MB), " +
                                   $"over the {options.CapMegabytes} MB storage cap. Refused before TRUNCATE; data and app.seed_metadata are unchanged. " +
                                   "TRUNCATE keeps the old files until COMMIT, so a reseed needs about old + new. If the database's real storage cap is higher, " +
-                                  "pass a larger --cap-mb (README §10). A full scale-1.0 reseed (~534 MB peak) is refused at the 512 MB default on purpose.");
+                                  "pass a larger --cap-mb (README §10)." +
+                                  (options.CapMegabytes == SeedOptions.DefaultCapMegabytes
+                                      ? $" At the {SeedOptions.DefaultCapMegabytes} MB default a full-book scale-1.0 reseed is refused on purpose until the Neon cap is confirmed."
+                                      : ""));
                     return 2;
                 }
 

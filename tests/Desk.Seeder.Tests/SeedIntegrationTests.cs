@@ -234,6 +234,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         Assert.Contains("over the 1 MB storage cap", err.ToString());
         Assert.Contains("Refused before TRUNCATE", err.ToString());
         Assert.Contains("--cap-mb", err.ToString());
+        Assert.DoesNotContain("on purpose", err.ToString()); // the default-cap tail is only for the default (R217-06)
         Assert.Equal(before, await StateAsync());
     }
 
@@ -261,6 +262,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
             (_, _) => Task.FromResult(271L * 1024 * 1024), TestContext.Current.CancellationToken));
         Assert.Contains("peak estimate is 542 MB", err.ToString());
         Assert.Contains("over the 512 MB storage cap", err.ToString());
+        Assert.Contains("At the 512 MB default a full-book scale-1.0 reseed is refused on purpose", err.ToString());
         Assert.Equal(before, await StateAsync());
     }
 
