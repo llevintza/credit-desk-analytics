@@ -41,7 +41,7 @@ public static class FundEndpoints
             if (from is null || to is null)
                 return InvalidCustom();
             (from, to) = (PerformanceRange.MonthEnd(from.Value), PerformanceRange.MonthEnd(to.Value));
-            if (from > to)
+            if (from.Value > to.Value)
                 return InvalidCustom();
         }
 
