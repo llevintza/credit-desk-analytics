@@ -35,18 +35,20 @@ export class ScopeService {
   load(): void {
     if (this.loading || this.dates().length) return;
     this.loading = true;
-    this.loadSub = forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
-      next: ({ asOf, portfolios }) => {
-        this.loading = false;
-        this.dates.set(asOf.dates);
-        this.asOf.set(asOf.latest);
-        this.portfolios.set(portfolios);
-      },
-      error: () => {
-        this.loading = false;
-        this.error.set(true);
-      },
-    });
+    this.loadSub = forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: ({ asOf, portfolios }) => {
+          this.loading = false;
+          this.dates.set(asOf.dates);
+          this.asOf.set(asOf.latest);
+          this.portfolios.set(portfolios);
+        },
+        error: () => {
+          this.loading = false;
+          this.error.set(true);
+        },
+      });
   }
 
   /**
