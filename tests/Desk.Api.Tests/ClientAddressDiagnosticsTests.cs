@@ -20,6 +20,7 @@ public sealed class ClientAddressDiagnosticsTests
     private const string CfEdge = "162.158.90.14";
     private const string Client = "203.0.113.7";
     private const string Spoof = "198.51.100.66";
+    private const string UnlistedHop = "192.0.2.10"; // public, outside Cloudflare, Render and Private
 
     private readonly CapturingLogger _log = new();
     private readonly FakeTimeProvider _time = new();
@@ -239,7 +240,7 @@ public sealed class ClientAddressDiagnosticsTests
         var diagnostics = Diagnostics();
         var clients = new ClientAddress(true);
         // An edge in a Cloudflare range the list doesn't have yet: the key is that hop for every client.
-        Assert.Equal("8.8.8.8", clients.For(Request(diagnostics, RenderLb, $"{Client}, 8.8.8.8", Client)));
+        Assert.Equal(UnlistedHop, clients.For(Request(diagnostics, RenderLb, $"{Client}, {UnlistedHop}", Client)));
         var line = Assert.Single(_log.Lines).Text;
         Assert.StartsWith("Client address fell back to a shared key (DirectHop):", line);
         Assert.Contains("ForwardedForShape=public>public", line);
@@ -248,7 +249,7 @@ public sealed class ClientAddressDiagnosticsTests
         // A client that reached Render directly has no CF header: it is its own key, nothing to warn about.
         _log.Lines.Clear();
         _time.Advance(ClientAddressDiagnostics.FallbackInterval);
-        Assert.Equal("8.8.8.8", clients.For(Request(diagnostics, RenderLb, $"{Client}, 8.8.8.8")));
+        Assert.Equal(UnlistedHop, clients.For(Request(diagnostics, RenderLb, $"{Client}, {UnlistedHop}")));
         Assert.Empty(_log.Lines);
     }
 
