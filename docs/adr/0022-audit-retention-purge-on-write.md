@@ -114,7 +114,16 @@ Run 3, trimmed to the plan lines:
  Execution Time: 494.723 ms
 ```
 
-The size numbers matter for the window. At the busy-demo rate, 90 days costs about **160 MB of the 0.5 GB** Neon budget. At a realistic demo rate (1,000 rows a day) it is about 16 MB. If the real rate approaches the busy case, Leo can shorten the window with `AUDIT_RETENTION_DAYS` (an environment change, no code change).
+**Size against the database budget.** The binding limit isn't Neon's 0.5 GB cap. It's README §10/§5.4: the database MUST stay under **350 MB**, and the seeder **fails above 400 MB**. Both are measured with `pg_database_size`, and `app.audit` lives in the same Neon database as the seeded data (README §5.1). The seeded database is 271 MB (§5.4), which leaves about 79 MB of headroom under 350 MB, and about 129 MB under the seeder's hard fail. At the measured ~193 bytes per row (heap and both indexes), a 90-day window costs about **17 MB per 1,000 audit rows a day**:
+
+| Audit rows a day | 90 days of `app.audit` | Database total (271 MB seeded) |
+|---|---|---|
+| 1,000 (a light demo) | ~17 MB | ~288 MB, within budget |
+| ~4,500 (break-even) | ~79 MB | ~350 MB, the §10 limit |
+| ~7,400 | ~129 MB | ~400 MB, the seeder fails |
+| 10,000 (the busy case above) | 174 MB | ~445 MB, over both |
+
+README §1 targets about 60 internal users, and every authenticated `/api` request writes a row, so the busy case is plausible. The 90-day default fits only while the audit rate stays under about 4,500 rows a day. `AUDIT_RETENTION_DAYS` is the lever: it's an environment change, with no code change.
 
 ## Decision
 
@@ -129,4 +138,5 @@ The size numbers matter for the window. At the busy-demo rate, 90 days costs abo
 - Rows past the window can stay while the app is idle, until the next login. That's acceptable for a usage log. If audit retention ever becomes a compliance requirement with a hard deadline, revisit with option 3.
 - Shortening the window takes effect at the next purge after a restart. `DELETE` frees space for reuse inside the table, but the table doesn't shrink on disk without `VACUUM FULL`, which we don't run.
 - Each statement handles at most about 50,000 rows (more only on ties at the edge), so its cost doesn't grow with the backlog. A single batch would have to slow down by more than 30× over the cold numbers above to reach the 10 s timeout. If one ever does, the batches before it stay committed and the rest is retried the next day. If purges keep timing out, lower the batch size or delete in slices by hand through `db-ops`.
+- If `pg_database_size` approaches 350 MB, lower `AUDIT_RETENTION_DAYS` first (the purge drains the resulting backlog in batches, above). Then take the 90-day default back to Helms in #114: at the busy rate, 90 days doesn't fit the §10 budget.
 - Revisit with partitioning (option 4) if the audit volume grows past a few million rows.
