@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Desk.Api\Desk.Api.csproj" />
     <ProjectReference Include="..\..\src\Desk.UserAdmin\Desk.UserAdmin.csproj" />
+    <ProjectReference Include="..\..\src\Desk.Seeder\Desk.Seeder.csproj" />
   </ItemGroup>
 
   <ItemGroup>
