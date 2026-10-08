@@ -118,7 +118,12 @@ public sealed class HardeningTests(PostgresApiFactory api)
         var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
         using var doc = JsonDocument.Parse(await admin.GetStringAsync("/openapi/v1.json", Ct));
         var paths = doc.RootElement.GetProperty("paths").EnumerateObject().Select(p => p.Name).Order().ToArray();
-        Assert.Equal(["/api/auth/antiforgery", "/api/auth/login", "/api/auth/logout", "/api/health/db", "/api/me", "/health"], paths);
+        Assert.Equal(
+        [
+            "/api/auth/antiforgery", "/api/auth/login", "/api/auth/logout", "/api/health/db", "/api/me",
+            "/api/meta/as-of", "/api/meta/columns", "/api/meta/portfolios",
+            "/api/positions/export", "/api/positions/query", "/api/presets/{page}", "/health",
+        ], paths);
         Assert.Equal("Credit Desk Analytics API", doc.RootElement.GetProperty("info").GetProperty("title").GetString());
         // Behind the TLS proxy a generated server would be http://; relative (none) keeps "Try it out" on https.
         if (doc.RootElement.TryGetProperty("servers", out var servers))

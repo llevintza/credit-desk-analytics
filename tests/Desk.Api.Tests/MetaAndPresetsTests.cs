@@ -1,0 +1,187 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Desk.Api.Positions;
+using Desk.Data.App;
+using Desk.Data.Catalog;
+using Desk.Data.Grid;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
+
+namespace Desk.Api.Tests;
+
+/// <summary>README §8 meta endpoints and column presets (#47).</summary>
+[Collection(ApiCollection.Name)]
+public sealed class MetaAndPresetsTests(PostgresApiFactory api)
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private static HttpRequestMessage Send(HttpMethod method, string path, string? xsrf, object? body = null)
+    {
+        var req = new HttpRequestMessage(method, path) { Content = body is null ? null : JsonContent.Create(body) };
+        if (xsrf is not null) req.Headers.Add("X-XSRF-TOKEN", xsrf);
+        return req;
+    }
+
+    [Fact]
+    public async Task As_of_dates_are_newest_first()
+    {
+        var (client, _, _) = await api.SignedInAsync();
+        var res = await client.GetFromJsonAsync<AsOfResponse>("/api/meta/as-of", Ct);
+        Assert.Equal(PostgresApiFactory.AsOf, res!.Latest);
+        Assert.Equal([PostgresApiFactory.AsOf, new DateOnly(2026, 10, 5)], res.Dates);
+    }
+
+    [Fact]
+    public async Task Columns_come_from_app_column_catalog_and_match_the_code_catalog()
+    {
+        var (client, _, _) = await api.SignedInAsync();
+        var res = await client.GetAsync("/api/meta/columns", Ct);
+        Assert.Contains("total;dur=", res.Headers.GetValues("Server-Timing").Single());
+        var columns = (await res.Content.ReadFromJsonAsync<CatalogColumn[]>(Ct))!;
+        Assert.Equal(ColumnCatalog.PositionSnapshot.Select(c => (c.Name, c.Kind.ToString(), c.Aggregation.ToString(), c.Header)),
+            columns.Select(c => (c.Name, c.Kind, c.Aggregation, c.Header)));
+    }
+
+    [Fact]
+    public async Task Portfolios_lists_the_entitled_portfolios_with_their_fund()
+    {
+        var (client, _, _) = await api.SignedInAsync();
+        var portfolios = (await client.GetFromJsonAsync<PortfolioResponse[]>("/api/meta/portfolios", Ct))!;
+        Assert.Equal(12, portfolios.Length);
+        Assert.All(portfolios, p => Assert.False(string.IsNullOrEmpty(p.FundName)));
+    }
+
+    [Fact]
+    public async Task Presets_list_built_ins_then_save_update_and_delete_own()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        var initial = (await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!;
+        Assert.Equal(["Risk", "Surveillance", "Scenarios", "All"], initial.Select(p => p.Name));
+        Assert.All(initial, p => Assert.True(p.BuiltIn));
+        Assert.Equal(BuiltInPresets.Risk.Count, initial[0].State.GetProperty("columns").GetArrayLength());
+
+        var state = new { columns = new[] { "deal_name", "dv01" }, sort = new[] { new { colId = "dv01", sort = "desc" } } };
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "My risk", state }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "My risk", state = new { columns = new[] { "cs01" } } }), Ct)).StatusCode);
+
+        var saved = (await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!.Single(p => !p.BuiltIn);
+        Assert.Equal("My risk", saved.Name);
+        Assert.Equal("cs01", saved.State.GetProperty("columns")[0].GetString());
+        Assert.NotNull(saved.UpdatedAt);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk", xsrf), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk", xsrf), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Presets_are_per_user()
+    {
+        var (alice, xsrf, _) = await api.SignedInAsync();
+        await alice.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "Mine", state = new { columns = new[] { "dv01" } } }), Ct);
+
+        var (bob, _, _) = await api.SignedInAsync();
+        Assert.DoesNotContain((await bob.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!, p => p.Name == "Mine");
+    }
+
+    [Theory]
+    [InlineData("""{"name":"","state":{}}""")]
+    [InlineData("""{"name":"Risk","state":{}}""")]
+    [InlineData("""{"state":{}}""")]
+    [InlineData("""{"name":"x","state":[1,2]}""")]
+    [InlineData("""{"name":"x","state":"text"}""")]
+    public async Task Invalid_presets_are_400(string json)
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        var req = new HttpRequestMessage(HttpMethod.Put, "/api/presets/positions") { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
+        req.Headers.Add("X-XSRF-TOKEN", xsrf);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(req, Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Oversized_state_names_and_too_many_presets_are_refused()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        var big = new { name = "big", state = new { blob = new string('x', MetaEndpoints.MaxPresetStateBytes) } };
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, big), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = new string('n', 65), state = new { } }), Ct)).StatusCode);
+
+        for (var i = 0; i < PresetRepository.MaxPresetsPerPage; i++)
+            Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = $"p{i}", state = new { } }), Ct)).StatusCode);
+        var over = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "one too many", state = new { } }), Ct);
+        Assert.Equal(HttpStatusCode.BadRequest, over.StatusCode);
+        // Replacing an existing one is still fine at the limit.
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "p0", state = new { a = 1 } }), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Unknown_pages_are_404_and_writes_need_antiforgery()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/presets/funds", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/funds", xsrf, new { name = "x", state = new { } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions", xsrf), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/funds?name=x", xsrf), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", null, new { name = "x", state = new { } }), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Concurrent_first_saves_of_one_name_both_succeed()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        var saves = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
+            client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "race", state = new { i } }), Ct)));
+        Assert.All(saves, r => Assert.Equal(HttpStatusCode.NoContent, r.StatusCode));
+        Assert.Single((await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!, p => p.Name == "race");
+    }
+
+    [Fact]
+    public async Task Before_the_first_seed_data_endpoints_say_so_with_503()
+    {
+        // A migrated but never-seeded database in the same container.
+        var empty = new NpgsqlConnectionStringBuilder(api.ConnectionString) { Database = $"empty_{Guid.NewGuid():N}" }.ConnectionString;
+        await using (var conn = new NpgsqlConnection(api.ConnectionString))
+        {
+            await conn.OpenAsync(Ct);
+            await using var cmd = new NpgsqlCommand($"CREATE DATABASE \"{new NpgsqlConnectionStringBuilder(empty).Database}\"", conn);
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+        await using (var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                         .UseNpgsql(empty, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options))
+            await db.Database.MigrateAsync(Ct);
+
+        // The repository on its own reports the empty state.
+        var emptyRepo = new MetaRepository(
+            new Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory<AppDbContext>(new DbContextOptionsBuilder<AppDbContext>()
+                .UseNpgsql(empty, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options),
+            new Desk.Data.Sources.DataSourceRegistry(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DATABASE_URL"] = empty }).Build(), new Desk.Data.DbConnectionCounter()));
+        Assert.Equal("empty", await emptyRepo.DataVersionAsync(Ct));
+        Assert.Empty(await emptyRepo.CatalogAsync(Ct));
+        Assert.Empty(await emptyRepo.AsOfDatesAsync(Ct));
+
+        var user = await api.CreateUserAsync();
+        var cookie = (await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!)).Headers.GetValues("Set-Cookie")
+            .Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+
+        // Sessions are validated against the users table, so keep App on the seeded DB and point Core at the empty one.
+        await using var host = api.WithSettings(("DATABASE_URL", empty), ("ConnectionStrings:Core", empty));
+        var client = PostgresApiFactory.NewClient(host);
+        using var asOf = new HttpRequestMessage(HttpMethod.Get, "/api/meta/as-of");
+        asOf.Headers.Add("Cookie", cookie);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.SendAsync(asOf, Ct)).StatusCode);
+
+        var xsrf = PostgresApiFactory.XsrfToken(await SendWithCookie(client, cookie, HttpMethod.Get, "/api/auth/antiforgery"))!;
+        var query = await SendWithCookie(client, cookie, HttpMethod.Post, "/api/positions/query", xsrf, new { });
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, query.StatusCode);
+        Assert.Equal("No data loaded", (await query.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+    }
+
+    private static Task<HttpResponseMessage> SendWithCookie(HttpClient client, string cookie, HttpMethod method, string path, string? xsrf = null, object? body = null)
+    {
+        var req = Send(method, path, xsrf, body);
+        req.Headers.Add("Cookie", cookie);
+        return client.SendAsync(req, Ct);
+    }
+}

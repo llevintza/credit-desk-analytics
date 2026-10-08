@@ -4,6 +4,8 @@ using Desk.Api.Audit;
 using Desk.Api.Auth;
 using Desk.Api.Hardening;
 using Desk.Api.Limits;
+using Desk.Api.Positions;
+using Desk.Data.Grid;
 using Desk.Data;
 using Microsoft.AspNetCore.ResponseCompression;
 
@@ -22,6 +24,13 @@ builder.Services.AddSingleton<DemoAccounts>();
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddHostedService<AuditWriter>();
+builder.Services.AddSingleton<GridRepository>();
+builder.Services.AddSingleton<MetaRepository>();
+builder.Services.AddSingleton<PresetRepository>();
+builder.Services.AddSingleton<MetaCache>();
+builder.Services.AddSingleton<PositionsCache>();
+builder.Services.AddSingleton<IPortfolioEntitlements, AllPortfolios>();
+builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, DeskJsonContext.Default));
 builder.Services.AddProblemDetails();
 // OpenAPI document (README §8) at /openapi/v1.json, browsable at /swagger (admin only).
 builder.Services.AddOpenApi(o => o.AddDocumentTransformer((doc, _, _) =>
@@ -73,6 +82,8 @@ var api = app.MapGroup("/api")
     .AddEndpointFilter<AntiforgeryFilter>();
 app.MapHealthEndpoints(api);
 api.MapAuthEndpoints();
+api.MapMetaEndpoints();
+api.MapPositionsEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 
 // Client-side routes fall back to the SPA; /api/* never does. /swagger and /openapi are
