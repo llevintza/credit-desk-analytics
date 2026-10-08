@@ -45,7 +45,8 @@ public sealed class SeedOptionsTests
     [Fact]
     public void Parse_as_of_rejects_bad_date()
     {
-        Assert.Throws<FormatException>(() => SeedOptions.Parse(["--if-changed", "--as-of", "10/06/2026"]));
+        var ex = Assert.Throws<FormatException>(() => SeedOptions.Parse(["--if-changed", "--as-of", "10/06/2026"]));
+        Assert.Contains("--as-of", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]

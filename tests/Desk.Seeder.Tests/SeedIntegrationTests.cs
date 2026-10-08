@@ -1,5 +1,6 @@
 using Desk.Data.App;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Npgsql;
 using Testcontainers.PostgreSql;
 
@@ -9,7 +10,7 @@ namespace Desk.Seeder.Tests;
 public sealed class SeededDatabase : IAsyncLifetime
 {
     // Testcontainers generates a random password per container; nothing is hard-coded.
-    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
     public string ConnectionString => _pg.GetConnectionString();
     public string FirstRunOutput { get; private set; } = "";
 
@@ -45,7 +46,13 @@ public sealed class SeededDatabase : IAsyncLifetime
 public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<SeededDatabase>
 {
     [Fact]
-    public void First_run_seeds() => Assert.Contains("SEED_ACTION=seeded", db.FirstRunOutput);
+    public async Task First_run_seeds()
+    {
+        Assert.Contains("SEED_ACTION=seeded", db.FirstRunOutput);
+        Assert.True(await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot") > 0);
+        Assert.True(await db.ScalarAsync<long>("SELECT count(*) FROM core.deal") > 0);
+        Assert.True(await db.ScalarAsync<long>("SELECT count(*) FROM app.column_catalog") > 0);
+    }
 
     [Fact]
     public async Task Second_run_with_if_changed_is_a_no_op()
@@ -62,7 +69,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     [InlineData("positions with zero current face", "SELECT count(*) FROM core.position_snapshot WHERE current_face = 0", 1)]
     [InlineData("month-end trades at 23:59:59 New York time", "SELECT count(*) FROM core.trade WHERE (trade_ts AT TIME ZONE 'America/New_York')::time >= '23:59:59'", 1)]
     [InlineData("fund flows sharing a date", "SELECT count(*) FROM (SELECT fund_id, flow_date FROM core.fund_flow GROUP BY 1, 2 HAVING count(*) > 1) x", 1)]
-    [InlineData("column catalog rows", "SELECT count(*) FROM app.column_catalog", 200)]
+    [InlineData("column catalog rows", "SELECT count(*) FROM app.column_catalog", 202)]
     [InlineData("snapshot as-of dates", "SELECT count(DISTINCT as_of_date) FROM core.position_snapshot", 2)]
     public async Task Spec_edge_cases_are_present(string what, string sql, long atLeast)
     {
@@ -143,11 +150,160 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     [Fact]
     public async Task Database_stays_inside_the_size_budget() =>
         Assert.True(await db.ScalarAsync<long>("SELECT pg_database_size(current_database())") < 400L * 1024 * 1024);
+
+    [Fact]
+    public async Task Column_catalog_matches_the_in_process_catalog()
+    {
+        await using var conn = new NpgsqlConnection(db.ConnectionString);
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT name, ordinal, group_name, kind, aggregation, header FROM app.column_catalog ORDER BY ordinal", conn);
+        await using var r = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        var expected = Desk.Data.Catalog.ColumnCatalog.PositionSnapshot;
+        var i = 0;
+        while (await r.ReadAsync(TestContext.Current.CancellationToken))
+        {
+            Assert.True(i < expected.Count, $"extra catalog row {r.GetString(0)}");
+            var c = expected[i];
+            Assert.Equal(c.Name, r.GetString(0));
+            Assert.Equal(i, r.GetInt32(1));
+            Assert.Equal(c.Group, r.GetString(2));
+            Assert.Equal(c.Kind.ToString(), r.GetString(3));
+            Assert.Equal(c.Aggregation.ToString(), r.GetString(4));
+            Assert.Equal(c.Header, r.GetString(5));
+            i++;
+        }
+        Assert.Equal(expected.Count, i);
+    }
+
+    [Fact]
+    public async Task Size_report_does_not_write()
+    {
+        var before = await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata");
+        var o = new StringWriter();
+        var report = SeededDatabase.Options() with { SizeReportOnly = true, IfChanged = false };
+        Assert.Equal(0, await SeedRunner.RunAsync(report, db.ConnectionString, o, new StringWriter(), TestContext.Current.CancellationToken));
+        Assert.DoesNotContain("SEED_ACTION=", o.ToString());
+        Assert.Contains("DB_SIZE_MB=", o.ToString());
+        Assert.Equal(before, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Fact]
+    public async Task Force_replaces_existing_data()
+    {
+        var beforeMeta = await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata");
+        var o = new StringWriter();
+        Assert.Equal(0, await SeedRunner.RunAsync(SeededDatabase.Options(force: true), db.ConnectionString, o, new StringWriter(), TestContext.Current.CancellationToken));
+        Assert.Contains("SEED_ACTION=seeded", o.ToString());
+        Assert.Contains("forced", o.ToString());
+        Assert.True(await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot") > 0);
+        Assert.Equal(beforeMeta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Fact]
+    public async Task Size_guard_rolls_back_and_keeps_the_previous_data()
+    {
+        var beforeSnap = await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot");
+        var beforeMeta = await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata");
+        var beforeVersion = await db.ScalarAsync<string>("SELECT version FROM app.seed_metadata ORDER BY id DESC LIMIT 1");
+        var err = new StringWriter();
+        var tight = SeededDatabase.Options(force: true) with { MaxMegabytes = 1 };
+        Assert.Equal(2, await SeedRunner.RunAsync(tight, db.ConnectionString, new StringWriter(), err, TestContext.Current.CancellationToken));
+        Assert.Contains("Rolled back", err.ToString());
+        Assert.Equal(beforeSnap, await db.ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot"));
+        Assert.Equal(beforeMeta, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+        Assert.Equal(beforeVersion, await db.ScalarAsync<string>("SELECT version FROM app.seed_metadata ORDER BY id DESC LIMIT 1"));
+    }
+
+    [Fact]
+    public async Task Copy_failure_mid_load_rolls_back()
+    {
+        var before = await db.ScalarAsync<long>("SELECT count(*) FROM core.fund");
+        await using var conn = new NpgsqlConnection(db.ConnectionString);
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
+        await using var tx = await conn.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        var failed = false;
+        try
+        {
+            Loader.Copy(conn, "core.fund",
+                ["fund_id", "name", "inception_date", "strategy"],
+                [NpgsqlTypes.NpgsqlDbType.Integer, NpgsqlTypes.NpgsqlDbType.Text, NpgsqlTypes.NpgsqlDbType.Date, NpgsqlTypes.NpgsqlDbType.Text],
+                [new object?[] { 1, "duplicate pk", new DateOnly(2020, 1, 1), "s" }],
+                TestContext.Current.CancellationToken);
+        }
+        catch (PostgresException)
+        {
+            failed = true;
+        }
+        Assert.True(failed, "COPY should have failed on a duplicate fund_id");
+        await tx.RollbackAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(before, await db.ScalarAsync<long>("SELECT count(*) FROM core.fund"));
+    }
+
+    [Fact]
+    public async Task Month_end_edge_trades_are_business_day_month_ends()
+    {
+        Assert.Equal(0L, await db.ScalarAsync<long>("""
+            SELECT count(*) FROM core.trade
+            WHERE (trade_ts AT TIME ZONE 'America/New_York')::time >= '23:59:59'
+              AND extract(isodow FROM trade_ts AT TIME ZONE 'America/New_York') IN (6, 7)
+            """));
+        Assert.True(await db.ScalarAsync<long>("""
+            SELECT count(*) FROM core.trade
+            WHERE (trade_ts AT TIME ZONE 'America/New_York')::time >= '23:59:59'
+            """) >= 1);
+    }
+
+    [Fact]
+    public async Task Migrating_data_schemas_down_clears_version_metadata_so_the_next_seed_loads()
+    {
+        await using var isolated = new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
+        await isolated.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var cs = isolated.GetConnectionString();
+            await using (var ctx = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                             .UseNpgsql(cs, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options))
+            {
+                await ctx.Database.MigrateAsync(TestContext.Current.CancellationToken);
+                Assert.Equal(0, await SeedRunner.RunAsync(SeededDatabase.Options(), cs, new StringWriter(), new StringWriter(), TestContext.Current.CancellationToken));
+                var migrator = ctx.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>();
+                await migrator.MigrateAsync("20261007183543_InitialAppSchema", TestContext.Current.CancellationToken);
+            }
+
+            await using (var conn = new NpgsqlConnection(cs))
+            {
+                await conn.OpenAsync(TestContext.Current.CancellationToken);
+                await using var cmd = new NpgsqlCommand("SELECT count(*) FROM app.seed_metadata WHERE version = '1.0.0'", conn);
+                Assert.Equal(0L, (long)(await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+            }
+
+            await using (var ctx = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                             .UseNpgsql(cs, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options))
+            {
+                await ctx.Database.MigrateAsync(TestContext.Current.CancellationToken);
+            }
+
+            var o = new StringWriter();
+            Assert.Equal(0, await SeedRunner.RunAsync(SeededDatabase.Options(), cs, o, new StringWriter(), TestContext.Current.CancellationToken));
+            Assert.Contains("SEED_ACTION=seeded", o.ToString());
+            await using (var conn = new NpgsqlConnection(cs))
+            {
+                await conn.OpenAsync(TestContext.Current.CancellationToken);
+                await using var cmd = new NpgsqlCommand("SELECT count(*) FROM core.position_snapshot", conn);
+                Assert.True((long)(await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken))! > 0);
+            }
+        }
+        finally
+        {
+            await isolated.DisposeAsync();
+        }
+    }
 }
 
 public sealed class UnmigratedDatabaseTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly PostgreSqlContainer _pg = new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
     public async ValueTask InitializeAsync() => await _pg.StartAsync();
     public async ValueTask DisposeAsync() => await _pg.DisposeAsync();
 

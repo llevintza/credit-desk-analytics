@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Desk.Data.App.Migrations;
 using Desk.Data.Catalog;
 using Desk.Seeder.Generation;
+using Desk.Seeder;
 
 namespace Desk.Seeder.Tests;
 
@@ -28,7 +31,7 @@ public sealed class GeneratorTests
     }
 
     [Theory]
-    [InlineData("03783310", '0')] // published CUSIPs, check digits from the issuers' prospectuses
+        [InlineData("03783310", '0')] // published check-digit vectors (digits only; not an issuer name)
     [InlineData("38259P50", '8')]
     [InlineData("594918BW", '3')]
     public void Cusip_check_digit_matches_the_standard_algorithm(string first8, char expected) =>
@@ -97,30 +100,85 @@ public sealed class GeneratorTests
     }
 
     [Fact]
-    public void Generated_names_are_pinned()
+    public void Generated_names_are_pinned_and_unique()
     {
         // Names are invented words (AGENTS.md: no real company names). Any change to the name set must be
         // reviewed deliberately: update this pin in the same PR.
         var u = Universe.Generate(42, 1.0, AsOf);
         var all = u.Issuers.Select(x => x.Name).Concat(u.Servicers.Select(x => x.Name)).Concat(u.Trustees.Select(x => x.Name)).ToList();
         Assert.Equal(93, all.Count);
+        Assert.Equal(all.Count, all.Distinct().Count());
         Assert.Equal(PinnedNamesHash, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", all))))[..16]);
     }
 
-    private const string PinnedNamesHash = "69AE5C532A3636EA";
+    private const string PinnedNamesHash = "0EF87D67625EB0DD";
 
-    [Fact]
-    public void Month_end_trades_land_on_a_business_day_on_or_before_as_of()
+    [Theory]
+    [InlineData(2026, 10, 6)]
+    [InlineData(2026, 10, 30)]
+    [InlineData(2026, 11, 27)]
+    public void Month_end_trades_land_on_a_business_day_on_or_before_as_of(int y, int m, int d)
     {
-        var u = Universe.Generate(42, 0.2, AsOf);
+        var asOf = new DateOnly(y, m, d);
+        var u = Universe.Generate(42, 1.0, asOf);
         var ny = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-        foreach (var row in new Tables(42, 0.2, AsOf, u).TradeRows())
+        foreach (var row in new Tables(42, 1.0, asOf, u).TradeRows())
         {
             var local = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime((DateTimeOffset)row[3]!, ny).DateTime);
-            Assert.True(local <= AsOf, $"trade {row[0]} on {local}");
+            Assert.True(local <= asOf, $"trade {row[0]} on {local} after {asOf}");
             Assert.False(local.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday, $"trade {row[0]} on a weekend ({local})");
+            var tod = TimeZoneInfo.ConvertTime((DateTimeOffset)row[3]!, ny).TimeOfDay;
+            if (tod >= new TimeSpan(23, 59, 59))
+            {
+                var monthEnd = Tables.LastBusinessDayOfMonth(local.Year, local.Month);
+                if (monthEnd > asOf) monthEnd = Tables.LastBusinessDayOfMonth(asOf.AddMonths(-1).Year, asOf.AddMonths(-1).Month);
+                Assert.Equal(monthEnd, local);
+            }
         }
     }
+
+    [Fact]
+    public void Catalog_and_seeded_table_identifiers_are_safe()
+    {
+        var rx = new Regex("^[a-z][a-z0-9_]{0,62}$", RegexOptions.CultureInvariant);
+        foreach (var c in ColumnCatalog.PositionSnapshot)
+            Assert.Matches(rx, c.Name);
+        foreach (var table in Loader.SeededTables)
+        foreach (var part in table.Split('.'))
+            Assert.Matches(rx, part);
+    }
+
+    [Fact]
+    public void Golden_hash_of_all_generated_tables_is_pinned_on_linux_x64()
+    {
+        var u = Universe.Generate(42, 0.05, AsOf);
+        var t = new Tables(42, 0.05, AsOf, u);
+        var sb = new StringBuilder();
+        void Add(string name, IEnumerable<object?[]> rows)
+        {
+            sb.Append(name).Append('\n');
+            foreach (var row in rows)
+                sb.AppendJoin('|', row.Select(v => Convert.ToString(v, CultureInfo.InvariantCulture))).Append('\n');
+        }
+        Add("issuers", u.Issuers.Select(x => new object?[] { x.Id, x.Name, x.Country }));
+        Add("servicers", u.Servicers.Select(x => new object?[] { x.Id, x.Name }));
+        Add("trustees", u.Trustees.Select(x => new object?[] { x.Id, x.Name }));
+        Add("deals", u.Deals.Select(d => new object?[] { d.DealId, d.Name, d.Sector }));
+        Add("bonds", u.Bonds.Select(b => new object?[] { b.BondId, b.DealId, b.Cusip, b.CouponOrMargin }));
+        Add("snapshot", t.PositionSnapshotRows(AsOf));
+        Add("history", t.PositionHistoryRows());
+        Add("trades", t.TradeRows());
+        Add("fund-performance", t.FundPerformanceRows());
+        Add("fund-flow", t.FundFlowRows());
+        Add("rate-curve", t.RateCurveRows());
+        Add("spread-index", t.SpreadIndexRows());
+        Add("deal-remit", t.DealRemitRows());
+        Add("vendor-mark", t.VendorMarkRows());
+        Add("internal-mark", t.InternalMarkRows());
+        Assert.Equal(GoldenHash, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())))[..16]);
+    }
+
+    private const string GoldenHash = "D41568039FF16054";
 
     private static string Fingerprint(int seed)
     {

@@ -13,12 +13,25 @@ public sealed class SeederProcessTests(SeededDatabase db) : IClassFixture<Seeded
     [InlineData("--size-report", 0)]
     [InlineData("--if-changed --scale 0.1 --as-of 2026-10-06", 0)]
     [InlineData("", 1)]                          // no mode: refused before touching the database
-    [InlineData("--size-report --max-mb 1", 2)]  // over budget
+    [InlineData("--size-report --max-mb 1", 2)]  // over budget (size-report is allowed to fail)
+    [InlineData("--if-changed --scale 0.1 --as-of 2026-10-06 --max-mb 1", 0)] // skip must not fail the deploy
     public async Task Exit_code_is_what_the_pipelines_expect(string args, int expected)
     {
         var (code, stdout, stderr) = await RunAsync(args, db.ConnectionString);
         Assert.True(code == expected, $"exit {code}, expected {expected}\nstdout:\n{stdout}\nstderr:\n{stderr}");
         Assert.DoesNotContain("Unhandled exception", stderr);
+        if (args.Contains("--if-changed", StringComparison.Ordinal) && expected == 0)
+            Assert.Contains("SEED_ACTION=skipped", stdout);
+    }
+
+    [Fact]
+    public async Task Unexpected_connection_failure_exits_3()
+    {
+        var (code, _, stderr) = await RunAsync("--size-report",
+            "Host=127.0.0.1;Port=1;Database=creditdesk;Username=desk;Timeout=1");
+        Assert.Equal(3, code);
+        Assert.DoesNotContain("Unhandled exception", stderr);
+        Assert.Contains("ERROR:", stderr);
     }
 
     private static async Task<(int Code, string Stdout, string Stderr)> RunAsync(string args, string connectionString)
