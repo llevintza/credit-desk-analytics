@@ -52,11 +52,10 @@ The fix came from an `EXPLAIN ANALYZE` of the summary variants (174 aggregates, 
 
 Almost all of the cost was the `numeric → float8` cast, repeated twice per weighted column per row. `OFFSET 0` stops Postgres from flattening the LATERAL back into the expressions.
 
-**The weight is the position's size** (#131). The lateral now computes `abs(market_value)::float8`. A signed weight is right only while every position is long: a short would cancel longs in the denominator and could flip its sign. The README §8 (and §6 P1) rule is ABS-weighted, with zero or no weight giving `null`. `abs()` runs once per row in the same lateral and costs nothing measurable. `GridBenchmark`, 80 iterations, page + summary p50 at scale 1.0, alternating builds (rounds 1–2 were noisy from other load, so they're shown too):
+**The weight is the position's size** (#131). The lateral now computes `abs(market_value)::float8`. A signed weight is right only while every position is long: a short would cancel longs in the denominator and could flip its sign. The README §8 (and §6 P1) rule is ABS-weighted, with zero or no weight giving `null`. `abs()` runs once per row in the same lateral and costs nothing measurable. `GridBenchmark`, 80 iterations, page + summary p50 at scale 1.0, alternating builds. Two earlier rounds were discarded (other load on the machine swung both builds by ±40%):
 
 | Round | Risk before / after | All before / after |
 |---|---:|---:|
-| 1–2 | 40.3, 62.3 / 56.2, 39.8 ms | 97.4, 139.8 / 130.9, 95.5 ms |
 | 3–4 | 37.0, 36.5 / 38.2, 36.2 ms | 89.8, 97.1 / 93.9, 96.3 ms |
 
 ```
