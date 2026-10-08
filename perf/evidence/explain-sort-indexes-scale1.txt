@@ -1,0 +1,241 @@
+as of 2026-10-06 , 20001 rows, portfolios {1,2,3,4,5,6,7,8,9,10,11,12}
+=== market_value DESC: before (no ix_snapshot_sort_market_value)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=25.553..25.571 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=25.552..25.563 rows=200 loops=1)
+         Sort Key: market_value DESC, position_id DESC
+         Sort Method: top-N heapsort  Memory: 201kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.007..20.637 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.155 ms
+ Execution Time: 25.631 ms
+(12 rows)
+
+=== market_value DESC: after (ix_snapshot_sort_market_value)
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.32..291.08 rows=200 width=294) (actual time=0.007..0.127 rows=200 loops=1)
+   Buffers: shared hit=204
+   ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29140.11 rows=20044 width=294) (actual time=0.007..0.119 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=204
+ Planning Time: 0.049 ms
+ Execution Time: 0.151 ms
+(8 rows)
+
+=== market_value ASC: before (no ix_snapshot_sort_market_value)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=16.237..16.250 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=16.236..16.241 rows=200 loops=1)
+         Sort Key: market_value, position_id
+         Sort Method: top-N heapsort  Memory: 202kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.005..11.653 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.076 ms
+ Execution Time: 16.303 ms
+(12 rows)
+
+=== market_value ASC: after (ix_snapshot_sort_market_value)
+                                                                            QUERY PLAN                                                                             
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.32..291.08 rows=200 width=294) (actual time=0.006..0.120 rows=200 loops=1)
+   Buffers: shared hit=199
+   ->  Index Scan using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29140.11 rows=20044 width=294) (actual time=0.006..0.111 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=199
+ Planning Time: 0.029 ms
+ Execution Time: 0.137 ms
+(8 rows)
+
+=== spread_bp DESC: before (no ix_snapshot_sort_spread_bp)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=16.675..16.688 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=16.674..16.679 rows=200 loops=1)
+         Sort Key: spread_bp DESC, position_id DESC
+         Sort Method: top-N heapsort  Memory: 197kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.005..12.160 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.050 ms
+ Execution Time: 16.741 ms
+(12 rows)
+
+=== spread_bp DESC: after (ix_snapshot_sort_spread_bp)
+                                                                               QUERY PLAN                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..291.28 rows=200 width=294) (actual time=0.006..0.123 rows=200 loops=1)
+   Buffers: shared hit=205
+   ->  Index Scan Backward using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.44..29148.23 rows=20044 width=294) (actual time=0.006..0.115 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=205
+ Planning Time: 0.041 ms
+ Execution Time: 0.144 ms
+(8 rows)
+
+=== spread_bp ASC: before (no ix_snapshot_sort_spread_bp)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=18.456..18.469 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=18.455..18.460 rows=200 loops=1)
+         Sort Key: spread_bp, position_id
+         Sort Method: top-N heapsort  Memory: 198kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.006..13.781 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.102 ms
+ Execution Time: 18.534 ms
+(12 rows)
+
+=== spread_bp ASC: after (ix_snapshot_sort_spread_bp)
+                                                                           QUERY PLAN                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..291.28 rows=200 width=294) (actual time=0.007..0.131 rows=200 loops=1)
+   Buffers: shared hit=204
+   ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.44..29148.23 rows=20044 width=294) (actual time=0.006..0.124 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=204
+ Planning Time: 0.043 ms
+ Execution Time: 0.152 ms
+(8 rows)
+
+=== dv01 DESC: before (no ix_snapshot_sort_dv01)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=19.826..19.852 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=19.826..19.843 rows=200 loops=1)
+         Sort Key: dv01 DESC, position_id DESC
+         Sort Method: top-N heapsort  Memory: 200kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.005..14.296 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.066 ms
+ Execution Time: 19.910 ms
+(12 rows)
+
+=== dv01 DESC: after (ix_snapshot_sort_dv01)
+                                                                             QUERY PLAN                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..291.24 rows=200 width=294) (actual time=0.006..0.131 rows=200 loops=1)
+   Buffers: shared hit=205
+   ->  Index Scan Backward using ix_snapshot_sort_dv01 on position_snapshot  (cost=0.44..29144.23 rows=20044 width=294) (actual time=0.006..0.124 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=205
+ Planning Time: 0.034 ms
+ Execution Time: 0.151 ms
+(8 rows)
+
+=== dv01 ASC: before (no ix_snapshot_sort_dv01)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=38.448..38.473 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=38.447..38.456 rows=200 loops=1)
+         Sort Key: dv01, position_id
+         Sort Method: top-N heapsort  Memory: 195kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.004..30.921 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.066 ms
+ Execution Time: 38.550 ms
+(12 rows)
+
+=== dv01 ASC: after (ix_snapshot_sort_dv01)
+                                                                        QUERY PLAN                                                                         
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..291.24 rows=200 width=294) (actual time=1.109..1.556 rows=200 loops=1)
+   Buffers: shared hit=200
+   ->  Index Scan using ix_snapshot_sort_dv01 on position_snapshot  (cost=0.44..29144.23 rows=20044 width=294) (actual time=1.108..1.540 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=200
+ Planning Time: 0.127 ms
+ Execution Time: 1.659 ms
+(8 rows)
+
+=== deal_name DESC: before (no ix_snapshot_sort_deal_name)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=17.700..17.712 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=17.699..17.703 rows=200 loops=1)
+         Sort Key: deal_name DESC, position_id DESC
+         Sort Method: top-N heapsort  Memory: 192kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.006..12.916 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.068 ms
+ Execution Time: 17.771 ms
+(12 rows)
+
+=== deal_name DESC: after (ix_snapshot_sort_deal_name)
+                                                                               QUERY PLAN                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..292.12 rows=200 width=294) (actual time=0.006..0.128 rows=200 loops=1)
+   Buffers: shared hit=205
+   ->  Index Scan Backward using ix_snapshot_sort_deal_name on position_snapshot  (cost=0.44..29232.23 rows=20044 width=294) (actual time=0.006..0.120 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=205
+ Planning Time: 0.035 ms
+ Execution Time: 0.148 ms
+(8 rows)
+
+=== deal_name ASC: before (no ix_snapshot_sort_deal_name)
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=9630.35..9630.85 rows=200 width=294) (actual time=18.372..18.386 rows=200 loops=1)
+   Buffers: shared hit=8064
+   ->  Sort  (cost=9630.35..9680.46 rows=20044 width=294) (actual time=18.371..18.375 rows=200 loops=1)
+         Sort Key: deal_name, position_id
+         Sort Method: top-N heapsort  Memory: 195kB
+         Buffers: shared hit=8064
+         ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=20044 width=294) (actual time=0.007..13.199 rows=20001 loops=1)
+               Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+               Rows Removed by Filter: 20001
+               Buffers: shared hit=8064
+ Planning Time: 0.053 ms
+ Execution Time: 18.454 ms
+(12 rows)
+
+=== deal_name ASC: after (ix_snapshot_sort_deal_name)
+                                                                           QUERY PLAN                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..292.12 rows=200 width=294) (actual time=0.005..0.113 rows=200 loops=1)
+   Buffers: shared hit=204
+   ->  Index Scan using ix_snapshot_sort_deal_name on position_snapshot  (cost=0.44..29232.23 rows=20044 width=294) (actual time=0.005..0.105 rows=200 loops=1)
+         Index Cond: (as_of_date = '2026-10-06'::date)
+         Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
+         Buffers: shared hit=204
+ Planning Time: 0.031 ms
+ Execution Time: 0.130 ms
+(8 rows)
+

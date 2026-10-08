@@ -22,6 +22,65 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    # #169: the areas a PR touches, so heavy jobs run only when needed. There is no
+    # workflow-level paths filter: skipped jobs keep their names and still report.
+    # A heavy job skips only when its flag is exactly 'false'. On push, on a base
+    # without the classifier, or if this job fails, the flags are empty and every
+    # job runs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      api: ${{ steps.classify.outputs.api }}
+      web: ${{ steps.classify.outputs.web }}
+      db: ${{ steps.classify.outputs.db }}
+      app: ${{ steps.classify.outputs.app }}
+      perf: ${{ steps.classify.outputs.perf }}
+      run_api: ${{ steps.classify.outputs.run_api }}
+      run_web: ${{ steps.classify.outputs.run_web }}
+      run_db_tools: ${{ steps.classify.outputs.run_db_tools }}
+      run_compose_smoke: ${{ steps.classify.outputs.run_compose_smoke }}
+      run_e2e: ${{ steps.classify.outputs.run_e2e }}
+      run_budgets: ${{ steps.classify.outputs.run_budgets }}
+      run_coverage: ${{ steps.classify.outputs.run_coverage }}
+    steps:
+      - if: github.event_name != 'pull_request'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: echo "Not a pull request ($EVENT_NAME), so every job runs." >> "$GITHUB_STEP_SUMMARY"
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The classifier comes from BASE_SHA, never the PR head, so a PR cannot
+      # rewrite the rules that decide what it runs.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _base
+          persist-credentials: false
+      - if: github.event_name == 'pull_request'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - id: classify
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          CLASSIFIER=_base/.github/scripts/ci-changes.mjs
+          if [ ! -f "$CLASSIFIER" ]; then
+            echo "::notice::BASE_SHA ${BASE_SHA} has no ${CLASSIFIER#_base/}; every job runs."
+            echo "BASE_SHA has no classifier: every job runs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node "$CLASSIFIER" --base "$BASE_SHA" --head "$HEAD_SHA"
+
   secrets:
     # Fails on any credential in ANY commit of the branch, not just the final tree (.gitleaks.toml).
     runs-on: ubuntu-latest
@@ -63,6 +122,8 @@ jobs:
           deploy/start.sh perf/pipefail-demo.sh
 
   api:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_api != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -131,6 +192,8 @@ jobs:
           grep -q '^SEED_ACTION=skipped' seed2.txt
 
   web:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_web != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -165,7 +228,14 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    needs: [api, web]
+    # Runs when the api or web job runs, and gates only the suites that ran (#169).
+    # A skipped needed job would skip this one by default, hence the explicit if.
+    needs: [changes, api, web]
+    if: >-
+      ${{ !cancelled()
+      && needs.changes.outputs.run_coverage != 'false'
+      && contains(fromJSON('["success", "skipped"]'), needs.api.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.web.result) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,11 +253,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # A suite that ran must have its artifact: download fails if it is missing.
+      - if: needs.changes.outputs.run_api != 'false'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-dotnet
           path: TestResults/coverage
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - if: needs.changes.outputs.run_web != 'false'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-web
           path: web/coverage
@@ -197,7 +270,13 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          RUN_API: ${{ needs.changes.outputs.run_api }}
+          RUN_WEB: ${{ needs.changes.outputs.run_web }}
         run: |
+          # A suite that did not run is skipped by the gate, not passed on stale data.
+          SUITES=""
+          if [ "$RUN_API" != false ]; then SUITES=dotnet; fi
+          if [ "$RUN_WEB" != false ]; then SUITES="${SUITES:+$SUITES,}web"; fi
           if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             echo "::error::BASE_SHA is missing (merge-base unresolved). Failing closed."
             exit 1
@@ -226,7 +305,8 @@ jobs:
             --default-sha "$BASE_SHA" \
             --default-branch "$DEFAULT_BRANCH" \
             --base-ref "${GITHUB_BASE_REF:-}" \
-            --event "${GITHUB_EVENT_NAME:-}"
+            --event "${GITHUB_EVENT_NAME:-}" \
+            --suites "$SUITES"
 
   gate-tests:
     runs-on: ubuntu-latest
@@ -254,6 +334,20 @@ jobs:
             awk '/start of coverage report/,/end of coverage report/' /tmp/gate-tests.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Change classifier tests (#169, ≥80% line/branch)
+        run: |
+          set -o pipefail
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=.github/scripts/ci-changes.mjs \
+            .github/scripts/ci-changes.test.mjs | tee /tmp/changes-tests.out
+          {
+            echo "## Change classifier coverage"
+            echo
+            echo '```'
+            awk '/start of coverage report/,/end of coverage report/' /tmp/changes-tests.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
@@ -261,7 +355,12 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    needs: [api, web]
+    needs: [changes, api, web]
+    if: >-
+      ${{ !cancelled()
+      && needs.changes.outputs.run_compose_smoke != 'false'
+      && contains(fromJSON('["success", "skipped"]'), needs.api.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.web.result) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -307,7 +406,12 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-    needs: [api, web]
+    needs: [changes, api, web]
+    if: >-
+      ${{ !cancelled()
+      && needs.changes.outputs.run_budgets != 'false'
+      && contains(fromJSON('["success", "skipped"]'), needs.api.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.web.result) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -356,7 +460,12 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    needs: [api, web]
+    needs: [changes, api, web]
+    if: >-
+      ${{ !cancelled()
+      && needs.changes.outputs.run_e2e != 'false'
+      && contains(fromJSON('["success", "skipped"]'), needs.api.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.web.result) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -411,6 +520,8 @@ jobs:
         run: docker compose logs
 
   db-tools:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_db_tools != 'false' }}
     # Build-only rehearsal of deploy/db-ops (README §14.2 / §14.3): same composite
     # action, clean checkout, no prior restore/build, no secrets, no production
     # environment, no database. The api job also calls this action, but only after
