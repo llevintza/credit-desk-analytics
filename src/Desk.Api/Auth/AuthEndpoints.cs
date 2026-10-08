@@ -56,6 +56,8 @@ public static class AuthEndpoints
         DemoAccounts demo,
         IAntiforgery antiforgery,
         AuditQueue audit,
+        TimingGuard guard,
+        AppDbContext db,
         TimeProvider time,
         CancellationToken ct)
     {
@@ -63,17 +65,24 @@ public static class AuthEndpoints
         var email = request.Email?.Trim() ?? "";
 
         var password = request.Password ?? "";
-        var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, ct);
-        var result = user is null || password.Length == 0
-            ? SignInResult.Failed
-            : await signIn.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
+        var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, db, ct);
+
+        // Exactly one PBKDF2 verification per attempt on every path (R105-F2), so the response time doesn't tell an
+        // attacker which emails are real accounts: the decoy here for an unknown email, and DeskSignInManager for the
+        // rest (wrong or empty password, locked, disabled, expired, and the attempt that triggers lockout).
+        SignInResult result;
+        if (user is null)
+        {
+            guard.Verify(password);
+            result = SignInResult.Failed;
+        }
+        else
+        {
+            result = await signIn.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
+        }
 
         if (!result.Succeeded)
         {
-            // Unknown, locked, disabled and expired accounts skip Identity's hash check. Hash anyway, so the response
-            // time doesn't tell an attacker which emails are real accounts.
-            if (user is null || result.IsLockedOut || result.IsNotAllowed)
-                TimingGuard.Verify(password);
             audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
             return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
         }
