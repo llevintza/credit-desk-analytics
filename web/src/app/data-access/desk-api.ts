@@ -1,5 +1,5 @@
 import { HttpClient, HttpResponse } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
+import { DestroyRef, Injectable, inject } from '@angular/core';
 import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
 import {
   AsOf, CatalogColumn, GridBlock, GridRequest, Health, Me, Portfolio, Preset, PresetState, RequestInfo,
@@ -122,6 +122,7 @@ export class DeskApi {
     if (typeof PerformanceObserver !== 'function') return null;
     const observer = new PerformanceObserver((list) => this.keep(list.getEntries()));
     observer.observe({ entryTypes: ['resource'] });
+    inject(DestroyRef).onDestroy(() => observer.disconnect());
     return observer;
   }
 }

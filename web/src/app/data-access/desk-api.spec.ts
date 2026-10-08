@@ -68,11 +68,15 @@ class FakeObserver {
   static last: FakeObserver;
   queued: PerformanceEntry[] = [];
   observed: PerformanceObserverInit | undefined;
+  disconnected = false;
   constructor(private readonly callback: (list: { getEntries(): PerformanceEntry[] }) => void) {
     FakeObserver.last = this;
   }
   observe(init: PerformanceObserverInit): void {
     this.observed = init;
+  }
+  disconnect(): void {
+    this.disconnected = true;
   }
   takeRecords(): PerformanceEntry[] {
     const taken = this.queued;
@@ -141,6 +145,14 @@ describe('DeskApi positions bytes (resource timing)', () => {
     FakeObserver.last.queued.push(entry(later(), 0));
     http.expectOne('/api/positions/query').flush(block);
     expect((await empty).info).toMatchObject({ bytes: null });
+  });
+
+  it('disconnects the observer when the app is torn down', () => {
+    setUp(FakeObserver);
+    const observer = FakeObserver.last;
+    expect(observer.disconnected).toBe(false);
+    TestBed.resetTestingModule();
+    expect(observer.disconnected).toBe(true);
   });
 
   it('reports no bytes where the browser has no PerformanceObserver', async () => {
