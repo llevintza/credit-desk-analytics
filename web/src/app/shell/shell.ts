@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
@@ -67,7 +68,9 @@ export class Shell {
   protected logout(): void {
     this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => void this.router.navigate(['/login']),
-      error: () => {
+      error: (e: unknown) => {
+        // 401: sessionInterceptor has already signed out and navigated to /login.
+        if (e instanceof HttpErrorResponse && e.status === 401) return;
         this.auth.signedOut();
         void this.router.navigate(['/login']);
       },

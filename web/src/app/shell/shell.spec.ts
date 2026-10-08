@@ -1,18 +1,23 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router, provideRouter } from '@angular/router';
 import { AuthService } from '../core/auth.service';
 import { HealthService } from '../core/health.service';
 import { KeyboardService } from '../core/keyboard.service';
 import { ScopeService } from '../core/scope.service';
+import { sessionInterceptor } from '../core/session.interceptor';
 import { StatusService } from '../core/status.service';
 import { Shell, navItems } from './shell';
 
 const viewer = { email: 'v@example.com', roles: ['viewer'], expiresAt: '2026-11-30T00:00:00Z' };
 
-async function render(me = viewer, health: object | 'none' = { status: 'ok', version: 'abcdef1234', maintenance: false }) {
-  TestBed.configureTestingModule({ imports: [Shell], providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])] });
+async function render(
+  me = viewer,
+  health: object | 'none' = { status: 'ok', version: 'abcdef1234', maintenance: false },
+  httpClient = provideHttpClient(),
+) {
+  TestBed.configureTestingModule({ imports: [Shell], providers: [httpClient, provideHttpClientTesting(), provideRouter([])] });
   TestBed.inject(AuthService).me.set(me);
   const fixture = TestBed.createComponent(Shell);
   await fixture.whenStable();
@@ -147,6 +152,17 @@ describe('Shell', () => {
     fail(http.expectOne('/api/auth/logout'));
     expect(auth.me()).toBeNull();
     expect([scope.dates(), scope.portfolios()]).toEqual([[], []]);
+    expect(navigate).toHaveBeenCalledWith(['/login']);
+  });
+
+  it('leaves a 401 on logout to sessionInterceptor: one sign-out, one navigation', async () => {
+    const { el, http } = await render(viewer, undefined, provideHttpClient(withInterceptors([sessionInterceptor])));
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const signedOut = vi.spyOn(TestBed.inject(AuthService), 'signedOut');
+    ([...el.querySelectorAll('.user button')].find((b) => b.textContent?.includes('Sign out')) as HTMLButtonElement).click();
+    http.expectOne('/api/auth/logout').flush(null, { status: 401, statusText: 'Unauthorized' });
+    expect(signedOut).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith(['/login']);
   });
 
