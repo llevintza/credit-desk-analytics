@@ -24,7 +24,7 @@ PR #2's post-merge review and PR #4's re-review left a cluster of CI/governance 
 | Reproducible locally | Needs token | **`node perf/coverage-gate.mjs`** | Same |
 | License | n/a | Apache-2.0 | MS .NET library (free, closed) |
 
-Action majors with a Node 24 runtime (checkout v7, setup-dotnet v6, setup-node v7, upload-artifact v7, download-artifact v8) replace the Node 20 deprecation warnings on v4. Images are pinned by digest at the same tags already in use (`gitleaks:v8.30.0`, `postgres:17-alpine`, `node:22-alpine`, `dotnet/sdk:10.0`, `dotnet/aspnet:10.0`).
+Action majors with a Node 24 runtime (checkout v7, setup-dotnet v6, setup-node v7, upload-artifact v7, download-artifact v8) replace the Node 20 deprecation warnings on v4. Images are pinned by digest at the same tags already in use (`gitleaks:v8.30.1`, `postgres:17-alpine`, `node:22-alpine`, `dotnet/sdk:10.0`, `dotnet/aspnet:10.0`).
 
 **How to reproduce:** after `dotnet test` / `npm test -- --coverage`, `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main`. Output is the job-summary table plus the JSON to commit as `perf/coverage-baseline.json`. The floor and thresholds used by the gate are those at `--base`, not the working tree.
 
