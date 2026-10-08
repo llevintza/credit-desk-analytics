@@ -93,8 +93,26 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
         await using var host = WithFloor(clock);
         var (email, password) = await ArrangeAsync(path);
 
-        var pending = PostgresApiFactory.NewClient(host).PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password), Ct);
+        await AssertWaitsTheFloorAsync(clock, PostgresApiFactory.NewClient(host).PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password), Ct));
+    }
 
+    [Theory]
+    [InlineData("/api/auth/login/")]
+    [InlineData("/API/AUTH/LOGIN/")]
+    [InlineData("/Api/Auth/Login")]
+    public async Task Every_spelling_routing_accepts_for_login_waits_the_floor(string route)
+    {
+        // R279-01: routing matches a trailing slash in any casing, so the floor follows the endpoint, not the path.
+        var clock = new FloorClock(api.Time.GetUtcNow());
+        await using var host = WithFloor(clock);
+        var user = await api.CreateUserAsync();
+
+        await AssertWaitsTheFloorAsync(clock, PostgresApiFactory.NewClient(host).PostAsJsonAsync(route, new LoginRequest(user.Email, "not-the-password"), Ct));
+    }
+
+    /// <summary>The login is not answered one tick before its floor wait ends, and is a 401 once it has.</summary>
+    private static async Task AssertWaitsTheFloorAsync(FloorClock clock, Task<HttpResponseMessage> pending)
+    {
         var wait = Assert.Single(await clock.FloorWaitsAsync(1));
         Assert.InRange(wait, LoginFloorOptions.Default.Floor, LoginFloorOptions.Default.Floor + LoginFloorOptions.Default.MaxJitter);
         clock.Advance(wait - TimeSpan.FromTicks(1));

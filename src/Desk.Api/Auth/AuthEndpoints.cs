@@ -21,7 +21,7 @@ public static class AuthEndpoints
 
         auth.MapPost("/login", LoginAsync)
             .AllowAnonymous()
-            .WithMetadata(SkipAntiforgery.Instance, SkipRequestAudit.Instance)
+            .WithMetadata(SkipAntiforgery.Instance, SkipRequestAudit.Instance, LoginFloorMetadata.Instance)
             .RequireRateLimiting(RateLimiting.LoginPolicy)
             .WithName("Login")
             .WithSummary("Signs in with email and password and sets the session and XSRF-TOKEN cookies.")

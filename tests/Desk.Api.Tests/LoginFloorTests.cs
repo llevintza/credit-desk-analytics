@@ -13,14 +13,19 @@ public sealed class LoginFloorTests
 
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero));
 
-    private static DefaultHttpContext Login(string method = "POST", string path = "/api/auth/login")
+    private static readonly Endpoint LoginEndpoint = new(null, new EndpointMetadataCollection(LoginFloorMetadata.Instance), "Login");
+    private static readonly Endpoint OtherEndpoint = new(null, new EndpointMetadataCollection(), "Other");
+
+    /// <summary>A request routed to <paramref name="endpoint"/> (the login endpoint by default; null: unrouted).</summary>
+    private static DefaultHttpContext Request(Endpoint? endpoint)
     {
         var http = new DefaultHttpContext();
-        http.Request.Method = method;
-        http.Request.Path = path;
+        http.SetEndpoint(endpoint);
         http.Response.Body = new MemoryStream();
         return http;
     }
+
+    private static DefaultHttpContext Login() => Request(LoginEndpoint);
 
     private static RequestDelegate Answer(int status, Action? during = null) => async http =>
     {
@@ -60,17 +65,29 @@ public sealed class LoginFloorTests
     }
 
     [Theory]
-    [InlineData("POST", "/api/auth/login", StatusCodes.Status200OK)]
-    [InlineData("POST", "/api/auth/login", StatusCodes.Status429TooManyRequests)]
-    [InlineData("POST", "/API/Auth/Login", StatusCodes.Status400BadRequest)]
-    [InlineData("GET", "/api/auth/login", StatusCodes.Status401Unauthorized)]
-    [InlineData("GET", "/api/me", StatusCodes.Status401Unauthorized)]
-    [InlineData("POST", "/api/auth/logout", StatusCodes.Status401Unauthorized)]
-    public async Task Anything_but_a_login_401_answers_at_once(string method, string path, int status)
+    [InlineData(StatusCodes.Status200OK)]
+    [InlineData(StatusCodes.Status429TooManyRequests)]
+    [InlineData(StatusCodes.Status400BadRequest)]
+    public async Task A_login_that_is_not_a_401_answers_at_once(int status)
     {
-        var http = Login(method, path);
+        var http = Login();
 
         var pending = new LoginFloor(Answer(status), Options, _time).InvokeAsync(http);
+
+        Assert.True(pending.IsCompleted);
+        await pending;
+        Assert.Equal("answer", Body(http));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_401_from_any_other_endpoint_answers_at_once(bool routed)
+    {
+        // Selected by the endpoint's marker, never by the path: /api/me is a 401 for everyone signed out.
+        var http = Request(routed ? OtherEndpoint : null);
+
+        var pending = new LoginFloor(Answer(StatusCodes.Status401Unauthorized), Options, _time).InvokeAsync(http);
 
         Assert.True(pending.IsCompleted);
         await pending;
@@ -80,7 +97,7 @@ public sealed class LoginFloorTests
     [Fact]
     public async Task Only_the_login_response_is_buffered()
     {
-        var http = Login("GET", "/api/me");
+        var http = Request(OtherEndpoint);
         var original = http.Response.Body;
         Stream? seen = null;
 
