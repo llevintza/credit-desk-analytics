@@ -409,6 +409,36 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_request_waiting_in_its_users_queue_holds_no_database_permit()
+    {
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "2");
+            b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, admin.Email!);
+        var other = await SignedInOnAsync(host); // before any permit is taken: login needs one
+
+        var running = client.GetAsync("/api/health/db", Ct);   // A's one permit, and one of the two database permits
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var queued = new[] { client.GetAsync("/api/me", Ct), client.GetAsync("/api/me", Ct) }; // in A's own queue
+        await Task.Delay(100, Ct);
+
+        // Had A's queued requests taken the second database permit and the shared queue place, B would get a 429.
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.All(queued, q => Assert.False(q.IsCompleted));
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        foreach (var q in queued)
+            Assert.Equal(HttpStatusCode.OK, (await q).StatusCode);
+    }
+
+    [Fact]
     public async Task A_request_queued_behind_its_own_user_spends_one_token()
     {
         // No refill during the test: 4 tokens are all this user gets.
