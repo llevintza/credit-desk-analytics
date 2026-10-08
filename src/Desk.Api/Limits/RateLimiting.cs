@@ -74,7 +74,7 @@ public static class RateLimiting
             ? Math.Max(1, (int)Math.Ceiling(after.TotalSeconds))
             : 1;
         var http = ctx.HttpContext;
-        http.RequestServices?.GetService<ClientAddressDiagnostics>()?.Rejected(http);
+        http.RequestServices.GetRequiredService<ClientAddressDiagnostics>().Rejected(http);
         http.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
         await Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,

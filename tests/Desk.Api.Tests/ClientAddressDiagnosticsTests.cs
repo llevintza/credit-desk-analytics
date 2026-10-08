@@ -162,6 +162,10 @@ public sealed class ClientAddressDiagnosticsTests
         new ClientAddress(true).For(Request(diagnostics, RenderLb, Client));
         new ClientAddress(false).For(Request(diagnostics, RenderLb));
         Assert.Empty(_log.Lines);
+        // A host without the diagnostics (or a bare context) still resolves the shared key.
+        var bare = Request(null, RenderLb);
+        bare.RequestServices = new ServiceCollection().BuildServiceProvider();
+        Assert.Equal(RenderLb, new ClientAddress(true).For(bare));
     }
 
     [Theory]
