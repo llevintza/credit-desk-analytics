@@ -77,12 +77,26 @@ public sealed class DataSourceRegistryTests
         Assert.Contains("Maximum Pool Size=12", registry.Get(ConnectionStrings.Core).ConnectionString);
     }
 
+    [Fact]
+    public async Task DB_MAX_POOL_SIZE_accepts_up_to_Npgsql_s_own_default_of_100()
+    {
+        await using var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u",
+            ["DB_MAX_POOL_SIZE"] = "100",
+        }), new DbConnectionCounter());
+        Assert.Contains("Maximum Pool Size=100", registry.Get(ConnectionStrings.Core).ConnectionString);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("-5")]
     [InlineData("twenty")]
     [InlineData("")]
-    public async Task A_non_positive_or_junk_DB_MAX_POOL_SIZE_falls_back_to_the_default(string value)
+    [InlineData("101")]
+    [InlineData("2147483647")]
+    [InlineData("99999999999")]
+    public async Task An_out_of_range_or_junk_DB_MAX_POOL_SIZE_falls_back_to_the_default(string value)
     {
         await using var registry = new DataSourceRegistry(Config(new()
         {

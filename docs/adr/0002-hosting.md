@@ -49,4 +49,4 @@ Since #176 there is one Npgsql pool per distinct connection string (README §5.1
 | Headroom inside one instance | the rest of the 20 |
 | Deploy overlap (old and new instance) | 2 × 20 = 40 |
 
-That leaves room for the migrator, db-ops and a manual session on the smallest compute. Raise `DB_MAX_POOL_SIZE` only with a larger compute; a non-positive or junk value falls back to 20, so a typo can't lift the cap.
+That leaves room for the migrator, db-ops and a manual session on the smallest compute. Raise `DB_MAX_POOL_SIZE` only with a larger compute. It accepts 1–100 (never above Npgsql's own default); anything else falls back to 20, so a typo can't lift the cap.
