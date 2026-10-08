@@ -81,7 +81,7 @@ const FIXTURES = [
   },
   {
     name: "perf .NET benchmark (in CreditDesk.slnx, built by the api job)",
-    paths: ["perf/GridBenchmark/Bench.cs", "perf/LoadBenchmark/LoadBenchmark.csproj"],
+    paths: ["perf/GridBenchmark/Bench.cs", "perf/LoadBenchmark/LoadBenchmark.csproj", "perf/GridBenchmark/Strings.resx"],
     flags: flagsOf("api", "app", "perf"),
     jobs: jobsOf("run_api", "run_compose_smoke", "run_e2e", "run_budgets", "run_coverage"),
   },
@@ -361,4 +361,19 @@ test("every test-project input maps to the api job (or every flag)", () => {
     }
   }
   assert.ok(checked >= 6, `checked ${checked} inputs`);
+});
+
+// Every project in CreditDesk.slnx is built by the api job, so its files must run it (R173-06).
+test("every solution project maps to the api job (or every flag)", () => {
+  const repo = new URL("../..", import.meta.url).pathname;
+  const slnx = readFileSync(join(repo, "CreditDesk.slnx"), "utf8");
+  const paths = [...slnx.matchAll(/Path="([^"]+)"/g)].map((m) => m[1].replaceAll("\\", "/"));
+  assert.ok(paths.length >= 9, paths.join(","));
+  for (const p of paths) {
+    for (const probe of [join(dirname(p), "X.cs"), join(dirname(p), "Strings.resx"), p]) {
+      const areas = areasFor(probe);
+      assert.ok(areas === null || areas.some((a) => JOBS.run_api.includes(a)), `${probe} maps to [${areas}]`);
+    }
+  }
+  assert.deepEqual(areasFor("perf/payload-size.mjs"), ["perf"]);
 });

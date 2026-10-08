@@ -76,9 +76,10 @@ const AREA_PREFIXES = Object.freeze({
   perf: ["perf/"],
 });
 
-// .NET projects under perf/ (GridBenchmark, LoadBenchmark) are in CreditDesk.slnx and
-// reference src/, so the api job's solution build must run for them too.
-const PERF_DOTNET = /^perf\/.+\.(cs|csproj|fsproj|props|targets)$/;
+// Every perf/ subdirectory is a .NET benchmark project in CreditDesk.slnx that references
+// src/, so any file in one (.cs, .csproj, .resx, content) runs the api job's solution
+// build too. The perf JS tools all sit at the top level of perf/.
+const PERF_DOTNET = /^perf\/[^/]+\//;
 
 /** Areas a single path touches: `null` means shared/unknown (every flag), `[]` means docs. */
 export function areasFor(path) {
