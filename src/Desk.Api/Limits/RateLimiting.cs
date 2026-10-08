@@ -1,9 +1,7 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
 using Desk.Api.Auth;
-using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.Extensions.Options;
 
 namespace Desk.Api.Limits;
 
@@ -20,7 +18,6 @@ public static class RateLimiting
     {
         services.AddSingleton(limits);
         services.AddSingleton(clients);
-        services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
