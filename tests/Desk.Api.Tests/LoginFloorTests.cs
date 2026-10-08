@@ -52,6 +52,26 @@ public sealed class LoginFloorTests
     }
 
     [Fact]
+    public async Task A_body_left_unflushed_in_the_pipe_is_still_sent()
+    {
+        var http = Login();
+        RequestDelegate unflushed = h =>
+        {
+            h.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            var span = h.Response.BodyWriter.GetSpan(6);
+            Encoding.UTF8.GetBytes("answer", span);
+            h.Response.BodyWriter.Advance(6);
+            return Task.CompletedTask;
+        };
+
+        var pending = new LoginFloor(unflushed, Options, _time).InvokeAsync(http);
+        _time.Advance(Options.Floor + Options.MaxJitter);
+        await pending.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.Equal("answer", Body(http));
+    }
+
+    [Fact]
     public async Task A_401_that_already_took_longer_than_the_floor_is_not_delayed_further()
     {
         var http = Login();

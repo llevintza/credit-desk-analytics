@@ -37,10 +37,13 @@ public sealed class LoginFloor(RequestDelegate next, LoginFloorOptions options, 
         var started = time.GetTimestamp();
         var body = http.Features.GetRequiredFeature<IHttpResponseBodyFeature>();
         using var buffer = new MemoryStream();
-        http.Features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(buffer));
+        var buffering = new StreamResponseBodyFeature(buffer);
+        http.Features.Set<IHttpResponseBodyFeature>(buffering);
         try
         {
             await next(http);
+            // Flushes anything still in the BodyWriter pipe into the buffer (R279-02).
+            await buffering.CompleteAsync();
         }
         finally
         {
