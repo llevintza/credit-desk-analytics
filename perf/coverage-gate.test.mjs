@@ -2102,3 +2102,9 @@ test("an override needs every suite measured", () => {
   }
 });
 
+test("ci.yml passes --suites from the change flags", () => {
+  const yml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  assert.ok(yml.includes('--suites "$SUITES"'));
+  assert.ok(yml.includes("RUN_API: ${{ needs.changes.outputs.run_api }}"));
+  assert.ok(yml.includes("RUN_WEB: ${{ needs.changes.outputs.run_web }}"));
+});
