@@ -15,13 +15,14 @@ export function columnStateOf(state: PresetState): ColumnState[] {
 }
 
 /**
- * What the grid applies for a preset. Identity columns stay visible and pinned whatever the preset says, and a
- * column the preset doesn't mention is hidden and unsorted, so the previous view's sort never leaks into the next
- * request.
+ * What the grid applies for a preset. Identity columns stay visible and pinned whatever the preset says (keeping
+ * the preset's own sort and width for them), and a column the preset doesn't mention is hidden and unsorted, so the
+ * previous view's sort never leaks into the next request.
  */
 export function presetColumnState(state: PresetState): ApplyColumnStateParams {
-  const pinned = pinnedLeft.map((colId) => ({ colId, hide: false, pinned: 'left' as const }));
-  const rest = columnStateOf(state).filter((s) => !pinnedLeft.includes(s.colId));
+  const own = columnStateOf(state);
+  const pinned = pinnedLeft.map((colId) => ({ ...own.find((s) => s.colId === colId), colId, hide: false, pinned: 'left' as const }));
+  const rest = own.filter((s) => !pinnedLeft.includes(s.colId));
   return { state: [...pinned, ...rest], applyOrder: true, defaultState: { hide: true, sort: null } };
 }
 
