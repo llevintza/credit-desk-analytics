@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
 import type { ColGroupDef, GridApi, GridOptions, GridReadyEvent } from 'ag-grid-community';
@@ -180,9 +181,11 @@ export class Positions {
         this.preset.set(name);
         Positions.remember(name);
       },
-      error: () => {
+      error: (e: unknown) => {
         this.saving.set(false);
-        this.loadError.set(`Could not save "${name}". Names must be 1–64 characters and not a built-in name.`);
+        // The server's problem detail says why (bad name, preset limit, conflict, rate limit); else a generic line.
+        const detail = Positions.problemDetail(e);
+        this.loadError.set(detail ? `Could not save "${name}": ${detail}` : `Could not save "${name}".`);
       },
     });
   }
@@ -236,6 +239,15 @@ export class Positions {
 
   private displayed(): string[] {
     return this.grid!.getAllDisplayedColumns().map((c) => c.getColId());
+  }
+
+  /** The `detail` (else `title`) of an RFC 9457 problem response, or null for a network error or a plain body. */
+  private static problemDetail(e: unknown): string | null {
+    const body: unknown = e instanceof HttpErrorResponse ? e.error : null;
+    if (typeof body !== 'object' || body === null) return null;
+    const { detail, title } = body as { detail?: unknown; title?: unknown };
+    for (const text of [detail, title]) if (typeof text === 'string' && text) return text;
+    return null;
   }
 
   private static remembered(): string | null {
