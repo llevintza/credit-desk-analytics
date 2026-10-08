@@ -10,12 +10,18 @@ namespace Desk.Seeder;
 /// <summary>The seeding workflow (README §5.5, §14.2), callable from the CLI and from integration tests.</summary>
 public static class SeedRunner
 {
-    /// <summary>Measured committed size at scale 1.0 (README §5.4). Used only to print a peak-size estimate before TRUNCATE.</summary>
+    /// <summary>Measured committed size at scale 1.0 (README §5.4). The new-data half of the reseed peak estimate.</summary>
     public const double MeasuredMegabytesAtScale1 = 271;
 
-    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget.</returns>
+    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap.</returns>
     /// <remarks>Cancelling <paramref name="ct"/> aborts the COPY and rolls back the single seeding transaction.</remarks>
-    public static async Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err, CancellationToken ct = default)
+    public static Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err, CancellationToken ct = default) =>
+        RunAsync(options, connectionString, output, err, DatabaseSizeAsync, ct);
+
+    /// <param name="databaseSize">Reads the current database size in bytes for the pre-TRUNCATE peak check. Injectable so
+    /// tests can simulate an unreadable size; any failure other than cancellation refuses the reseed (fail closed).</param>
+    public static async Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err,
+        Func<NpgsqlConnection, CancellationToken, Task<long>> databaseSize, CancellationToken ct)
     {
         var total = Stopwatch.StartNew();
         await using (var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
@@ -52,16 +58,35 @@ public static class SeedRunner
             }
             else
             {
+                // Pre-flight peak check (#109), truncate paths only: the skip path above never reads the size to refuse
+                // (its final DB_SIZE_MB report below is best-effort and can't fail it).
+                // TRUNCATE keeps the old files until COMMIT, so the reseed peaks near current size + new data.
+                long dbBefore;
+                try { dbBefore = await databaseSize(conn, ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    err.WriteLine($"ERROR: cannot read the current database size ({ex.GetType().Name}: {ex.Message}), so the reseed peak " +
+                                  $"cannot be checked against the {options.CapMegabytes} MB cap. Refused before TRUNCATE; nothing was changed.");
+                    return 2;
+                }
+                var peakEstMb = PeakEstimateMegabytes(dbBefore, options.Scale);
+                output.WriteLine($"SEED_PEAK_EST_MB={peakEstMb} (current {dbBefore / 1024 / 1024} MB + new data ~{NewDataMegabytes(options.Scale)} MB; old files stay until COMMIT; cap {options.CapMegabytes} MB)");
+                if (peakEstMb > options.CapMegabytes)
+                {
+                    err.WriteLine($"ERROR: reseed peak estimate is {peakEstMb} MB (current database {dbBefore / 1024 / 1024} MB + new data ~{NewDataMegabytes(options.Scale)} MB), " +
+                                  $"over the {options.CapMegabytes} MB storage cap. Refused before TRUNCATE; data and app.seed_metadata are unchanged. " +
+                                  "TRUNCATE keeps the old files until COMMIT, so a reseed needs about old + new. If the database's real storage cap is higher, " +
+                                  "pass a larger --cap-mb (README §10). A full scale-1.0 reseed (~534 MB peak) is refused at the 512 MB default on purpose.");
+                    return 2;
+                }
+
                 var gen = Stopwatch.StartNew();
                 var universe = Universe.Generate(options.Seed, (double)options.Scale, options.AsOf);
                 var tables = new Tables(options.Seed, (double)options.Scale, options.AsOf, universe);
                 output.WriteLine($"Generating as of {options.AsOf:yyyy-MM-dd} (prior business day {tables.PriorBusinessDay:yyyy-MM-dd}): " +
                                   $"{universe.Deals.Count} deals, {universe.Bonds.Count} bonds, {tables.Positions.Count} positions");
 
-                var dbBefore = await DatabaseSizeAsync(conn, ct);
                 var seededBefore = await SeededRelationBytesAsync(conn, ct);
-                var peakEstMb = (dbBefore + (long)(MeasuredMegabytesAtScale1 * (double)options.Scale * 1024 * 1024)) / 1024 / 1024;
-                output.WriteLine($"SEED_PEAK_EST_MB={peakEstMb} (old files stay until COMMIT; later reseeds peak near 2×)");
 
                 // One transaction: a failed or over-budget reseed leaves the previous data in place (README §14.3).
                 await using (var tx = await conn.BeginTransactionAsync(ct))
@@ -111,7 +136,17 @@ public static class SeedRunner
             }
         }
 
-        long bytes = await DatabaseSizeAsync(conn, ct);
+        // Best-effort report read: an unreadable size must not fail a skipped (or already committed) run (#109 req. 2).
+        // Only --size-report, whose whole job is this number, fails on it.
+        long bytes;
+        try { bytes = await databaseSize(conn, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            output.WriteLine("DB_SIZE_MB=unknown");
+            output.WriteLine($"ELAPSED_S={total.Elapsed.TotalSeconds:F1}");
+            err.WriteLine($"WARN: cannot read pg_database_size ({ex.GetType().Name}: {ex.Message}).");
+            return options.SizeReportOnly ? 2 : 0;
+        }
         var mb = bytes / 1024 / 1024;
         output.WriteLine($"DB_SIZE_MB={mb}");
         output.WriteLine($"ELAPSED_S={total.Elapsed.TotalSeconds:F1}");
@@ -124,13 +159,31 @@ public static class SeedRunner
                 err.WriteLine($"ERROR: database is {mb} MB, over the {options.MaxMegabytes} MB budget (README §5.4).");
                 return 2;
             }
-            if (!skipped)
-                err.WriteLine($"WARN: pg_database_size is {mb} MB (budget {options.MaxMegabytes} MB); committed data was accepted by the pre-commit guard.");
+            err.WriteLine(skipped
+                ? $"WARN: pg_database_size is {mb} MB, over the {options.MaxMegabytes} MB budget; the seed is unchanged, so this skipped run still exits 0."
+                : $"WARN: pg_database_size is {mb} MB (budget {options.MaxMegabytes} MB); committed data was accepted by the pre-commit guard.");
         }
         return 0;
     }
 
-    internal static async Task<long> DatabaseSizeAsync(NpgsqlConnection conn, CancellationToken ct)
+    /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).</summary>
+    public static long PeakEstimateMegabytes(long currentBytes, decimal scale) =>
+        (currentBytes + (long)(MeasuredMegabytesAtScale1 * (double)scale * 1024 * 1024)) / 1024 / 1024;
+
+    static long NewDataMegabytes(decimal scale) => (long)(MeasuredMegabytesAtScale1 * (double)scale);
+
+    /// <summary>Maps SQLSTATE 53100 (disk_full) to an actionable message; other errors keep the generic form. Exit code stays 3.</summary>
+    public static string DescribeError(Exception e)
+    {
+        for (var ex = e; ex is not null; ex = ex.InnerException)
+            if (ex is PostgresException { SqlState: PostgresErrorCodes.DiskFull })
+                return "ERROR: the database ran out of disk space (SQLSTATE 53100, disk_full). The seeding transaction was rolled back; " +
+                       "the previous data is kept. A reseed needs about old + new data until COMMIT: compare SEED_PEAK_EST_MB with the " +
+                       "storage cap, free space or raise the cap, or seed at a lower --scale (README §10).";
+        return $"ERROR: {e.GetType().Name}: {e.Message}";
+    }
+
+    public static async Task<long> DatabaseSizeAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         await using var size = new NpgsqlCommand("SELECT pg_database_size(current_database())", conn);
         return (long)(await size.ExecuteScalarAsync(ct))!;

@@ -24,6 +24,7 @@ public sealed class SeedOptionsTests
         Assert.False(o.Force);
         Assert.False(o.SizeReportOnly);
         Assert.Equal(400, o.MaxMegabytes);
+        Assert.Equal(512, o.CapMegabytes);
         Assert.Equal(new DateOnly(2026, 10, 6), o.AsOf);
     }
 
@@ -84,6 +85,27 @@ public sealed class SeedOptionsTests
         var ex = Assert.Throws<ArgumentException>(() => Parse(["--seed"]));
         Assert.Contains("needs a value", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Parse_cap_mb_is_separate_from_max_mb()
+    {
+        var o = Parse(["--force", "--cap-mb", "1024", "--max-mb", "300"]);
+        Assert.Equal(1024, o.CapMegabytes);
+        Assert.Equal(300, o.MaxMegabytes);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    public void Parse_rejects_non_positive_cap_mb(string cap)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => Parse(["--force", "--cap-mb", cap]));
+        Assert.Contains("--cap-mb", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_cap_mb_needs_a_number() =>
+        Assert.Throws<FormatException>(() => Parse(["--force", "--cap-mb", "lots"]));
 
     [Theory]
     [InlineData("2026-10-05T00:00:00Z", "2026-10-02")] // Monday: back over the weekend to Friday

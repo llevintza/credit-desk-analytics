@@ -71,7 +71,11 @@
   @if (last(); as l) {
     <span class="num" data-testid="last-request">{{ l.ms }} ms</span>
     @if (l.cache) { <span data-testid="x-cache">X-Cache {{ l.cache }}</span> }
-    @if (l.bytes !== null) { <span class="num">{{ (l.bytes / 1024).toFixed(1) }} KB</span> }
+    @if (l.bytes !== null) {
+      <span class="num" data-testid="bytes" [attr.title]="l.bytesApprox ? 'Approximate: parallel blocks overlapped, so the size may belong to a sibling block' : null">
+        @if (l.bytesApprox) { <span aria-hidden="true">≈ </span><span class="sr-only">approximately </span> }{{ (l.bytes / 1024).toFixed(1) }} KB
+      </span>
+    }
   }
   <span class="spacer"></span>
   @if (version(); as v) { <span class="num muted">build {{ v }}</span> }
