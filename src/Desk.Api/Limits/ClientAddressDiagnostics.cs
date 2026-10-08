@@ -76,6 +76,18 @@ public sealed class ClientAddressDiagnostics(
 
     private void Log(LogLevel level, string what, HttpContext http, string? policy, int suppressed)
     {
+        try
+        {
+            Write(level, what, http, policy, suppressed);
+        }
+        catch (Exception)
+        {
+            // Diagnostics must never change the response: a failing logger can't turn a 429 into a 500 (R175-03).
+        }
+    }
+
+    private void Write(LogLevel level, string what, HttpContext http, string? policy, int suppressed)
+    {
         var peer = http.Connection.RemoteIpAddress;
         var headers = http.Request.Headers;
         var address = ClientAddress.Resolve(peer, headers, clients.BehindProxy, out var source);

@@ -187,6 +187,15 @@ public sealed class ClientAddressDiagnosticsTests
         Assert.Equal(RenderLb, new ClientAddress(true).For(bare));
     }
 
+    [Fact]
+    public void A_throwing_logger_never_reaches_the_request()
+    {
+        var diagnostics = new ClientAddressDiagnostics(new ClientAddress(true), Options.Create(new ForwardedHeadersOptions()), _time, new ThrowingLogger());
+        var http = Request(diagnostics, RenderLb);
+        diagnostics.Rejected(http);
+        Assert.Equal(RenderLb, new ClientAddress(true).For(http)); // NoForwardedFor: warned, and the logger throws
+    }
+
     [Theory]
     [InlineData(CfEdge, "cf")]
     [InlineData("2606:4700:10::ac43:1b0a", "cf")]
@@ -208,6 +217,14 @@ public sealed class ClientAddressDiagnosticsTests
     [InlineData("2001:db8:1234:5678::9", "2001:db8:1234::/48 (public)")]
     public void A_private_peer_is_logged_whole_and_a_public_one_cut_to_its_network(string? peer, string logged) =>
         Assert.Equal(logged, ClientAddressDiagnostics.Redact(peer is null ? null : IPAddress.Parse(peer)));
+
+    private sealed class ThrowingLogger : ILogger<ClientAddressDiagnostics>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("log sink down");
+    }
 
     internal sealed class CapturingLogger : ILogger<ClientAddressDiagnostics>
     {
