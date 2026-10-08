@@ -6,6 +6,9 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
+  // ADR-0009 measurement run is opt-in: without PERF it is not collected at all, so the default run reports
+  // 0 skipped (#210). perf.spec.ts keeps its own test.skip guard as a backstop.
+  testIgnore: process.env.PERF ? [] : ['**/perf.spec.ts'],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

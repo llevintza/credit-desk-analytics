@@ -1,5 +1,6 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
-import { forkJoin } from 'rxjs';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Subscription, forkJoin } from 'rxjs';
 import { Portfolio } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
 
@@ -7,6 +8,7 @@ import { DeskApi } from '../data-access/desk-api';
 @Injectable({ providedIn: 'root' })
 export class ScopeService {
   private readonly api = inject(DeskApi);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly dates = signal<string[]>([]);
   readonly asOf = signal<string | null>(null);
@@ -27,27 +29,35 @@ export class ScopeService {
   /** True once dates are known or loading failed: pages can start their first request. */
   readonly ready = computed(() => this.asOf() !== null || this.error());
   private loading = false;
+  private loadSub?: Subscription;
 
   /** Idempotent: the shell and the first page may both ask; one request goes out. */
   load(): void {
     if (this.loading || this.dates().length) return;
     this.loading = true;
-    forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() }).subscribe({
-      next: ({ asOf, portfolios }) => {
-        this.loading = false;
-        this.dates.set(asOf.dates);
-        this.asOf.set(asOf.latest);
-        this.portfolios.set(portfolios);
-      },
-      error: () => {
-        this.loading = false;
-        this.error.set(true);
-      },
-    });
+    // Root injector: fires only at app teardown; reset() is what cancels an in-flight load on sign-out.
+    this.loadSub = forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: ({ asOf, portfolios }) => {
+          this.loading = false;
+          this.dates.set(asOf.dates);
+          this.asOf.set(asOf.latest);
+          this.portfolios.set(portfolios);
+        },
+        error: () => {
+          this.loading = false;
+          this.error.set(true);
+        },
+      });
   }
 
-  /** Forget everything (sign-out / a new account): the next load reads this user's entitlements. */
+  /**
+   * Forget everything (sign-out / a new account): the next load reads this user's entitlements.
+   * An in-flight load is cancelled first, so a late response can't write the previous user's scope back.
+   */
   reset(): void {
+    this.loadSub?.unsubscribe();
     this.loading = false;
     this.dates.set([]);
     this.asOf.set(null);

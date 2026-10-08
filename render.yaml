@@ -17,8 +17,8 @@ services:
         sync: false
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
-      # Render terminates TLS: trust X-Forwarded-For/Proto from its proxy (one hop) so the app sees https and the
-      # real client IP (Secure cookies, antiforgery, HSTS, per-IP login limit). ADR-0005.
+      # Enables X-Forwarded-Proto handling and the ClientAddress resolver (ADR-0005, #116). The client IP comes from
+      # CF-Connecting-IP via Render's balancer, not from this middleware.
       - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED
         value: "true"
       - key: MAINTENANCE_MODE

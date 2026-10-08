@@ -85,6 +85,23 @@ public sealed class ClientAddressTests
     }
 
     [Theory]
+    [InlineData(RenderLb, false, $"{Client}, {CfEdge}", Client, ClientAddress.Source.Peer, RenderLb)]
+    [InlineData(Client, true, $"{Client}, {CfEdge}", Client, ClientAddress.Source.UntrustedPeer, Client)]
+    [InlineData(RenderLb, true, null, Client, ClientAddress.Source.NoForwardedFor, RenderLb)]
+    [InlineData(RenderLb, true, Client, null, ClientAddress.Source.DirectHop, Client)]
+    [InlineData(RenderLb, true, $"{Client}, {CfEdge}, 10.9.8.7", Client, ClientAddress.Source.InternalHop, "10.9.8.7")]
+    [InlineData(RenderLb, true, $"{Client}, {CfEdge}", Client, ClientAddress.Source.CfConnectingIp, Client)]
+    [InlineData(RenderLb, true, $"{Client}, {CfEdge}", null, ClientAddress.Source.Edge, CfEdge)]
+    public void Each_rule_reports_which_source_picked_the_key(string peer, bool behindProxy, string? xff, string? cf, ClientAddress.Source source, string expectedKey)
+    {
+        var h = new HeaderDictionary();
+        if (xff is not null) h["X-Forwarded-For"] = xff;
+        if (cf is not null) h["CF-Connecting-IP"] = cf;
+        var key = ClientAddress.Resolve(IPAddress.Parse(peer), h, behindProxy, out var actual);
+        Assert.Equal((source, expectedKey), (actual, key?.ToString()));
+    }
+
+    [Theory]
     [InlineData("true", true)]
     [InlineData("True", true)]
     [InlineData("false", false)]

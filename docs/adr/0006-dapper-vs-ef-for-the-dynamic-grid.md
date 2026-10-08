@@ -54,6 +54,17 @@ The fix came from an `EXPLAIN ANALYZE` of the summary variants (174 aggregates, 
 
 Almost all of the cost was the `numeric → float8` cast, repeated twice per weighted column per row. `OFFSET 0` stops Postgres from flattening the LATERAL back into the expressions.
 
+**The weight is the position's size** (#131). The lateral now computes `abs(market_value)::float8`. A signed weight is right only while every position is long: a short would cancel longs in the denominator and could flip its sign. The README §8 (and §6 P1) rule is ABS-weighted, with zero or no weight giving `null`. `abs()` runs once per row in the same lateral and costs nothing measurable. `GridBenchmark`, 80 iterations, page + summary p50 at scale 1.0, alternating builds. Two earlier rounds were discarded (other load on the machine swung both builds by ±40%):
+
+| Round | Risk before / after | All before / after |
+|---|---:|---:|
+| 3–4 | 37.0, 36.5 / 38.2, 36.2 ms | 89.8, 97.1 / 93.9, 96.3 ms |
+
+```
+# local stack only
+DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 80    # "page + summary" rows
+```
+
 **Scrolling:**
 - The totals depend on the filter, not on paging or sort, so they are cached per view (`GridQuery.SummaryKey`).
 - Every block after a view's first reads only its page: the 2–6 ms rows above.
@@ -62,15 +73,33 @@ Almost all of the cost was the `numeric → float8` cast, repeated twice per wei
 
 | Request | p50 ms | p95 ms | Budget |
 |---|---:|---:|---|
-| MISS (a filter never seen before) | 11.7 | 13.9 | ≤ 150 |
-| HIT | 0.7 | 2.0 | ≤ 15 |
+| MISS: **the whole book's first view** (every row, a filter value never seen before; #129) | 42.7 | **71.0** | ≤ 150 |
+| HIT | 1.7 | 4.3 | ≤ 15 |
+
+**Corrected in #129 (R121-F5).** The MISS row above used to say 11.7 / 13.9 ms. That run's filter, `spread_bp > ~1,100`, selected only the B/CCC tail, not the whole-book first view the 150 ms budget is about. The script now uses a threshold below every spread, unique per iteration, so every row is counted and summarised, and a `whole book` check asserts `rowCount ≥ 19,000` at scale 1.0. The same API build and local database were used for both runs:
+
+| MISS filter | rows | p50 ms | p95 ms |
+|---|---:|---:|---:|
+| `spread_bp > ~1,100` (before) | the B/CCC tail | 14.0 | 18.6 |
+| `spread_bp > −1e6·VU − n` (after) | every row (~20k) | 42.7 | 71.0 |
+
+```
+# local stack only; seed 42, scale 1.0; per-user limits raised in the local API process
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5185 \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
+✓ 'p(95)<150' http_req_duration{scenario:miss} p(95)=70.98ms
+✓ 'p(95)<15'  http_req_duration{scenario:hit}  p(95)=4.25ms
+✓ checks rate=100.00% (28,568 of 28,568: login, 200, MISS, whole book, X-Cache present)
+  { scenario:miss }: p(50)=42.71ms p(95)=70.98ms max=146.3ms
+  { scenario:hit }:  p(50)=1.69ms  p(95)=4.25ms  max=143.14ms
+```
 
 **How to reproduce:**
 
 ```
 DATABASE_URL=… dotnet run -c Release --project src/Desk.Seeder -- --force --scale 1.0 --as-of 2026-10-06
 DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out
-# API with RATE_LIMIT_PER_USER_PER_MIN/BURST raised (one k6 user), then:
+# Local stack only. API with RATE_LIMIT_PER_USER_PER_MIN/BURST raised in its own process (one k6 user), then:
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5181 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ```
