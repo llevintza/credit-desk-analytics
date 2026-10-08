@@ -1,0 +1,33 @@
+<section class="toolbar" aria-label="Fund performance controls">
+  <label class="field">
+    <span>Fund</span>
+    <select data-testid="fund" aria-label="Fund" (change)="setFund($event)">
+      @for (f of scope.funds(); track f.fundId) {
+        <option [value]="f.fundId" [selected]="f.fundId === fundId()">{{ f.fundName }}</option>
+      }
+    </select>
+  </label>
+  <div class="ranges" role="group" aria-label="Range">
+    @for (r of ranges; track r) {
+      <button type="button" [attr.data-testid]="'range-' + r" [class.active]="r === range()" [attr.aria-pressed]="r === range()"
+              (click)="range.set(r)">{{ r === '1Y' ? 'Last 12M' : r }}</button>
+    }
+  </div>
+  @if (range() === 'CUSTOM') {
+    <label class="field">From <input type="month" data-testid="from" aria-label="From month" (change)="setMonth('from', $event)" /></label>
+    <label class="field">To <input type="month" data-testid="to" aria-label="To month" (change)="setMonth('to', $event)" /></label>
+  }
+</section>
+
+@switch (state().kind) {
+  @case ('error') { <div class="error-tile" role="alert">Could not load fund performance. Try another range or reload.</div> }
+  @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading fund performance"></div> }
+}
+
+@if (view(); as v) {
+  <p class="caption" data-testid="caption">
+    {{ v.perf.fundName }} · {{ v.perf.range }} · {{ v.perf.months.length }} month{{ v.perf.months.length === 1 ? '' : 's' }}
+    @if (v.perf.months.length === 0) { — no data in this range }
+  </p>
+  <ag-grid-angular class="grid" data-testid="fund-grid" [gridOptions]="gridOptions" [columnDefs]="v.columns" [rowData]="v.rows" />
+}
