@@ -1,5 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { AuthService } from '../core/auth.service';
@@ -18,6 +18,7 @@ import { HealthService } from '../core/health.service';
 export class Login {
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly api = toSignal(inject(HealthService).state(), { initialValue: { kind: 'waking', attempt: 0 } as const });
   protected readonly waking = computed(() => this.api().kind === 'waking');
@@ -44,7 +45,7 @@ export class Login {
     }
     this.busy.set(true);
     this.error.set(null);
-    this.auth.login(email, password).subscribe({
+    this.auth.login(email, password).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => void this.router.navigate(['/positions']),
       error: (e: unknown) => {
         this.busy.set(false);
