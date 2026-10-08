@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="900" viewBox="0 0 1500 900" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+    <style>
+      .t{font-size:22px;font-weight:700;fill:#0f172a}
+      .h{font-size:16px;font-weight:700;fill:#0f172a}
+      .b{font-size:13.5px;fill:#334155}
+      .s{font-size:12.5px;fill:#475569}
+      .lab{font-size:12.5px;fill:#1e293b}
+      .tag{font-size:11.5px;font-weight:700;letter-spacing:.06em;fill:#64748b}
+      .n{font-size:13px;font-weight:700;fill:#ffffff}
+    </style>
+  </defs>
+  <rect width="1500" height="900" fill="#ffffff"/>
+  <text x="40" y="48" class="t">Credit Desk Analytics: deployment and CI/CD</text>
+  <text x="40" y="74" class="s">Every change goes through a pull request; a merge to main migrates, seeds, deploys and verifies the release with no manual steps</text>
+
+  <!-- GitHub -->
+  <rect x="40" y="105" width="1420" height="380" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="60" y="134" class="tag">GITHUB · PRIVATE REPOSITORY · GITHUB ACTIONS</text>
+
+  <rect x="60" y="152" width="200" height="150" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="76" y="178" class="h">Pull request</text>
+  <text x="76" y="202" class="b">One phase per PR</text>
+  <text x="76" y="220" class="b">ADR for each design</text>
+  <text x="76" y="238" class="b">choice, with measured</text>
+  <text x="76" y="256" class="b">numbers; Conventional</text>
+  <text x="76" y="274" class="b">Commits</text>
+
+  <line x1="262" y1="227" x2="296" y2="227" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="298" y="152" width="560" height="314" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="314" y="178" class="h">CI: required checks on every PR (ci.yml)</text>
+  <text x="314" y="206" class="b"><tspan font-weight="700">api</tspan>  dotnet build -warnaserror · xUnit + Testcontainers (real Postgres)</text>
+  <text x="314" y="226" class="b">       · no pending EF model changes</text>
+  <text x="314" y="252" class="b"><tspan font-weight="700">web</tspan>  lint · Vitest · production build with bundle budgets</text>
+  <text x="314" y="278" class="b"><tspan font-weight="700">e2e</tspan>  Docker Compose stack, seeded · Playwright flows,</text>
+  <text x="314" y="298" class="b">       no console / CSP errors, light + dark screenshots</text>
+  <text x="314" y="324" class="b"><tspan font-weight="700">budgets</tspan>  payload size per block · k6 p95 latency (cache</text>
+  <text x="314" y="344" class="b">       miss and hit) · totals checked against independent SQL</text>
+  <text x="314" y="370" class="b"><tspan font-weight="700">coverage</tspan>  ≥ 80% on changed lines; overall never drops</text>
+  <text x="314" y="396" class="b"><tspan font-weight="700">security</tspan>  gitleaks over history · actionlint + shellcheck</text>
+  <text x="314" y="422" class="b"><tspan font-weight="700">smoke</tspan>  compose up → /health, /, auth-gated /api</text>
+  <text x="314" y="448" class="s">Per-area runs: docs-only changes skip the heavy jobs</text>
+
+  <line x1="860" y1="227" x2="894" y2="227" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="862" y="214" class="lab">merge</text>
+
+  <rect x="896" y="152" width="544" height="314" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="912" y="178" class="h">CD: deploy.yml on push to main (production environment)</text>
+  <circle cx="924" cy="208" r="11" fill="#0f766e"/><text x="920" y="213" class="n">1</text>
+  <text x="944" y="213" class="b">Build EF Core migrations bundle + seeder</text>
+  <circle cx="924" cy="244" r="11" fill="#0f766e"/><text x="920" y="249" class="n">2</text>
+  <text x="944" y="249" class="b">Migrate Neon (expand → deploy → contract;</text>
+  <text x="944" y="267" class="b">every migration backward compatible)</text>
+  <circle cx="924" cy="296" r="11" fill="#0f766e"/><text x="920" y="301" class="n">3</text>
+  <text x="944" y="301" class="b">Seed --if-changed (deterministic synthetic data,</text>
+  <text x="944" y="319" class="b">versioned in seed_metadata)</text>
+  <circle cx="924" cy="348" r="11" fill="#0f766e"/><text x="920" y="353" class="n">4</text>
+  <text x="944" y="353" class="b">Call Render deploy hook pinned to the commit SHA</text>
+  <circle cx="924" cy="384" r="11" fill="#0f766e"/><text x="920" y="389" class="n">5</text>
+  <text x="944" y="389" class="b">Smoke test until /health reports that SHA</text>
+  <text x="912" y="428" class="s">Only the tip of main is released; no push is dropped.</text>
+  <text x="912" y="448" class="s">Manual db-ops.yml: migrate · guarded reseed · size report.</text>
+
+  <!-- arrows down -->
+  <path d="M1160 468 L1160 600" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="1172" y="530" class="lab">steps 2–3: migrate + seed</text>
+  <path d="M960 468 L960 545 L 600 545 L 600 600" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="612" y="534" class="lab">step 4: deploy hook ?ref=&lt;sha&gt;</text>
+
+  <!-- Render -->
+  <rect x="40" y="600" width="760" height="270" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="60" y="628" class="tag">RENDER · DOCKER WEB SERVICE · US EAST (VIRGINIA)</text>
+  <text x="60" y="654" class="h">credit-desk-analytics.onrender.com</text>
+  <rect x="60" y="672" width="230" height="180" rx="8" fill="#ffffff" stroke="#86efac"/>
+  <text x="74" y="696" class="h">Multi-stage Dockerfile</text>
+  <text x="74" y="720" class="b">1. node 22: build the</text>
+  <text x="74" y="738" class="b">    Angular SPA</text>
+  <text x="74" y="760" class="b">2. .NET 10 SDK: publish</text>
+  <text x="74" y="778" class="b">    API, copy SPA to wwwroot</text>
+  <text x="74" y="800" class="b">3. aspnet 10 runtime,</text>
+  <text x="74" y="818" class="b">    non-root user</text>
+  <line x1="292" y1="760" x2="326" y2="760" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="328" y="672" width="452" height="180" rx="8" fill="#ffffff" stroke="#86efac"/>
+  <text x="344" y="696" class="h">Running container</text>
+  <text x="344" y="720" class="b">One origin serves the SPA and /api (no CORS)</text>
+  <text x="344" y="742" class="b">Starts the app only; never runs DDL at boot</text>
+  <text x="344" y="764" class="b">/health returns the build's git SHA</text>
+  <text x="344" y="786" class="b">Secrets only in the Render dashboard (DATABASE_URL)</text>
+  <text x="344" y="808" class="b">Kill switch: MAINTENANCE_MODE=true → 503</text>
+  <text x="344" y="830" class="s">Free tier sleeps when idle: first visit takes ~30–60 s to wake</text>
+
+  <!-- Neon -->
+  <rect x="860" y="600" width="600" height="270" rx="12" fill="#faf5ff" stroke="#a855f7" stroke-width="1.5"/>
+  <text x="880" y="628" class="tag">NEON · MANAGED POSTGRES 17</text>
+  <text x="880" y="654" class="h">One project, one database, schema per data source</text>
+  <text x="880" y="684" class="b">Direct endpoint; the app keeps its own Npgsql pool,</text>
+  <text x="880" y="702" class="b">capped explicitly (DB_MAX_POOL_SIZE, default 20)</text>
+  <text x="880" y="728" class="b">TLS required; connection string stored only as a GitHub</text>
+  <text x="880" y="746" class="b">production-environment secret and in the Render dashboard</text>
+  <text x="880" y="772" class="b">Scale-to-zero when idle; the cache-first reads keep</text>
+  <text x="880" y="790" class="b">cold queries rare</text>
+  <text x="880" y="816" class="b">Synthetic structured-credit data only (~270 MB seeded)</text>
+
+  <line x1="800" y1="740" x2="858" y2="740" stroke="#334155" stroke-width="2" marker-end="url(#a)" marker-start="url(#a)"/>
+  <text x="808" y="728" class="lab">SQL</text>
+</svg>
