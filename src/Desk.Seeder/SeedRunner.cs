@@ -58,7 +58,8 @@ public static class SeedRunner
             }
             else
             {
-                // Pre-flight peak check (#109), truncate paths only: the skip path above never reads the size to refuse.
+                // Pre-flight peak check (#109), truncate paths only: the skip path above never reads the size to refuse
+                // (its final DB_SIZE_MB report below is best-effort and can't fail it).
                 // TRUNCATE keeps the old files until COMMIT, so the reseed peaks near current size + new data.
                 long dbBefore;
                 try { dbBefore = await databaseSize(conn, ct); }
@@ -135,7 +136,17 @@ public static class SeedRunner
             }
         }
 
-        long bytes = await DatabaseSizeAsync(conn, ct);
+        // Best-effort report read: an unreadable size must not fail a skipped (or already committed) run (#109 req. 2).
+        // Only --size-report, whose whole job is this number, fails on it.
+        long bytes;
+        try { bytes = await databaseSize(conn, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            output.WriteLine("DB_SIZE_MB=unknown");
+            output.WriteLine($"ELAPSED_S={total.Elapsed.TotalSeconds:F1}");
+            err.WriteLine($"WARN: cannot read pg_database_size ({ex.GetType().Name}: {ex.Message}).");
+            return options.SizeReportOnly ? 2 : 0;
+        }
         var mb = bytes / 1024 / 1024;
         output.WriteLine($"DB_SIZE_MB={mb}");
         output.WriteLine($"ELAPSED_S={total.Elapsed.TotalSeconds:F1}");

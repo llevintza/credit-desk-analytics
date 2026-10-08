@@ -289,15 +289,28 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     }
 
     [Fact]
-    public async Task Skip_path_never_reads_the_size_to_refuse()
+    public async Task Skip_path_with_unreadable_size_exits_0()
+    {
+        // Neither the peak cap nor an unreadable size may fail an unchanged --if-changed run (#109 req. 2, R217-02).
+        var o = new StringWriter();
+        var err = new StringWriter();
+        var tiny = SeededDatabase.Options() with { CapMegabytes = 1 };
+        Assert.Equal(0, await SeedRunner.RunAsync(tiny, db.ConnectionString, o, err,
+            (_, _) => throw new NpgsqlException("size unknown"), TestContext.Current.CancellationToken));
+        Assert.Contains("SEED_ACTION=skipped", o.ToString());
+        Assert.Contains("DB_SIZE_MB=unknown", o.ToString());
+        Assert.Contains("WARN: cannot read pg_database_size", err.ToString());
+        Assert.DoesNotContain("Refused", err.ToString());
+    }
+
+    [Fact]
+    public async Task Size_report_with_unreadable_size_exits_2()
     {
         var o = new StringWriter();
-        var tiny = SeededDatabase.Options() with { CapMegabytes = 1 };
-        var probed = false;
-        Assert.Equal(0, await SeedRunner.RunAsync(tiny, db.ConnectionString, o, new StringWriter(),
-            (_, _) => { probed = true; throw new NpgsqlException("size unknown"); }, TestContext.Current.CancellationToken));
-        Assert.Contains("SEED_ACTION=skipped", o.ToString());
-        Assert.False(probed);
+        var report = SeededDatabase.Options() with { SizeReportOnly = true, IfChanged = false };
+        Assert.Equal(2, await SeedRunner.RunAsync(report, db.ConnectionString, o, new StringWriter(),
+            (_, _) => throw new NpgsqlException("size unknown"), TestContext.Current.CancellationToken));
+        Assert.Contains("DB_SIZE_MB=unknown", o.ToString());
     }
 
     [Fact]
