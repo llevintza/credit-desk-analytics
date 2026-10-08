@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Threading.RateLimiting;
 using Desk.Api.Auth;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Desk.Api.Limits;
 
@@ -18,6 +19,9 @@ public static class RateLimiting
     {
         services.AddSingleton(limits);
         services.AddSingleton(clients);
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<ClientAddressDiagnostics>();
+        services.AddHostedService(sp => sp.GetRequiredService<ClientAddressDiagnostics>());
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -70,6 +74,7 @@ public static class RateLimiting
             ? Math.Max(1, (int)Math.Ceiling(after.TotalSeconds))
             : 1;
         var http = ctx.HttpContext;
+        http.RequestServices?.GetService<ClientAddressDiagnostics>()?.Rejected(http);
         http.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
         await Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,

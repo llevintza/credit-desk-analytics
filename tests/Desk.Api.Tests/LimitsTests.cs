@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Desk.Api.Tests;
@@ -129,6 +130,43 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me("203.0.113.7"), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Me("203.0.113.7"), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me("203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Behind_the_proxy_start_up_and_the_first_rejection_are_logged_without_client_addresses()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "1")).WithWebHostBuilder(b =>
+            b.ConfigureTestServices(s => s.AddSingleton<ILoggerProvider>(logs)));
+        var client = PostgresApiFactory.NewClient(host);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.7, {CfEdge}", "203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"203.0.113.7, {CfEdge}", "203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"203.0.113.7, {CfEdge}", "203.0.113.7"), Ct)).StatusCode);
+
+        var lines = logs.Lines.Where(l => l.Category == typeof(ClientAddressDiagnostics).FullName).Select(l => l.Text).ToList();
+        Assert.Contains(lines, l => l.StartsWith("Client address resolver: BehindProxy=True", StringComparison.Ordinal) && l.Contains("ForwardedHeaders=XForwardedProto", StringComparison.Ordinal));
+        var rejected = Assert.Single(lines, l => l.StartsWith("First rate-limited request:", StringComparison.Ordinal));
+        Assert.Contains("Policy=login", rejected);
+        Assert.Contains("Source=CfConnectingIp", rejected);
+        Assert.Contains("ForwardedForShape=public>cf", rejected);
+        Assert.DoesNotContain("203.0.113.7", string.Join('\n', lines));
+    }
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(string Category, string Text)> Lines { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => new Logger(this, categoryName);
+
+        public void Dispose() { }
+
+        private sealed class Logger(CapturingLoggerProvider owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+                owner.Lines.Enqueue((category, formatter(state, exception)));
+        }
     }
 
     [Fact]
