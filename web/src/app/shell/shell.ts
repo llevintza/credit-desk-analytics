@@ -64,7 +64,10 @@ export class Shell {
     this.scope.asOf.set((event.target as HTMLSelectElement).value);
   }
 
-  /** A failed logout call (5xx, network) still signs out locally: the user never stays on a page looking signed in. */
+  /**
+   * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in.
+   * The server session may survive until it expires; see the follow-up issue.
+   */
   protected logout(): void {
     this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => void this.router.navigate(['/login']),

@@ -141,6 +141,7 @@ describe('Shell', () => {
   });
 
   it.each([
+    ['a 403 (antiforgery)', (req: TestRequest) => req.flush(null, { status: 403, statusText: 'Forbidden' })],
     ['a 500', (req: TestRequest) => req.flush('boom', { status: 500, statusText: 'Server Error' })],
     ['a network error', (req: TestRequest) => req.error(new ProgressEvent('error'))],
   ])('still signs out locally and goes to the login page when logout fails with %s', async (_, fail) => {
