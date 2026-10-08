@@ -62,8 +62,13 @@ public sealed class DemoAccounts
                 return user;
 
             // An account without its role must not sign in: remove it, so the next login tries again.
-            _logger.LogWarning("Demo account {Email} could not be given its role: {Errors}. It was removed.", demo.Email, Codes(role));
-            await users.DeleteAsync(user);
+            var deleted = await users.DeleteAsync(user);
+            if (deleted.Succeeded)
+                _logger.LogWarning("Demo account {Email} could not be given its role: {Errors}. It was removed.", demo.Email, Codes(role));
+            else
+                _logger.LogError(
+                    "Demo account {Email} could not be given its role ({Errors}) and could not be removed ({DeleteErrors}). Disable it with the UserAdmin CLI.",
+                    demo.Email, Codes(role), Codes(deleted));
             return null;
         }
 
@@ -71,8 +76,14 @@ public sealed class DemoAccounts
         // index): use that one. Otherwise the entry is unusable; log the codes, never the password.
         var raced = await users.FindByEmailAsync(email);
         if (raced is null)
+        {
             _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, Codes(created));
-        return raced;
+            return null;
+        }
+
+        // The winner adds the role in a second save that may not have committed yet, and removes the account if that
+        // fails: until the role is there, refuse (a 401; the retry finds the finished account).
+        return await users.IsInRoleAsync(raced, demo.Role) ? raced : null;
     }
 
     private static string Codes(IdentityResult result) => string.Join(", ", result.Errors.Select(e => e.Code));
