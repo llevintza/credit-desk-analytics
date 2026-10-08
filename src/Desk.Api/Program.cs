@@ -77,6 +77,8 @@ app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication());
 // UseAuthentication on a branch doesn't mark the app, and WebApplication would then add a global one at the very
 // start of the pipeline (before maintenance mode). Mark it so the path-scoped one above is the only one.
 ((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
+// Before the limiter: a failed login's wait for its response-time floor holds no /api concurrency permit (#230).
+app.UseMiddleware<LoginFloor>();
 app.UseRateLimiter();
 // After the limiter: rejected (429) requests are not written to the audit table.
 app.UseMiddleware<AuditMiddleware>();

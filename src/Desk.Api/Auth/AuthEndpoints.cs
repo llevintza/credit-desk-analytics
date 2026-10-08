@@ -21,7 +21,7 @@ public static class AuthEndpoints
 
         auth.MapPost("/login", LoginAsync)
             .AllowAnonymous()
-            .WithMetadata(SkipAntiforgery.Instance, SkipRequestAudit.Instance)
+            .WithMetadata(SkipAntiforgery.Instance, SkipRequestAudit.Instance, LoginFloorMetadata.Instance)
             .RequireRateLimiting(RateLimiting.LoginPolicy)
             .WithName("Login")
             .WithSummary("Signs in with email and password and sets the session and XSRF-TOKEN cookies.")
@@ -67,9 +67,9 @@ public static class AuthEndpoints
         var password = request.Password ?? "";
         var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, db, ct);
 
-        // Exactly one PBKDF2 verification per attempt on every path (R105-F2), so the response time doesn't tell an
-        // attacker which emails are real accounts: the decoy here for an unknown email, and DeskSignInManager for the
-        // rest (wrong or empty password, locked, disabled, expired, and the attempt that triggers lockout).
+        // Exactly one PBKDF2 verification per attempt on every path (R105-F2): the decoy here for an unknown email, and
+        // DeskSignInManager for the rest (wrong or empty password, locked, disabled, expired, and the attempt that
+        // triggers lockout). The DB work still differs per path; LoginFloor pads every 401 to the same time (#230).
         SignInResult result;
         if (user is null)
         {
