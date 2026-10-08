@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
@@ -380,6 +381,30 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         // #226: no test may move the shared clock (PostgresApiFactory.DisposeAsync checks it again after every test ran).
         Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_cannot_be_cast_to_the_fake()
+    {
+        // #262: neither the fixture's clock nor the host's TimeProvider is a FakeTimeProvider anyone could Advance.
+        Assert.Throws<InvalidCastException>(() => (FakeTimeProvider)api.Time);
+        Assert.Throws<InvalidCastException>(() => (FakeTimeProvider)api.Services.GetRequiredService<TimeProvider>());
+        Assert.Same(api.Time, api.Services.GetRequiredService<TimeProvider>());
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_forwards_to_a_clock_that_never_moves()
+    {
+        var time = api.Time;
+        var reference = new FakeTimeProvider(PostgresApiFactory.Start);
+        Assert.Equal(reference.TimestampFrequency, time.TimestampFrequency);
+        Assert.Equal(reference.LocalTimeZone, time.LocalTimeZone);
+        var before = time.GetTimestamp();
+        var fired = false;
+        using (time.CreateTimer(_ => fired = true, null, TimeSpan.Zero, Timeout.InfiniteTimeSpan))
+            Assert.True(fired); // a fake timer due now fires on creation; it can't move the clock
+        Assert.Equal(before, time.GetTimestamp());
+        Assert.Equal(PostgresApiFactory.Start, time.GetUtcNow());
     }
 
     [Fact]
