@@ -943,8 +943,8 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
-| 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
-| 5 Fund Performance | n/a | Not started |
+| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
+| 5 Fund Performance | phase-5/fund-performance | In review |
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
