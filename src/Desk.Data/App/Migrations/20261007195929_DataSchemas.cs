@@ -336,6 +336,9 @@ namespace Desk.Data.App.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.Sql(DropSchemasSql);
+            // Dropping the data schemas leaves empty tables after a later Up. Delete this
+            // version's metadata so --if-changed cannot skip and leave the book empty.
+            migrationBuilder.Sql("DELETE FROM app.seed_metadata WHERE version = '1.0.0';");
 
             migrationBuilder.DropTable(
                 name: "column_catalog",

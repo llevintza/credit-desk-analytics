@@ -17,7 +17,7 @@ public sealed record SeedOptions(int Seed, decimal Scale, bool IfChanged, bool F
                 "--if-changed" => o with { IfChanged = true },
                 "--force" => o with { Force = true },
                 "--size-report" => o with { SizeReportOnly = true },
-                "--as-of" => o with { AsOf = DateOnly.ParseExact(Next(), "yyyy-MM-dd", CultureInfo.InvariantCulture) },
+                "--as-of" => o with { AsOf = ParseAsOf(Next()) },
                 "--max-mb" => o with { MaxMegabytes = long.Parse(Next(), CultureInfo.InvariantCulture) },
                 _ => throw new ArgumentException($"Unknown option '{args[i]}'"),
             };
@@ -28,6 +28,12 @@ public sealed record SeedOptions(int Seed, decimal Scale, bool IfChanged, bool F
         if (!o.IfChanged && !o.Force && !o.SizeReportOnly)
             throw new ArgumentException("choose a mode: --if-changed (skip when version/seed/scale already loaded), --force (always reseed) or --size-report");
         return o;
+    }
+
+    static DateOnly ParseAsOf(string value)
+    {
+        try { return DateOnly.ParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture); }
+        catch (FormatException e) { throw new FormatException($"--as-of must be yyyy-MM-dd: {e.Message}", e); }
     }
 
     /// <summary>The last completed business day: the overnight batch's as-of date.</summary>

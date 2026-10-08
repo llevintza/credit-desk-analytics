@@ -21,10 +21,20 @@ public static class Loader
         "app.column_catalog",
     ];
 
+    public static string QuoteIdent(string name) => "\"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    public static string QuoteTable(string qualified)
+    {
+        var parts = qualified.Split('.');
+        return string.Join('.', parts.Select(QuoteIdent));
+    }
+
     public static long Copy(NpgsqlConnection conn, string table, string[] columns, NpgsqlDbType[] types, IEnumerable<object?[]> rows,
         CancellationToken ct = default)
     {
-        using var w = conn.BeginBinaryImport($"COPY {table} ({string.Join(", ", columns)}) FROM STDIN (FORMAT BINARY)");
+        var colList = string.Join(", ", columns.Select(QuoteIdent));
+        using var w = conn.BeginBinaryImport($"COPY {QuoteTable(table)} ({colList}) FROM STDIN (FORMAT BINARY)");
+        w.Timeout = TimeSpan.FromMinutes(3);
         long n = 0;
         foreach (var r in rows)
         {
@@ -54,7 +64,8 @@ public static class Loader
     };
 
     /// <summary>Truncates and reloads every seeded table inside the caller's transaction.</summary>
-    public static List<LoadStat> LoadAll(NpgsqlConnection conn, Universe u, Tables t, CancellationToken ct = default)
+    public static List<LoadStat> LoadAll(NpgsqlConnection conn, Universe u, Tables t, CancellationToken ct = default,
+        NpgsqlTransaction? tx = null)
     {
         var stats = new List<LoadStat>();
         void Load(string table, string cols, NpgsqlDbType[] types, Func<IEnumerable<object?[]>> rows)
@@ -68,7 +79,9 @@ public static class Loader
             N = NpgsqlDbType.Numeric, F = NpgsqlDbType.Double, B = NpgsqlDbType.Boolean, C = NpgsqlDbType.Char, TS = NpgsqlDbType.TimestampTz;
 
         // TRUNCATE is transactional in Postgres: a cancellation or failure after this point restores every table.
-        using (var cmd = new NpgsqlCommand($"TRUNCATE {string.Join(", ", SeededTables)}", conn)) cmd.ExecuteNonQuery();
+        using (var cmd = new NpgsqlCommand($"TRUNCATE {string.Join(", ", SeededTables.Select(QuoteTable))}", conn, tx)
+               { CommandTimeout = 180 })
+            cmd.ExecuteNonQuery();
 
         Load("reference.issuer", "issuer_id, name, country", [I, T, T], () => u.Issuers.Select(x => new object?[] { x.Id, x.Name, x.Country }));
         Load("reference.servicer", "servicer_id, name", [I, T], () => u.Servicers.Select(x => new object?[] { x.Id, x.Name }));
