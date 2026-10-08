@@ -155,13 +155,35 @@ describe('PositionsQuery rate limits', () => {
       const { p, success, fail } = params();
       query.datasource.getRows(p);
       http.expectOne('/api/positions/query').flush('slow down', { status: 429, statusText: 'Too Many Requests', headers: { 'Retry-After': '2' } });
+      expect(query.loading()).toBe(true); // still "Loading…" while waiting to retry
       vi.advanceTimersByTime(1999);
       http.expectNone('/api/positions/query');
       vi.advanceTimersByTime(1);
+      expect(query.loading()).toBe(true);
       http.expectOne('/api/positions/query').flush(block());
+      expect(query.loading()).toBe(false);
       expect(success).toHaveBeenCalled();
       expect(fail).not.toHaveBeenCalled();
       http.verify();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a new view during the Retry-After wait drops the retry and clears "Loading…"', () => {
+    vi.useFakeTimers();
+    try {
+      TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), PositionsQuery] });
+      const query = TestBed.inject(PositionsQuery);
+      const http = TestBed.inject(HttpTestingController);
+      query.update({ columns: ['dv01'] });
+      query.datasource.getRows(params().p);
+      http.expectOne('/api/positions/query').flush('slow down', { status: 429, statusText: 'Too Many Requests', headers: { 'Retry-After': '2' } });
+      expect(query.loading()).toBe(true);
+      query.update({ quickFilter: 'clo' }); // the grid has not asked for the new view's blocks yet
+      expect(query.loading()).toBe(false);
+      vi.advanceTimersByTime(5000);
+      http.verify(); // no retry was sent for the old view
     } finally {
       vi.useRealTimers();
     }
