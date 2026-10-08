@@ -36,23 +36,28 @@ public sealed class DemoAccounts
 
         ct.ThrowIfCancellationRequested();
         var user = new DeskUser { UserName = demo.Email, Email = demo.Email, EmailConfirmed = true, ExpiresAt = demo.Expires };
+        IdentityResult created;
         try
         {
-            var created = await users.CreateAsync(user, demo.Password);
-            if (!created.Succeeded)
-            {
-                // Codes only (e.g. PasswordTooShort): never the password itself.
-                _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, string.Join(", ", created.Errors.Select(e => e.Code)));
-                return null;
-            }
-            await users.AddToRoleAsync(user, demo.Role);
-            return user;
+            created = await users.CreateAsync(user, demo.Password);
         }
         catch (DbUpdateException)
         {
-            // A concurrent first login created it a moment ago (unique index): use that one.
-            return await users.FindByEmailAsync(email);
+            // Lost the race at the unique index: treated like Identity's own duplicate check below.
+            created = IdentityResult.Failed(new IdentityError { Code = "DuplicateUserName" });
         }
+        if (created.Succeeded)
+        {
+            await users.AddToRoleAsync(user, demo.Role);
+            return user;
+        }
+
+        // A concurrent first login may have created it a moment ago (Identity's duplicate check or the unique
+        // index): use that one. Otherwise the entry is unusable; log the codes, never the password.
+        var raced = await users.FindByEmailAsync(email);
+        if (raced is null)
+            _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, string.Join(", ", created.Errors.Select(e => e.Code)));
+        return raced;
     }
 
     internal static Dictionary<string, DemoAccount> Parse(string? json, ILogger logger)
