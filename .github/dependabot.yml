@@ -8,6 +8,10 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # Lift when Angular and typescript-eslint support TS 7 and TS 7.1 ships the compiler API. See closed #101.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directories:
       - /
@@ -22,7 +26,15 @@ updates:
       - /deploy/ci-images/shellcheck
     schedule:
       interval: weekly
+    ignore:
+      # Lift after Node 26 LTS (2026-10-28), via a deliberate coordinated [workflows] PR (Dockerfile, every setup-node step, README §3/§12/§13.2, ADR). See closed #98.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Lift when prod Neon moves to PG18; upgrade compose volume path (/var/lib/postgresql), CI services image, Testcontainers and README together. See closed #97.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]

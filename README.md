@@ -148,10 +148,11 @@ credit-desk-analytics/
 │  └─ Desk.UserAdmin/        ← CLI: add/list/disable/reset accounts (prints a generated password once)
 ├─ tests/
 │  ├─ Desk.Api.Tests/        ← integration tests on Testcontainers Postgres
-│  └─ Desk.Data.Tests/       ← query-builder and whitelist unit tests
+│  ├─ Desk.Data.Tests/       ← query-builder and whitelist unit tests (phase 3)
+│  └─ Desk.Seeder.Tests/     ← generator unit tests + Testcontainers seeding tests
 ├─ web/                      ← Angular 22 workspace (app + Vitest unit tests)
 ├─ e2e/                      ← Playwright tests + screenshot specs
-├─ perf/                     ← k6 scripts, payload-size script, results/ (committed summaries only)
+├─ perf/                     ← LoadBenchmark (ADR-0004), k6 scripts, payload-size script
 ├─ deploy/
 │  ├─ Dockerfile             ← multi-stage: node build web → dotnet publish → runtime image
 │  └─ start.sh               ← env check → exec app (no migrations at boot)
@@ -193,7 +194,7 @@ In production all six settings point at the same Neon database (`DATABASE_URL`) 
 | `core.position_snapshot` | **20,000 per as-of date**, **2 as-of dates** (today and the prior business day) | **wide, about 200 columns**, see 5.3 |
 | `core.position_history` | about 24 month-ends × 20,000 | **narrow**: as_of_date, position_id, market_value, face, price, spread, dv01, cs01, wal, pnl_mtd |
 | `core.trade` | ~150,000 over 2 years | trade_id, bond_id, portfolio_id, trade_ts `timestamptz` (realistic intraday times), side, face, price, counterparty_id, trader |
-| `core.fund_performance` | 36–60 months per fund | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
+| `core.fund_performance` | about 40–70 months per fund (from each fund's inception through the month before as-of) | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
 
 **Deliberate edge cases the seed MUST include** (tests depend on them):
 - at least **3 deals with zero bonds** (newly announced, pricing pending)
@@ -236,11 +237,33 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | deal, bond, reference, app | small | < 10 MB |
 | **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
 
-The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB.
+The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
+
+**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
+
+**Measured (phase 1, scale 1.0, SEED=42, Postgres 17, linux-x64):**
+- **1,563,791 rows** across 20 tables.
+- First `--if-changed` on an empty migrated DB: `DB_SIZE_MB=270`, `ELAPSED_S=11.1` (generate+load 10.5 s).
+- Forced reseed: `DB_SIZE_MB=271`, `ELAPSED_S=11.5`; peak `pg_database_size` during the transaction **533.8 MB**.
+- The snapshot is **202 columns**.
+- The total book is about $6.9B market value across 20,001 positions.
+
+See ADR-0003 and ADR-0004.
 
 ### 5.5 Seeder requirements
 
-- A .NET console app (`src/Desk.Seeder`). Options: `--seed`, `--as-of`, `--scale` (0.1 for tests, 1.0 for the default), `--drop`.
+- A .NET console app (`src/Desk.Seeder`). Options:
+  - `--seed` (default 42)
+  - `--as-of yyyy-MM-dd` (default: the last business day)
+  - `--scale` (0.1 for tests, 1.0 default)
+  - **exactly one mode is required** (no mode exits 1, because a reseed truncates every seeded table):
+    - `--if-changed`: skip when the version, seed and scale match `app.seed_metadata` (what the deploy pipeline uses)
+    - `--force`: always reseed (`db-ops` reseed)
+    - `--size-report`
+  - `--max-mb`
+- The prior business day is generated as the snapshot's second as-of date.
+- **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
+- **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
 - **Realism:**
@@ -793,7 +816,7 @@ services:
    - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
    - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
    - the bundle budget is enforced by `angular.json` budgets
-3. **coverage:** job summary of line/branch % per project and the coverlet scope (exclusions); **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` on the default branch. CI checks out the default branch into `_default` and BASE_SHA into `_base` (`persist-credentials: false`) and runs **`_default/perf/coverage-gate.mjs`** when that file exists, so the PR head cannot rewrite the rules. Thresholds, tolerance, and the floor are read from the **default branch** (`git show $DEFAULT_SHA:…`), never from the PR head. Exact JSON schema; NaN-safe comparisons (`!(actual >= floor)`); schema failures are written to the log and step summary. A PR that lowers a min, turns off `overallMustNotDrop`, or widens the tolerance fails. PRs whose base is not the default branch fail closed. `pull_request` `edited` re-runs the gate (retarget). **Bootstrap** is an explicit one-time signal (`perf/coverage-bootstrap.json` `{allowOnce:true}` on HEAD while the default branch has no gate) — not "script missing". After the default branch has the gate, a missing or renamed gate, thresholds, or baseline on default, base, or head **fails closed**. On `push` to main, BASE_SHA is `github.event.before`; empty `--base-ref` is empty (not `"true"`); the retarget check runs only on `pull_request`. The first push that introduces the gate (`event.before` has no gate, HEAD has the gate and `{allowOnce:true}`) is a one-time bootstrap transition and is not available to PRs. After #5, a baseline may be lowered **ONLY for a documented change in measurement scope**, never to absorb a real coverage drop. Any lowering must be its own `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` (applied only when that file differs from BASE_SHA; checked against the default-branch floor and measured numbers) and sign-off from Code Reviewer, Tech Coordinator and Helms. A PR may raise the committed baseline to match measured coverage. After #5 merges, delete `perf/coverage-bootstrap.json` and `perf/coverage-override.json` so they are not left on main. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
+3. **coverage:** job summary of line/branch % per project and the coverlet scope (exclusions); **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at BASE_SHA. CI checks out BASE_SHA into `_base` (`fetch-depth: 0`, `persist-credentials: false`) and **always** runs **`_base/perf/coverage-gate.mjs`**. There is no HEAD fallback and no `_default` checkout. A BASE_SHA without the gate (retarget, stale base, deleted gate, rewound main) **fails closed** before `node` — bootstrap is closed after #5 (`741b19eb`); rebase onto main. Thresholds, tolerance, and the floor are read from BASE_SHA (`git show $BASE_SHA:…`), never from the PR head or the pushed commit. Exact JSON schema; NaN-safe comparisons (`!(actual >= floor)`); schema failures are written to the log and step summary. A PR that lowers a min, turns off `overallMustNotDrop`, or widens the tolerance fails. PRs whose base is not the default branch fail closed. `pull_request` `edited` re-runs the gate (retarget). Empty / zero / unknown `github.event.before` **fails closed**. On `push` to main, BASE_SHA is `github.event.before`; the gate runs from `_base` with `--default-dir _base --default-sha "$BASE_SHA"`; empty `--base-ref` is empty (not `"true"`); the retarget check runs only on `pull_request`. A baseline may be lowered **ONLY for a documented change in measurement scope**, never to absorb a real coverage drop. Any lowering must be its own `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` (applied only when that file differs from BASE_SHA; checked against the BASE_SHA floor and measured numbers) and sign-off from Code Reviewer, Tech Coordinator and Helms. A PR may raise the committed baseline to match measured coverage. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
 4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
 5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
 6. **workflows:** actionlint + shellcheck
@@ -817,7 +840,7 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 |---|---|
 | **1. db-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
 | **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
-| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it reseeds inside a transaction per table and updates the metadata. The step prints the DB size and fails over budget (§5.4). |
+| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it truncates and reloads all seeded tables in one transaction; the metadata row is written in the same transaction after a pre-commit size guard. The step prints the DB size and fails over budget (§5.4). |
 | **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
 | **5. smoke** | Poll `$APP_URL/health` (up to 15 min, every 15 s; the free tier builds slowly and cold-starts) until `version` equals `github.sha`. Then `GET /` returns 200 HTML, and `GET /api/me` returns 401 (auth enforced). The workflow summary shows URL, version, migration list, seed action (skipped / reseeded) and DB size. |
 
@@ -913,7 +936,7 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #99: gitleaks v8.30.1 image + CI pins |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |
