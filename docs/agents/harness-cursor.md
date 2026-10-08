@@ -69,4 +69,4 @@ Derived mechanically from the Claude draft by the rev 9 mapping (`Edit`→`Write
 | Cloud agents' identity | Cursor GitHub App (rev 10) | DEP-R1 must cover the App (no bypass); U9 still decides whether `cli.json` and imported hooks apply |
 | Local double run (imported hook + `hooks.json`) | Expected | The guard evaluates once per tool call (rev 10); D7 exempts the pair |
 
-U24 (Cursor loads `.claude/skills` with default settings): PENDING: needs a human-run Cursor install before merge (§6).
+U24 (Cursor loads `.claude/skills` with default settings): PENDING: needs a human-run Cursor install before merge (PR-A acceptance A12).
