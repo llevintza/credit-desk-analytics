@@ -255,3 +255,21 @@ for (const [label, tag, message] of [
     assert.match(r.stderr, message);
   });
 }
+
+// #266 N1: `<!--` is only a comment outside <script>/<style> bodies and quoted attributes. Stripping it there would
+// swallow every tag up to the next `-->`.
+for (const [label, decoy] of [
+  ['a script body', '<script>var s="<!--";</script>'],
+  ['a style body', '<style>p::before{content:"<!--"}</style>'],
+  ['a quoted attribute', '<div title="<!--"></div>'],
+]) {
+  test(`counts scripts after a <!-- in ${label}`, () => {
+    const r = run({
+      'index.html': page(`<script src="main-A1.js" type="module"></script>${decoy}<script src="chunk-BIG.js"></script><!-- -->`),
+      'main-A1.js': 'void 0;',
+      'chunk-BIG.js': big(),
+    });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}

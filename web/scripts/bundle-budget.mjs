@@ -35,11 +35,15 @@ const normalize = (from, url) => {
 };
 
 // #204: tags are matched case-insensitively, attributes in any order, quoted with " or ' or unquoted, with optional
-// whitespace around `=`, and a quoted value may contain `>`. Comments are dropped first. Any <script or <link this
-// can't parse fails rather than being skipped.
+// whitespace around `=`, and a quoted value may contain `>`. Comments are dropped first, but only where HTML has
+// them (#266 N1): a `<!--` inside a <script> or <style> body or a quoted attribute is text, so those are matched
+// whole and kept. Any <script or <link this can't parse fails rather than being skipped.
 const indexPath = join(dir, 'index.html');
 if (!existsSync(indexPath)) fail(`${indexPath} is missing; refusing to pass the budget.`);
-const html = readFileSync(indexPath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+const html = readFileSync(indexPath, 'utf8').replace(
+  /<(script|style)\b(?:[^>"']|"[^"]*"|'[^']*')*>[\s\S]*?<\/\1\s*>|<(?:[^>"'!]|"[^"]*"|'[^']*')*>|<!--[\s\S]*?-->/gi,
+  (m) => (m.startsWith('<!--') ? '' : m),
+);
 const tagPattern = /<(script|link)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 const attrPattern = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 const attributes = (text) =>
