@@ -92,8 +92,9 @@ export function miss(data) {
 }
 
 export function hit(data) {
-  const res = post(data, { columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }] });
-  check(res, { 'HIT': (r) => r.headers['X-Cache'] === 'HIT' }); // a request that misses fails checks: rate==1.0
+  // The exact request setup() warmed, so every one is a HIT; a request that misses fails checks: rate==1.0.
+  const res = post(data, wholeBook);
+  check(res, { 'HIT': (r) => r.headers['X-Cache'] === 'HIT' });
 }
 
 // The All preset's whole-book first view, uncached (#135): the widest P1 request (~200 columns). Its own trend, so
@@ -111,12 +112,12 @@ export function all(data) {
   // A fractional threshold below every spread: the whole book, never asked for before (miss() uses whole numbers).
   const threshold = -1e13 - allRun - allCounter - 0.5;
   const res = post(data, {
-    columns: allColumns, sortModel: [{ colId: 'market_value', sort: 'desc' }],
+    ...wholeBook, columns: allColumns,
     filterModel: { spread_bp: { filterType: 'number', type: 'greaterThan', filter: threshold } },
   });
   allMiss.add(res.timings.duration);
   check(res, {
     'All MISS': (r) => r.headers['X-Cache'] === 'MISS',
-    'All whole book': (r) => r.json('rowCount') >= 19000,
+    'All whole book': (r) => r.json('rowCount') === data.book,
   });
 }

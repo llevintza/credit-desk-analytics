@@ -496,7 +496,7 @@ jobs:
                     if $t["p(95)"] == null then "no data" elif $t["p(95)"] < $budget then "ok" else "OVER" end) |"' \
                 "$RUNNER_TEMP/k6.json"
               echo
-              jq -r '.metrics.checks | "Checks: \(.passes) passed, \(.fails) failed (HIT asserts X-Cache: HIT; MISS asserts X-Cache: MISS and ≥ 19,000 rows)."' \
+              jq -r '.metrics.checks | "Checks: \(.passes) passed, \(.fails) failed (HIT asserts X-Cache: HIT; MISS asserts X-Cache: MISS and the whole book; the book is ≥ 19,000 rows)."' \
                 "$RUNNER_TEMP/k6.json"
             else
               echo "| k6 produced no summary | | | | | FAIL |"
