@@ -22,7 +22,15 @@ public sealed class SeedPeakTests
 
     [Fact]
     public void Peak_scales_the_new_data_half() =>
-        Assert.Equal(10 + 27, SeedRunner.PeakEstimateMegabytes(10 * Mb, 0.1m));
+        Assert.Equal(10 + 28, SeedRunner.PeakEstimateMegabytes(10 * Mb, 0.1m)); // 27.1 MiB of new data rounds up
+
+    [Fact]
+    public void Peak_rounds_up_to_the_next_MiB()
+    {
+        // R217-07: floor division under-stated a fail-closed guard by up to 1 MiB.
+        Assert.Equal(2, SeedRunner.PeakEstimateMegabytes(Mb + 1, 0.001m)); // 1 MiB + 1 B + ~0.27 MiB
+        Assert.Equal(1, SeedRunner.PeakEstimateMegabytes(Mb - 300_000, 0.001m)); // 0.71 MiB + ~0.27 MiB: still within 1 MiB
+    }
 
     [Fact]
     public void Disk_full_maps_to_an_actionable_message()
