@@ -23,10 +23,12 @@ public sealed class SmokeTests(WebApplicationFactory<Program> factory) : IClassF
     }
 
     [Fact]
-    public async Task Unknown_api_route_is_404_not_the_spa()
+    public async Task Unknown_api_route_is_401_not_the_spa()
     {
+        // The whole /api group needs a session, so an unknown route doesn't reveal what exists.
         var res = await factory.CreateClient().GetAsync("/api/nope", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Equal("application/problem+json", res.Content.Headers.ContentType?.MediaType);
     }
 
     [Fact]
