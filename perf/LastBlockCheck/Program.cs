@@ -70,15 +70,18 @@ var last = await QueryAsync(lastStart);
 long[] apiIds = [.. last.GetProperty("data")[0].EnumerateArray().Select(v => v.GetInt64())];
 
 await using var db = NpgsqlDataSource.Create(ConnectionStrings.Resolve(config, ConnectionStrings.Core));
-async Task<T> ScalarAsync<T>(string sql)
+// DBNull (e.g. sum() over all-NULL values) comes back as null, so it shows as a FAIL row instead of a crash.
+async Task<object?> ScalarAsync(string sql)
 {
     await using var cmd = db.CreateCommand(sql);
     cmd.Parameters.AddWithValue("asof", asOf);
-    return (T)(await cmd.ExecuteScalarAsync(ct))!;
+    var value = await cmd.ExecuteScalarAsync(ct);
+    return value is DBNull ? null : value;
 }
+static string Show(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "null";
 
 var results = new List<(string Check, string Api, string Sql, bool Ok)>();
-var sqlCount = await ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof");
+var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof"))!;
 results.Add(("rows ≥ 18,000", $"{rowCount:N0}", $"{sqlCount:N0}", rowCount >= MinRows && rowCount == sqlCount));
 
 // The SQL tail, in the grid's order: the sort key, then position_id in the sort key's direction.
@@ -98,9 +101,10 @@ results.Add(($"last block ids (rows {lastStart:N0}–{rowCount - 1:N0})", $"{api
 var summary = first.GetProperty("summary");
 foreach (var column in ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.Sum && columns.Contains(c.Name)))
 {
-    var api = summary.GetProperty(column.Name).GetDecimal();
-    var sql = await ScalarAsync<decimal>($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof");
-    results.Add(($"SUM({column.Name})", api.ToString(CultureInfo.InvariantCulture), sql.ToString(CultureInfo.InvariantCulture), api == sql));
+    // A missing key or a JSON null is a FAIL row, not an exception.
+    decimal? api = summary.TryGetProperty(column.Name, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
+    var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof");
+    results.Add(($"SUM({column.Name})", Show(api), Show(sql), api is not null && api == sql));
 }
 
 Console.WriteLine($"### Last block and summary at {rowCount:N0} rows (as of {asOf:yyyy-MM-dd}, Risk preset, market value desc)");
