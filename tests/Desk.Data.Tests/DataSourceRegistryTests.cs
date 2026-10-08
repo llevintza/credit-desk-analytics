@@ -1,6 +1,7 @@
 using Desk.Data;
 using Desk.Data.Sources;
 using Microsoft.Extensions.Configuration;
+using Npgsql;
 
 namespace Desk.Data.Tests;
 
@@ -9,6 +10,10 @@ public sealed class DataSourceRegistryTests
 {
     private static IConfiguration Config(Dictionary<string, string?> values) =>
         new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+
+    // Exact values, not substrings: "Maximum Pool Size=20" is also a prefix of 200.
+    private static NpgsqlConnectionStringBuilder Parsed(DataSourceRegistry registry, string source) =>
+        new(registry.Get(source).ConnectionString);
 
     [Fact]
     public async Task Sources_that_share_DATABASE_URL_share_one_data_source()
@@ -54,7 +59,7 @@ public sealed class DataSourceRegistryTests
     public async Task Data_sources_get_the_10_second_command_timeout()
     {
         await using var registry = new DataSourceRegistry(Config(new() { ["DATABASE_URL"] = "Host=db;Database=desk;Username=u;Command Timeout=300" }), new DbConnectionCounter());
-        Assert.Contains("Command Timeout=10", registry.Get(ConnectionStrings.Core).ConnectionString);
+        Assert.Equal(10, Parsed(registry, ConnectionStrings.Core).CommandTimeout);
     }
 
     [Fact]
@@ -63,7 +68,7 @@ public sealed class DataSourceRegistryTests
         // #182: Npgsql's own default (100) is above a small Neon compute's max_connections.
         await using var registry = new DataSourceRegistry(Config(new() { ["DATABASE_URL"] = "Host=db;Database=desk;Username=u" }), new DbConnectionCounter());
         Assert.Equal(20, DataSourceRegistry.DefaultMaxPoolSize);
-        Assert.Contains("Maximum Pool Size=20", registry.Get(ConnectionStrings.Core).ConnectionString);
+        Assert.Equal(20, Parsed(registry, ConnectionStrings.Core).MaxPoolSize);
     }
 
     [Fact]
@@ -74,7 +79,7 @@ public sealed class DataSourceRegistryTests
             ["DATABASE_URL"] = "Host=db;Database=desk;Username=u;Maximum Pool Size=100",
             ["DB_MAX_POOL_SIZE"] = "12",
         }), new DbConnectionCounter());
-        Assert.Contains("Maximum Pool Size=12", registry.Get(ConnectionStrings.Core).ConnectionString);
+        Assert.Equal(12, Parsed(registry, ConnectionStrings.Core).MaxPoolSize);
     }
 
     [Fact]
@@ -85,7 +90,7 @@ public sealed class DataSourceRegistryTests
             ["DATABASE_URL"] = "Host=db;Database=desk;Username=u",
             ["DB_MAX_POOL_SIZE"] = "100",
         }), new DbConnectionCounter());
-        Assert.Contains("Maximum Pool Size=100", registry.Get(ConnectionStrings.Core).ConnectionString);
+        Assert.Equal(100, Parsed(registry, ConnectionStrings.Core).MaxPoolSize);
     }
 
     [Theory]
@@ -103,7 +108,7 @@ public sealed class DataSourceRegistryTests
             ["DATABASE_URL"] = "Host=db;Database=desk;Username=u;Maximum Pool Size=100",
             ["DB_MAX_POOL_SIZE"] = value,
         }), new DbConnectionCounter());
-        Assert.Contains("Maximum Pool Size=20", registry.Get(ConnectionStrings.Core).ConnectionString);
+        Assert.Equal(20, Parsed(registry, ConnectionStrings.Core).MaxPoolSize);
     }
 
     [Fact]
@@ -118,7 +123,7 @@ public sealed class DataSourceRegistryTests
         }), new DbConnectionCounter());
         Assert.Same(registry.Get(ConnectionStrings.Core), registry.Get(ConnectionStrings.Market));
         Assert.Equal(1, registry.DistinctDataSources);
-        Assert.Contains("Maximum Pool Size=15", registry.Get(ConnectionStrings.Market).ConnectionString);
+        Assert.Equal(15, Parsed(registry, ConnectionStrings.Market).MaxPoolSize);
     }
 
     [Theory]
