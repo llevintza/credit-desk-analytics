@@ -41,10 +41,13 @@ public static class RateLimiting
                         QueueLimit = 0,
                         AutoReplenishment = true,
                     }));
-            // Exports are capped by ExportGate instead (one per user, a few in total): counted here, a running export
-            // would block its owner's grid for up to the export deadline.
+            // Signed-in users only. Anonymous callers (login, a signed-out /api/me) are already bounded by their
+            // token bucket, the login window and the shared limiter; keyed per IP, one permit could be shared by
+            // everyone whenever the client address resolves to one key. Exports are capped by ExportGate instead (one
+            // per user, a few in total): counted here, a running export would block its owner's grid for up to the
+            // export deadline.
             var perUserConcurrency = PartitionedRateLimiter.Create<HttpContext, string>(http =>
-                !IsApi(http) || IsExport(http)
+                !IsApi(http) || IsExport(http) || !http.User.IsSignedIn()
                     ? RateLimitPartition.GetNoLimiter("unscoped")
                     : RateLimitPartition.GetConcurrencyLimiter(PartitionKey(http, clients), _ => new ConcurrencyLimiterOptions
                     {

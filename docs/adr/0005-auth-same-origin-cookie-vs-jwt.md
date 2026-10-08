@@ -86,7 +86,8 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - Concurrency comes before the token bucket because a spent token is never given back. The middleware tries a synchronous acquire before it queues, so with the bucket first, a request that queues behind its own user would pay two tokens.
 
 **Availability per user and for exports** (amended in #127)
-- **Per-user concurrency:** one request in flight per caller (`RATE_LIMIT_PER_USER_CONCURRENCY`, default 1), with a queue of 8 (`RATE_LIMIT_PER_USER_QUEUE`), then 429.
+- **Per-user concurrency:** one request in flight per signed-in user (`RATE_LIMIT_PER_USER_CONCURRENCY`, default 1), with a queue of 8 (`RATE_LIMIT_PER_USER_QUEUE`), then 429.
+  - Anonymous callers (login, a signed-out `/api/me`) don't pass it. They are already bounded by their token bucket, the per-IP login window and the shared limiter. Keyed per IP, one permit would be shared by every anonymous caller whenever the client address resolves to one key (#165), and about 10 concurrent requests would turn every login into a 429.
   - It sits before the shared limiter. A request waiting for its caller's turn holds no database permit, so one busy user can't fill the shared 8.
   - The queue is 8, not 1 or 2, because the SPA's first paint fans out about 5 requests at once (session, portfolios, presets, first blocks). Those queue behind each other rather than failing.
 - **Exports are capped separately**, not by the per-user limiter. Counted there, a running export would block its owner's grid for up to the export deadline.

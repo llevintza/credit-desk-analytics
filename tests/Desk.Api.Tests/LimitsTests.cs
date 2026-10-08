@@ -439,6 +439,35 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Anonymous_callers_are_not_held_to_one_request_in_flight()
+    {
+        // Anonymous calls from one address share a key; with a per-key cap of 1 and a queue of 1, the third would be
+        // a 429. They wait only for the shared database limiter, then get their 401.
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_PER_USER_QUEUE", "1");
+            b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
+            b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "8");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, admin.Email!);
+
+        var running = client.GetAsync("/api/health/db", Ct);   // holds the only database permit
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var anonymous = PostgresApiFactory.NewClient(host);
+        var calls = Enumerable.Range(0, 3).Select(_ => anonymous.GetAsync("/api/me", Ct)).ToArray();
+        await Task.Delay(100, Ct);
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        foreach (var call in calls)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await call).StatusCode);
+    }
+
+    [Fact]
     public async Task A_request_queued_behind_its_own_user_spends_one_token()
     {
         // No refill during the test: 4 tokens are all this user gets.
