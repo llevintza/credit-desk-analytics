@@ -8,7 +8,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0002](0002-hosting.md) | Hosting: single Render service + Neon (vs static site + API, vs GitHub Pages) | 0 Scaffold | Accepted |
 | [0003](0003-wide-snapshot-narrow-history.md) | Wide position snapshot + narrow history | 1 Data | Accepted |
 | [0004](0004-bulk-load-copy-vs-ef.md) | Bulk load: Npgsql binary COPY vs EF `AddRange` (measured) | 1 Data | Accepted |
-| 0005 | Auth: same-origin cookie vs JWT | 2 Auth and limits | Planned |
+| [0005](0005-auth-same-origin-cookie-vs-jwt.md) | Auth: same-origin cookie session vs JWT | 2 Auth and limits | Accepted |
 | 0006 | Dynamic grid reads: Dapper vs EF Core (measured) | 3 Positions API | Planned |
 | 0007 | Payload: row JSON vs columnar JSON vs MessagePack (measured) | 3 Positions API | Planned |
 | 0008 | Paging: offset vs keyset for the Infinite Row Model | 3 Positions API | Planned |

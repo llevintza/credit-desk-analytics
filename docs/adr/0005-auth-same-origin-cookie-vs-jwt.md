@@ -1,0 +1,102 @@
+# ADR-0005: Auth: same-origin cookie session vs JWT
+
+- **Status:** Accepted
+- **Date:** 2026-10-08
+- **Phase / PR:** phase-2/auth-and-limits
+
+## Context
+
+The site is public, but the data is not (README §7). Accounts are invite-only, reviewers get short expiries, and a disabled account must lose access quickly. The SPA and the API are served from **one origin** (ADR-0002). The free tiers matter: Render spins down when idle, and Neon autosuspends. Auth must not add database round trips to every request, and must not wake the database at boot or in maintenance mode.
+
+## Options considered
+
+1. **Same-origin cookie session (ASP.NET Core Identity + cookie authentication):**
+   - an encrypted, `HttpOnly`, `Secure`, `SameSite=Strict` cookie;
+   - data-protection keys persisted to the database;
+   - antiforgery token on state-changing requests.
+2. **JWT bearer in JavaScript:**
+   - the SPA stores an access token (memory or `localStorage`) and sends `Authorization: Bearer`;
+   - plus a refresh-token flow for the 8 h / 24 h session rules.
+3. **BFF token:** a cookie to a server-side session store that holds a JWT for downstream APIs. There are no downstream APIs here.
+
+## Evaluation
+
+| Criterion | Cookie session | JWT in JS | BFF |
+|---|---|---|---|
+| Token reachable by XSS | No (`HttpOnly`) | **Yes** | No |
+| CSRF exposure | Yes. Mitigated: `SameSite=Strict` + antiforgery header + JSON-only | No | Yes (same mitigation) |
+| Revocation (disable/reset) | Security-stamp check every 5 min | Only at token expiry (or a deny-list lookup per request) | Immediate |
+| 8 h sliding / 24 h absolute | Built in (sliding) + `auth_time` in the ticket | Refresh-token rotation, hand-written | Server-side |
+| DB reads per authenticated request | **0** (one per 5 min for the stamp) | 0 | 1 (session store) |
+| Extra request bytes | 1,020 B cookie (measured) | ~800 B bearer header | ~100 B cookie |
+| p50 / p95 `GET /api/me`, authenticated | **1.51 / 2.01 ms** | not built | not built |
+| p50 / p95 `GET /api/me`, anonymous (401) | 1.45 / 2.11 ms | — | — |
+| p50 / p95 `GET /health` (no auth at all) | 1.56 / 2.04 ms | — | — |
+| Login (PBKDF2 verify + sign-in), warm | 51–56 ms (first: 717 ms, cold key ring + EF model) | similar | similar |
+| Moving parts | Identity + cookie (framework) | token issuance, refresh, rotation, storage | session store |
+
+The session cookie costs nothing measurable per request. Authenticated, anonymous and unauthenticated-endpoint latencies are within noise of each other. The cookie is decrypted in memory and needs no database read.
+
+**How to reproduce:**
+- Machine: Apple M5, Node 24.18, .NET 10 Release.
+- Database: Postgres 17 in Docker, migrated, one admin account created with `Desk.UserAdmin`.
+- Run with per-user limits raised so 1,500 sequential requests aren't throttled.
+
+```
+RATE_LIMIT_PER_USER_PER_MIN=100000 RATE_LIMIT_PER_USER_BURST=100000 ASPNETCORE_ENVIRONMENT=Production \
+  ASPNETCORE_URLS=http://localhost:5181 dotnet run -c Release --no-launch-profile --project src/Desk.Api
+BASE_URL=http://localhost:5181 DESK_EMAIL=… DESK_PASSWORD=… node perf/auth-overhead.mjs 500
+
+requests per series: 500
+login ms (3 runs): 717.3, 51.1, 56.0
+session cookie: 1020 bytes ("__Host-desk=<value>")
+
+| Request                            |  p50 ms |  p95 ms |
+|------------------------------------|--------:|--------:|
+| GET /health (no auth)              |    1.56 |    2.04 |
+| GET /api/me anonymous (401)        |    1.45 |    2.11 |
+| GET /api/me with session cookie    |    1.51 |    2.01 |
+```
+
+## Decision
+
+**Same-origin cookie session** on ASP.NET Core Identity, stored in the `auth` schema of the one `AppDbContext`, so there is one migrations history and one bundle.
+
+**Session**
+- The `__Host-desk` cookie is `HttpOnly`, `Secure`, `SameSite=Strict`, with an 8 h sliding expiry.
+- The 24 h absolute limit is measured from an `auth_time` value stored in the ticket at login.
+- Account expiry is enforced at login (`CanSignInAsync`) and on every request (an expiry claim, refreshed by the 5-minute security-stamp check).
+
+**Antiforgery**
+- The SPA reads `XSRF-TOKEN` and echoes it in `X-XSRF-TOKEN` (Angular's defaults).
+- An endpoint filter validates every non-GET/HEAD/OPTIONS call under `/api`.
+- Login is exempt for three reasons:
+  - it is JSON-only, so a cross-site form can't produce it without CORS, which we never enable;
+  - it is limited to 5/min per IP;
+  - there is no session to ride.
+- The antiforgery cookie (`desk-af`) is `SameAsRequest`, because the framework refuses to issue a Secure cookie on plain HTTP (local compose, the dev proxy).
+
+**Keys**
+- Data-protection keys live in `auth.data_protection_keys`, so sessions survive restarts.
+- The framework's start-up key-ring preload is removed, so boot and maintenance mode never open a connection. The ring loads on the first login or session check.
+
+**Behind Render's TLS proxy**
+- `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` (render.yaml) trusts one hop of `X-Forwarded-For/Proto`.
+- The app therefore sees https (HSTS, Secure cookies, antiforgery) and the real client IP (per-IP login limit).
+
+**Swagger UI and the CSP (#94)**
+- `/openapi/v1.json` and `/swagger` are admin-only.
+- Swagger UI's `requestInterceptor` option is evaluated with `Function()`, which needs `'unsafe-eval'`. Instead, a same-origin script (`/swagger/desk-xsrf.js`) wraps `fetch` to add the XSRF header.
+- `/swagger` gets its own CSP, which adds `data:` images.
+
+**CSP for the app**
+- `script-src 'self'` with no inline scripts. The Angular build's critical-CSS inliner (`inlineCritical`) emits an inline `<script>`, so it is turned off.
+- `style-src 'unsafe-inline'` stays, because Angular's runtime component styles and AG Grid's positioning `style` attributes need it. Styles can't execute code.
+
+## Consequences
+
+- No token ever reaches JavaScript, and there is no refresh-token code to get wrong.
+- The cost is a CSRF defence on every state-changing endpoint. New endpoints get it automatically from the `/api` group filter.
+- Disabling an account takes effect within 5 minutes (the stamp interval), not instantly. This is accepted for an invite-only demo.
+- The per-IP login limit depends on the forwarded-headers setting. Without it, every client shares the proxy's IP. The setting lives in render.yaml.
+- Revisit if the API ever serves a second origin or a non-browser client (then bearer tokens for that client), or for SSO (README §16).
