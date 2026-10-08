@@ -25,9 +25,14 @@ if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
 }
 var config = new ConfigurationBuilder().AddEnvironmentVariables().Build();
 
+// A hung API or database fails the check within 3 minutes, not at the job timeout. Ctrl+C cancels too.
+using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+var ct = cts.Token;
+
 // Cookies by hand: the session cookie is __Host- (Secure), which a cookie container won't send over plain http.
 using var http = new HttpClient(new HttpClientHandler { UseCookies = false }) { BaseAddress = baseUrl };
-var login = await http.PostAsJsonAsync("/api/auth/login", new { email, password });
+var login = await http.PostAsJsonAsync("/api/auth/login", new { email, password }, ct);
 if (!login.IsSuccessStatusCode)
 {
     Console.Error.WriteLine($"login failed: HTTP {(int)login.StatusCode}");
@@ -50,9 +55,9 @@ async Task<JsonElement> QueryAsync(int start)
     };
     req.Headers.Add("Cookie", cookie);
     req.Headers.Add("X-XSRF-TOKEN", xsrf);
-    using var res = await http.SendAsync(req);
+    using var res = await http.SendAsync(req, ct);
     res.EnsureSuccessStatusCode();
-    return JsonDocument.Parse(await res.Content.ReadAsStringAsync()).RootElement.Clone();
+    return JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct)).RootElement.Clone();
 }
 
 var first = await QueryAsync(0);
@@ -69,7 +74,7 @@ async Task<T> ScalarAsync<T>(string sql)
 {
     await using var cmd = db.CreateCommand(sql);
     cmd.Parameters.AddWithValue("asof", asOf);
-    return (T)(await cmd.ExecuteScalarAsync())!;
+    return (T)(await cmd.ExecuteScalarAsync(ct))!;
 }
 
 var results = new List<(string Check, string Api, string Sql, bool Ok)>();
@@ -83,8 +88,8 @@ await using (var cmd = db.CreateCommand("SELECT position_id FROM core.position_s
     cmd.Parameters.AddWithValue("asof", asOf);
     cmd.Parameters.AddWithValue("start", lastStart);
     cmd.Parameters.AddWithValue("block", Block);
-    await using var reader = await cmd.ExecuteReaderAsync();
-    while (await reader.ReadAsync()) sqlIds.Add(reader.GetInt64(0));
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+    while (await reader.ReadAsync(ct)) sqlIds.Add(reader.GetInt64(0));
 }
 results.Add(($"last block ids (rows {lastStart:N0}–{rowCount - 1:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
     $"{sqlIds.Count} ids, last {sqlIds.LastOrDefault()}", apiIds.SequenceEqual(sqlIds) && apiIds.Length == rowCount - lastStart));
