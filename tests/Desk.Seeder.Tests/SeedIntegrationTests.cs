@@ -234,6 +234,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         Assert.Contains("over the 1 MB storage cap", err.ToString());
         Assert.Contains("Refused before TRUNCATE", err.ToString());
         Assert.Contains("--cap-mb", err.ToString());
+        Assert.DoesNotContain("on purpose", err.ToString()); // the default-cap tail is only for the default (R217-06)
         Assert.Equal(before, await StateAsync());
     }
 
@@ -261,6 +262,7 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
             (_, _) => Task.FromResult(271L * 1024 * 1024), TestContext.Current.CancellationToken));
         Assert.Contains("peak estimate is 542 MB", err.ToString());
         Assert.Contains("over the 512 MB storage cap", err.ToString());
+        Assert.Contains("At the 512 MB default a full-book scale-1.0 reseed is refused on purpose", err.ToString());
         Assert.Equal(before, await StateAsync());
     }
 
@@ -285,6 +287,20 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             SeedRunner.RunAsync(SeededDatabase.Options(force: true), db.ConnectionString, new StringWriter(), new StringWriter(),
                 (_, _) => throw new OperationCanceledException(), TestContext.Current.CancellationToken));
+        Assert.Equal(before, await StateAsync());
+    }
+
+    [Fact]
+    public async Task Cancellation_surfacing_as_a_database_error_is_not_reported_as_unreadable_size()
+    {
+        // R217-08: a cancelled probe that fails with a non-OCE propagates (exit 130 in Program.cs) instead of exit 2.
+        var before = await StateAsync();
+        var err = new StringWriter();
+        using var cts = new CancellationTokenSource();
+        await Assert.ThrowsAsync<NpgsqlException>(() =>
+            SeedRunner.RunAsync(SeededDatabase.Options(force: true), db.ConnectionString, new StringWriter(), err,
+                (_, _) => { cts.Cancel(); throw new NpgsqlException("connection broken by cancel"); }, cts.Token));
+        Assert.DoesNotContain("cannot read the current database size", err.ToString());
         Assert.Equal(before, await StateAsync());
     }
 
@@ -321,6 +337,47 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         Assert.Equal(0, await SeedRunner.RunAsync(tiny, db.ConnectionString, new StringWriter(), err, TestContext.Current.CancellationToken));
         Assert.Contains("WARN: pg_database_size is", err.ToString());
         Assert.Contains("skipped run still exits 0", err.ToString());
+    }
+
+    [Fact]
+    public async Task Seeded_run_over_budget_after_commit_warns_and_exits_0()
+    {
+        // R217-04: the pre-commit guard accepted the data, so an over-budget size read after COMMIT only warns.
+        // The probe reports the real size until the run's metadata row is committed, then MaxMegabytes + 1 MiB.
+        var before = await StateAsync();
+        var o = new StringWriter();
+        var err = new StringWriter();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT count(*) FROM app.seed_metadata", conn);
+            return (long)(await cmd.ExecuteScalarAsync(ct))! > before.Meta
+                ? (roomy.MaxMegabytes + 1) * 1024 * 1024
+                : await SeedRunner.DatabaseSizeAsync(conn, ct);
+        }
+        Assert.Equal(0, await SeedRunner.RunAsync(roomy, db.ConnectionString, o, err, Probe, TestContext.Current.CancellationToken));
+        Assert.Contains("SEED_ACTION=seeded", o.ToString());
+        Assert.Contains($"DB_SIZE_MB={roomy.MaxMegabytes + 1}", o.ToString());
+        Assert.Contains("committed data was accepted by the pre-commit guard", err.ToString());
+        Assert.Equal(before.Meta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Fact]
+    public async Task Pre_commit_projection_uses_the_size_read_at_load_time()
+    {
+        // R217-09: the projection re-reads the size next to the seeded-relation snapshot instead of reusing the
+        // pre-flight read. Here the database "grows" past the budget between the two reads, so the load rolls back.
+        var before = await StateAsync();
+        var err = new StringWriter();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        var calls = 0;
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct) =>
+            ++calls == 1 ? await SeedRunner.DatabaseSizeAsync(conn, ct) : (roomy.MaxMegabytes + 100) * 1024 * 1024;
+        Assert.Equal(2, await SeedRunner.RunAsync(roomy, db.ConnectionString, new StringWriter(), err, Probe, TestContext.Current.CancellationToken));
+        Assert.Contains("projected database size is", err.ToString());
+        Assert.Contains("Rolled back", err.ToString());
+        Assert.Equal(2, calls);
+        Assert.Equal(before, await StateAsync());
     }
 
     [Fact]

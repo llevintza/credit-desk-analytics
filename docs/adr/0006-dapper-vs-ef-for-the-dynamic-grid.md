@@ -78,7 +78,7 @@ DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 80    # "
 
 The k6 figure is end-to-end (DB + columnar serialization + br compression + HTTP); the 34.4 ms above is the DB round trip alone.
 
-**Corrected in #129 (R121-F5).** The MISS row above used to say 11.7 / 13.9 ms. That run's filter, `spread_bp > ~1,100`, selected only the B/CCC tail, not the whole-book first view the 150 ms budget is about. The script now uses a threshold below every spread, unique per iteration, so every row is counted and summarised, and a `whole book` check asserts `rowCount ≥ 19,000` at scale 1.0. The same API build and local database were used for both runs:
+**Corrected in #129 (R121-F5).** The MISS row above used to say 11.7 / 13.9 ms. That run's filter, `spread_bp > ~1,100`, selected only the B/CCC tail, not the whole-book first view the 150 ms budget is about. That run's script used a threshold below every spread, unique per VU and iteration, so every row was counted and summarised, with a `whole book` check of `rowCount ≥ 19,000` at scale 1.0. Since #202 the threshold also carries a per-run offset (`−1e12·VU − 1e6·run − n`), and `whole book` asserts that `rowCount` equals the unfiltered count from `setup()`, with a separate `book >= MIN_BOOK` guard (`MIN_BOOK`, a whole number, default 19,000; a blank or non-numeric value stops the run). Since #244 the All-preset scenario's `All whole book` check uses the same exact count. The same API build and local database were used for both runs:
 
 | MISS filter | rows | p50 ms | p95 ms |
 |---|---:|---:|---:|
@@ -86,7 +86,7 @@ The k6 figure is end-to-end (DB + columnar serialization + br compression + HTTP
 | `spread_bp > −1e6·VU − n` (after) | every row (~20k) | 42.7 | 71.0 |
 
 ```
-# local stack only; abridged k6 1.3.0 summary; seed 42, scale 1.0; API: dotnet run -c Release, ASPNETCORE_ENVIRONMENT=Production, :5185, per-user limits raised in that process
+# local stack only; abridged k6 1.3.0 summary; seed 42, scale 1.0; API: dotnet run -c Release --no-launch-profile, ASPNETCORE_ENVIRONMENT=Production, ASPNETCORE_URLS=http://localhost:5185 (the reproduce block uses the script's default :5181), per-user limits raised in that process
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5185 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ✓ 'p(95)<150' http_req_duration{scenario:miss} p(95)=70.98ms
@@ -101,7 +101,7 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 ```
 DATABASE_URL=… dotnet run -c Release --project src/Desk.Seeder -- --force --scale 1.0 --as-of 2026-10-06
 DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out
-# Local stack only. API: dotnet run -c Release, ASPNETCORE_ENVIRONMENT=Production, RATE_LIMIT_PER_USER_PER_MIN/BURST raised in its own process (one k6 user), then:
+# Local stack only. API: ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://localhost:5181 dotnet run -c Release --no-launch-profile --project src/Desk.Api, with RATE_LIMIT_PER_USER_PER_MIN/BURST raised in its own process (one k6 user), then:
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5181 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ```
