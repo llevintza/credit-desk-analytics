@@ -173,18 +173,12 @@ jobs:
           persist-credentials: false
       # _base is BASE_SHA (PR base or event.before). Floor, thresholds, and the
       # gate script come from _base so the commit under test cannot rewrite its
-      # own floor (R5-M1). _default is pinned to github.sha, not the moving
-      # `main` ref. persist-credentials stays false.
+      # own floor (R5-M1 / R104-M1). persist-credentials stays false.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           path: _base
           fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: _default
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -215,11 +209,12 @@ jobs:
             echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
             exit 1
           fi
-          GATE=perf/coverage-gate.mjs
-          if [ -f _base/perf/coverage-gate.mjs ]; then
-            GATE=_base/perf/coverage-gate.mjs
-          elif [ ! -f perf/coverage-gate.mjs ]; then
-            echo "::error::head is missing perf/coverage-gate.mjs; deleting or renaming the gate fails closed."
+          # The gate exists on main since #5 (741b19eb). Never run the head copy:
+          # a BASE_SHA without the gate (retarget, stale base, deleted gate,
+          # rewound main) fails closed here, before any code under test runs.
+          GATE=_base/perf/coverage-gate.mjs
+          if [ ! -f "$GATE" ]; then
+            echo "::error::BASE_SHA ${BASE_SHA} has no perf/coverage-gate.mjs. Bootstrap closed after #5; rebase onto main. Failing closed."
             exit 1
           fi
           node "$GATE" \

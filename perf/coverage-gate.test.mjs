@@ -104,6 +104,10 @@ function gateArgs(base, extra = []) {
     "cov/web",
     "--base",
     base,
+    "--base-dir",
+    "_base",
+    "--default-dir",
+    "_base",
     "--default-sha",
     base,
     "--default-branch",
@@ -124,6 +128,10 @@ function pushArgs(base, extra = []) {
     "cov/web",
     "--base",
     base,
+    "--base-dir",
+    "_base",
+    "--default-dir",
+    "_base",
     "--default-sha",
     base,
     "--default-branch",
@@ -147,12 +155,10 @@ function assertBaseSourceLabels(output, baseSha) {
   assert.match(output, new RegExp(`Floor: \`perf/coverage-baseline\\.json\` from \`_base\` at BASE_SHA \\(\`${sha}\`\\)\\.`));
 }
 
-function assertBootstrapLabels(output, path) {
-  assertGatePath(output, path);
-  assert.match(output, /Gate script: HEAD `perf\/coverage-gate\.mjs` \(introducing bootstrap; BASE_SHA has no gate\)/);
-  assert.match(output, /This path is unreachable once BASE_SHA has the gate/);
-  assert.match(output, /Thresholds: bootstrap defaults \(diff ≥ 80\/80\), not a file at BASE_SHA/);
-  assert.match(output, /Floor: \*\*0 \/ 0\*\* \(introducing bootstrap; BASE_SHA has no baseline\)/);
+function assertMissingBaseGate(r) {
+  assert.equal(r.failed, true);
+  assertGatePath(r.output, "fail/missing-base-gate");
+  assert.match(r.output, /BASE_SHA has no perf\/coverage-gate\.mjs|Bootstrap closed after #5/);
 }
 
 test("parseArgs reads flags", () => {
@@ -266,14 +272,18 @@ test("path keys: lcov SF maps under web/src", () => {
 test("ci.yml evaluates coverage from a base checkout directory", () => {
   const yml = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
   assert.match(yml, /path: _base/);
-  assert.match(yml, /path: _default/);
+  assert.doesNotMatch(yml, /path: _default/);
   assert.match(yml, /persist-credentials: false/);
-  assert.ok(yml.includes("ref: ${{ github.sha }}"));
-  assert.match(yml, /_base\/perf\/coverage-gate\.mjs/);
+  assert.match(yml, /^\s+GATE=_base\/perf\/coverage-gate\.mjs$/m);
+  assert.doesNotMatch(yml, /GATE=perf\/coverage-gate\.mjs/);
+  assert.doesNotMatch(yml, /if \[ -f _base\/perf\/coverage-gate\.mjs \]/);
+  assert.doesNotMatch(yml, /elif \[ ! -f perf\/coverage-gate\.mjs \]/);
+  assert.match(yml, /Never run the head copy/);
+  assert.match(yml, /Bootstrap closed after #5/);
+  assert.match(yml, /node "\$GATE"/);
   assert.match(yml, /--base-dir _base/);
   assert.match(yml, /--default-dir _base/);
   assert.ok(yml.includes('--default-sha "$BASE_SHA"'));
-  assert.match(yml, /deleting or renaming the gate fails closed/);
   assert.equal((yml.match(/echo "Bootstrap:/g) || []).length, 0);
   assert.doesNotMatch(yml, /coverage-bootstrap/);
   assert.match(yml, /path: _base[\s\S]*fetch-depth: 0/);
@@ -283,6 +293,8 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
   assert.ok(yml.includes("GITHUB_EVENT_NAME: ${{ github.event_name }}"));
   assert.ok(yml.includes('--event "${GITHUB_EVENT_NAME:-}"'));
+  assert.match(yml, /permissions:\s*\n\s*contents: read/);
+  assert.doesNotMatch(yml, /pull_request_target/);
   const owners = readFileSync(join(repoRoot, ".github/CODEOWNERS"), "utf8");
   assert.match(owners, /\/tests\/testconfig\.json/);
   assert.match(owners, /\/\.gitleaks\.toml/);
@@ -317,26 +329,29 @@ function setupPassRepo() {
   );
   write(dir, "web/src/app/app.ts", "export const x = 1;\n");
   headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
-  const base = commit(dir, "base");
-  // Head must have the gate during bootstrap; default-sha stays at `base` (no gate).
   write(dir, "perf/coverage-gate.mjs", THIS_GATE);
   write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+  const base = commit(dir, "base");
   return { dir, base };
 }
 
-test("bootstrap: base has no gate script, head copy is allowed", () => {
-  const { dir, base } = setupPassRepo();
+test("BASE_SHA without the gate fails closed (no head fallback)", () => {
+  const dir = initRepo();
   try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const base = commit(dir, "pre-gate");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    writePassCoverage(dir);
     const r = runGate({
       root: dir,
       argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.bootstrapped, true);
-    assert.equal(r.failed, false);
-    assert.match(r.output, /Bootstrap/);
-    assertBootstrapLabels(r.output, "pr/bootstrap");
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -409,8 +424,8 @@ test("uncovered changed src file counts as 0% and can fail the 80% diff gate", (
       ]),
     );
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
-    const base = commit(dir, "base");
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    const base = commit(dir, "base");
     const uncovered = Array.from({ length: 20 }, (_, i) => `    public int F${i}() => ${i};`).join("\n");
     write(dir, "src/Desk.New/BrandNew.cs", `namespace Desk.New;\npublic class BrandNew {\n${uncovered}\n}\n`);
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
@@ -466,7 +481,7 @@ test("overall drop vs a base with the script fails", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below main|below main's floor|behind measured|lowers the committed/);
+    assert.match(r.output, /below BASE_SHA|behind measured|lowers the committed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -504,7 +519,7 @@ test("overall line/branch drop vs BASE floor is reported when committed floor is
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /overall line .* dropped below main/);
+    assert.match(r.output, /overall line .* dropped below BASE_SHA/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -630,7 +645,7 @@ test("committed baseline behind measured fails once BASE has the script", () => 
   }
 });
 
-test("bootstrap: committed baseline above measured is a Note, not FAIL", () => {
+test("committed baseline above measured fails once BASE has the gate", () => {
   const { dir, base } = setupPassRepo();
   try {
     write(
@@ -649,30 +664,20 @@ test("bootstrap: committed baseline above measured is a Note, not FAIL", () => {
     write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 0], [2, 0]]));
     const r = runGate({
       root: dir,
-      argv: gateArgs(base, ["--base-dir", "_base"]),
+      argv: gateArgs(base),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.bootstrapped, true);
-    assert.equal(r.failed, false);
-    assert.match(r.output, /cannot relax overall\/diff/);
-    assert.match(r.output, /Floor: \*\*0 \/ 0\*\*/);
+    assert.equal(r.failed, true);
+    assert.match(r.output, /above measured|dropped below BASE_SHA/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("bootstrap: head-side baseline lowering does not change overall/diff pass/fail", () => {
+test("head-side baseline lowering vs BASE_SHA fails closed", () => {
   const { dir, base } = setupPassRepo();
   try {
-    const run = () =>
-      runGate({
-        root: dir,
-        argv: gateArgs(base),
-        stdoutWrite: () => {},
-        stderrWrite: () => {},
-      });
-    const high = run();
     write(
       dir,
       "perf/coverage-baseline.json",
@@ -681,12 +686,14 @@ test("bootstrap: head-side baseline lowering does not change overall/diff pass/f
         web: { line: 50, branch: 50 },
       }),
     );
-    const low = run();
-    assert.equal(high.bootstrapped, true);
-    assert.equal(low.bootstrapped, true);
-    assert.equal(high.failed, low.failed);
-    assert.equal(low.failed, false);
-    assert.match(low.output, /cannot relax overall\/diff/);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /below the BASE_SHA floor|lowers the committed baseline/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -729,7 +736,7 @@ test("once BASE has a floor, lowering the head JSON to match dropped coverage st
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the default-branch floor|dropped below main|below main's floor|below BASE_SHA/);
+    assert.match(r.output, /below the BASE_SHA floor|dropped below BASE_SHA|lowers the committed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -778,7 +785,7 @@ test("poisoned --base-dir JSON cannot replace the BASE_SHA floor", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the default-branch floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
+    assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -822,7 +829,7 @@ test("empty --base-dir cannot force bootstrap once BASE_SHA has the script", () 
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the default-branch floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
+    assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -923,8 +930,8 @@ test("diff branch below 80% fails", () => {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
     write(dir, "web/src/app/app.ts", "export const x = 1;\n");
     headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
-    const base = commit(dir, "base");
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    const base = commit(dir, "base");
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() { if (true) {} } }\nvoid Extra() {}\n");
     write(
       dir,
@@ -947,7 +954,6 @@ test("diff branch below 80% fails", () => {
         [1, 0, 1, 1],
       ]),
     );
-    headJson(dir, { dotnet: { line: 100, branch: 0 }, web: { line: 100, branch: 100 } });
     commit(dir, "add poorly covered branch");
     const r = runGate({
       root: dir,
@@ -1243,7 +1249,7 @@ test("valid scope-change override may lower the floor to measured; a real drop s
   }
 });
 
-test("override with from not equal to the default-branch floor fails", () => {
+test("override with from not equal to the BASE_SHA floor fails", () => {
   const dir = initRepo();
   try {
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
@@ -1291,7 +1297,7 @@ test("override with from not equal to the default-branch floor fails", () => {
   }
 });
 
-test("R5-F1 (c): deleting the gate then restoring it with allowOnce fails", () => {
+test("R5-F1 (c) / c-hack: restoring a modified gate after a delete fails closed", () => {
   const dir = initRepo();
   try {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
@@ -1302,9 +1308,8 @@ test("R5-F1 (c): deleting the gate then restoring it with allowOnce fails", () =
     commit(dir, "main has the gate");
     rmSync(join(dir, "perf/coverage-gate.mjs"));
     const deleted = commit(dir, "delete gate");
-    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
-    write(dir, "perf/coverage-bootstrap.json", JSON.stringify({ allowOnce: true }));
-    commit(dir, "restore with allowOnce");
+    write(dir, "perf/coverage-gate.mjs", "console.log('hacked'); process.exit(0);\n");
+    commit(dir, "restore modified gate");
     writePassCoverage(dir);
     const r = runGate({
       root: dir,
@@ -1312,15 +1317,14 @@ test("R5-F1 (c): deleting the gate then restoring it with allowOnce fails", () =
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/bootstrap-unreachable");
-    assert.match(r.output, /already exists in history|Bootstrap is unreachable/);
+    assertMissingBaseGate(r);
+    assert.equal(existsSync(join(dir, "_base/perf/coverage-gate.mjs")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("R5-F1 (d): force-push back to a pre-gate commit then re-introduce fails", () => {
+test("R5-F1 (d') / d': re-introducing the gate after a rewind fails closed (no tag)", () => {
   const dir = initRepo();
   try {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
@@ -1330,7 +1334,6 @@ test("R5-F1 (d): force-push back to a pre-gate commit then re-introduce fails", 
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
     commit(dir, "had the gate");
-    git(dir, ["tag", "before-rewrite"]);
     git(dir, ["reset", "--hard", pre]);
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
@@ -1343,45 +1346,9 @@ test("R5-F1 (d): force-push back to a pre-gate commit then re-introduce fails", 
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/bootstrap-unreachable");
-    assert.match(r.output, /already exists in history|Bootstrap is unreachable/);
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("R5-F1 (e): shallow history fails closed", () => {
-  const src = initRepo();
-  const dest = mkdtempSync(join(tmpdir(), "gate-shallow-"));
-  try {
-    write(src, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
-    write(src, "web/src/app/app.ts", "export const x = 1;\n");
-    headJson(src, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
-    commit(src, "pre-gate");
-    execFileSync("git", ["clone", "--depth", "1", `file://${src}`, dest], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    git(dest, ["config", "user.email", "gate@test.invalid"]);
-    git(dest, ["config", "user.name", "Gate Test"]);
-    git(dest, ["config", "commit.gpgsign", "false"]);
-    write(dest, "perf/coverage-gate.mjs", THIS_GATE);
-    write(dest, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
-    writePassCoverage(dest);
-    const base = git(dest, ["rev-parse", "HEAD"]);
-    const r = runGate({
-      root: dest,
-      argv: pushArgs(base),
-      stdoutWrite: () => {},
-      stderrWrite: () => {},
-    });
-    assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/shallow-history");
-    assert.match(r.output, /shallow/);
-  } finally {
-    rmSync(src, { recursive: true, force: true });
-    rmSync(dest, { recursive: true, force: true });
   }
 });
 
@@ -1421,7 +1388,7 @@ function writeStaleOverride(dir, to) {
   );
 }
 
-test("first push that introduces the gate bootstraps (event.before has no gate)", () => {
+test("first push that introduces the gate fails closed (bootstrap closed after #5)", () => {
   const dir = initRepo();
   try {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
@@ -1439,11 +1406,7 @@ test("first push that introduces the gate bootstraps (event.before has no gate)"
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.failed, false, r.output);
-    assert.equal(r.bootstrapped, true);
-    assert.match(r.output, /introducing push|Bootstrap/);
-    assertBootstrapLabels(r.output, "push/bootstrap");
-    assert.match(r.output, /This push may establish the gate/);
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1470,7 +1433,7 @@ test("docs-only push after merge uses the BASE_SHA floor and ignores leftover ov
     });
     assert.equal(r.failed, false, r.output);
     assert.equal(r.bootstrapped, false);
-    assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+    assert.doesNotMatch(r.output, /`from` must equal the BASE_SHA floor/);
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, merged);
   } finally {
@@ -1499,15 +1462,15 @@ test("docs-only PR after merge ignores leftover override whose from no longer ma
     });
     assert.equal(r.failed, false, r.output);
     assert.doesNotMatch(r.output, /Re-baseline override/);
-    assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
-    assertGatePath(r.output, "pr/default");
+    assert.doesNotMatch(r.output, /`from` must equal the BASE_SHA floor/);
+    assertGatePath(r.output, "pr/base");
     assertBaseSourceLabels(r.output, main);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("PR cannot use the introducing-gate push path (R3-M2)", () => {
+test("PR cannot use the introducing-gate push path (R3-M2 models CI)", () => {
   const dir = initRepo();
   try {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
@@ -1516,17 +1479,15 @@ test("PR cannot use the introducing-gate push path (R3-M2)", () => {
     const before = commit(dir, "pre-gate");
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
-    const head = commit(dir, "default now has the gate");
+    commit(dir, "head has the gate");
     writePassCoverage(dir);
     const r = runGate({
       root: dir,
-      argv: gateArgs(before, ["--default-sha", head]),
+      argv: gateArgs(before),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/missing-base-gate");
-    assert.match(r.output, /base is missing perf\/coverage-gate\.mjs/);
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1578,7 +1539,7 @@ test("R5-M1 (a): override PR push passes when from equals the BASE_SHA floor", (
     assert.equal(r.failed, false, r.output);
     assert.equal(r.bootstrapped, false);
     assert.match(r.output, /Re-baseline override/);
-    assert.doesNotMatch(r.output, /`from` must equal the default-branch floor/);
+    assert.doesNotMatch(r.output, /`from` must equal the BASE_SHA floor/);
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, before);
   } finally {
@@ -1615,30 +1576,76 @@ test("R5-M1 (b): direct push that lowers the baseline fails", () => {
   }
 });
 
-test("bootstrap is unreachable once BASE_SHA already has the gate", () => {
+test("P4: PR retargeted to a branch without the gate, with a hacked gate, fails closed", () => {
   const dir = initRepo();
   try {
     write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
     write(dir, "web/src/app/app.ts", "export const x = 1;\n");
-    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
-    write(dir, "perf/coverage-baseline.json", JSON.stringify({
-      dotnet: { line: 100, branch: 100 },
-      web: { line: 100, branch: 100 },
-    }));
-    const noGate = commit(dir, "pre-gate default");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const oldBase = commit(dir, "side branch never had the gate");
+    git(dir, ["branch", "old-base"]);
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
-    const withGate = commit(dir, "BASE_SHA has the gate");
+    commit(dir, "main has the gate");
+    write(dir, "perf/coverage-gate.mjs", "console.log('hacked'); process.exit(0);\n");
+    commit(dir, "PR head hacks the gate");
     writePassCoverage(dir);
     const r = runGate({
       root: dir,
-      argv: pushArgs(withGate, ["--default-sha", noGate]),
+      argv: gateArgs(oldBase),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
-    assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/bootstrap-unreachable");
-    assert.match(r.output, /Bootstrap is unreachable now that BASE_SHA has/);
+    assertMissingBaseGate(r);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P5: stale pre-gate BASE_SHA with a hacked gate fails closed", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const stale = commit(dir, "stale pre-gate base.sha");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    commit(dir, "later main has the gate");
+    write(dir, "perf/coverage-gate.mjs", "console.log('hacked'); process.exit(0);\n");
+    commit(dir, "PR head hacks the gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(stale),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assertMissingBaseGate(r);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P5'': PR bootstrap at 0/0 with no branch holding gate history fails closed", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const base = commit(dir, "only refs are pre-gate");
+    assert.equal(git(dir, ["log", "--all", "--", "perf/coverage-gate.mjs"]), "");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    commit(dir, "PR introduces the gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1773,7 +1780,7 @@ test("override from must equal the BASE_SHA floor when not bootstrapping (say FA
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /`from` must equal the default-branch floor/);
+    assert.match(r.output, /`from` must equal the BASE_SHA floor/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1799,6 +1806,182 @@ test("push with empty --base-ref does not treat PR base as true", () => {
     assert.doesNotMatch(r.output, /PR base 'true'/);
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, merged);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: committed baseline below the BASE_SHA floor is reported", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(
+      dir,
+      "perf/coverage-baseline.json",
+      JSON.stringify({
+        dotnet: { line: 10, branch: 10 },
+        web: { line: 10, branch: 10 },
+      }),
+    );
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /below the BASE_SHA floor/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: cannot resolve default-branch tip fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    const r = runGate({
+      root: dir,
+      argv: [
+        "--dotnet",
+        "cov/dotnet",
+        "--web",
+        "cov/web",
+        "--base",
+        base,
+        "--default-branch",
+        "no-such-branch",
+        "--base-ref",
+        "",
+        "--event",
+        "push",
+      ],
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /cannot resolve default branch 'no-such-branch'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: unrelated BASE_SHA has no merge-base and fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    git(dir, ["checkout", "--orphan", "other"]);
+    write(dir, "orphan.txt", "unrelated\n");
+    const other = commit(dir, "unrelated history");
+    git(dir, ["checkout", "main"]);
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(other),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /cannot resolve merge-base|git merge-base/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: unparseable head override fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(dir, "perf/coverage-override.json", "{not-json");
+    commit(dir, "bad override");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /cannot parse head perf\/coverage-override\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: invalid override schema fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(dir, "perf/coverage-override.json", JSON.stringify({ reason: "no from/to" }));
+    commit(dir, "invalid override");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /exactly \{from, reason, to\}/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: unreadable testconfig is reported in coverage scope", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "tests/testconfig.json", "{not-json");
+    const lines = describeCoverageScope(dir);
+    assert.match(lines.join("\n"), /unreadable/);
+    const missing = describeCoverageScope(join(dir, "no-such-root"));
+    assert.match(missing.join("\n"), /not present/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F2: poisoned base-dir JSON that git does not have fails closed", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello {}\n");
+    const base = commit(dir, "base has gate only");
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "perf/coverage-baseline.json", JSON.stringify(VALID_BASELINE));
+    write(dir, "cov/dotnet/a.cobertura.xml", "<coverage></coverage>");
+    write(dir, "cov/web/lcov.info", lcov("src/app/app.ts", [[1, 1]]));
+    commit(dir, "head adds json");
+    write(dir, "_base/perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "_base/perf/coverage-thresholds.json", "{not-json");
+    write(dir, "_base/perf/coverage-baseline.json", JSON.stringify(VALID_BASELINE));
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base, ["--base-dir", "_base"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /cannot parse .* in base checkout|missing .*thresholds/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hacked HEAD gate would pass if CI fell back; missing _base does not", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const base = commit(dir, "pre-gate");
+    write(dir, "perf/coverage-gate.mjs", "console.log('hacked'); process.exit(0);\n");
+    writePassCoverage(dir);
+    assert.equal(existsSync(join(dir, "_base/perf/coverage-gate.mjs")), false);
+    execFileSync(process.execPath, [join(dir, "perf/coverage-gate.mjs")], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assertMissingBaseGate(r);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
