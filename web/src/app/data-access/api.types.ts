@@ -50,6 +50,6 @@ export interface GridBlock {
 /** What the status bar shows about the last data request (README §9.2). */
 export interface RequestInfo {
   ms: number; cache: 'HIT' | 'MISS' | null; bytes: number | null; serverMs: number | null;
-  /** True when parallel blocks overlapped, so `bytes` may be a sibling block's size; absent means exact. */
+  /** True when overlapping blocks make `bytes` approximate (shown as "≈", see #222); absent means exact. */
   bytesApprox?: boolean;
 }
