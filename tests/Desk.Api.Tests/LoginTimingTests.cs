@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
@@ -280,6 +282,32 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
         Assert.Equal(1, hasher.Verifications);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Without_lockout_support_the_failure_count_is_neither_raised_nor_cleared(bool rightPassword)
+    {
+        // #231: as the base, the failure count is touched only where the user manager supports lockout.
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<UserManager<DeskUser>>();
+            s.AddScoped<UserManager<DeskUser>, NoLockoutUserManager>();
+        }));
+        var user = await api.CreateUserAsync();
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.AccessFailedCount, 2), Ct);
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        Assert.False(signIn.UserManager.SupportsUserLockout);
+        var tracked = await signIn.UserManager.FindByIdAsync(user.Id.ToString());
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, rightPassword ? PostgresApiFactory.Password : "wrong-password-123456", lockoutOnFailure: true);
+
+        Assert.Equal(rightPassword ? SignInResult.Success : SignInResult.Failed, result);
+        await using (var db = api.NewContext())
+            Assert.Equal(2, (await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct)).AccessFailedCount);
+    }
+
     [Fact]
     public async Task Without_lockout_on_failure_a_wrong_password_is_not_counted()
     {
@@ -345,6 +373,22 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
             Assert.True(_waits.Count >= count, $"{_waits.Count} of {count} logins reached the floor.");
             return FloorWaits;
         }
+    }
+
+    /// <summary>The app's user manager over the same store, reporting that it does not support lockout.</summary>
+    private sealed class NoLockoutUserManager(
+        IUserStore<DeskUser> store,
+        IOptions<IdentityOptions> options,
+        IPasswordHasher<DeskUser> hasher,
+        IEnumerable<IUserValidator<DeskUser>> userValidators,
+        IEnumerable<IPasswordValidator<DeskUser>> passwordValidators,
+        ILookupNormalizer normalizer,
+        IdentityErrorDescriber errors,
+        IServiceProvider services,
+        ILogger<UserManager<DeskUser>> logger)
+        : UserManager<DeskUser>(store, options, hasher, userValidators, passwordValidators, normalizer, errors, services, logger)
+    {
+        public override bool SupportsUserLockout => false;
     }
 
     /// <summary>The app's hasher, counting each PBKDF2 run.</summary>
