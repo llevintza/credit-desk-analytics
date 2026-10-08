@@ -1,4 +1,4 @@
-# ADR-0022: CI runs only the jobs a change touches (base-sourced per-area classifier)
+# ADR-0023: CI runs only the jobs a change touches (base-sourced per-area classifier)
 
 - **Status:** Proposed
 - **Date:** 2026-10-08

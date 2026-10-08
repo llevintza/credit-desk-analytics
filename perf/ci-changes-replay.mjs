@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ADR-0022 evidence: replays the change classifier over the last N first-parent
+// ADR-0023 evidence: replays the change classifier over the last N first-parent
 // commits of a ref and prints which CI jobs each would have run.
 // Usage: node perf/ci-changes-replay.mjs [count=15] [ref=origin/main]
 import { execFileSync } from "node:child_process";
