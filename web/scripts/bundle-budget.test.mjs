@@ -87,3 +87,9 @@ test('fails when a referenced chunk is missing', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /missing/);
 });
+
+test('refuses paths outside the dist dir', () => {
+  const r = run({ 'index.html': page('<script src="../outside.js"></script><script src="main-A1.js" type="module"></script>'), 'main-A1.js': 'void 0;' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /resolves outside/);
+});

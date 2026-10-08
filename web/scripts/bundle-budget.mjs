@@ -4,7 +4,7 @@
 // built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
 // Fails closed (#145): anything that would leave the budget unchecked exits 1 instead of passing.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 
 const dir = process.argv[2] ?? 'dist/web/browser';
@@ -14,8 +14,11 @@ const fail = (message) => {
   process.exit(1);
 };
 
+// index.html paths may not leave the dist dir (`../…`); only files the build emitted are measured.
+const root = resolve(dir);
 const read = (file) => {
-  const path = join(dir, file);
+  const path = resolve(root, file);
+  if (!path.startsWith(root + sep)) fail(`${file} resolves outside ${root}; refusing to read it.`);
   if (!existsSync(path)) fail(`${path} is referenced by the initial load but missing.`);
   return readFileSync(path);
 };
