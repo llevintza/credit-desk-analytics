@@ -6,6 +6,7 @@
     <Project Path="src/Desk.Api/Desk.Api.csproj" />
     <Project Path="src/Desk.Data/Desk.Data.csproj" />
     <Project Path="src/Desk.Seeder/Desk.Seeder.csproj" />
+    <Project Path="src/Desk.UserAdmin/Desk.UserAdmin.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Desk.Api.Tests/Desk.Api.Tests.csproj" />
