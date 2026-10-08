@@ -62,7 +62,7 @@ public sealed class PositionsTests(PostgresApiFactory api)
         var summary = doc.GetProperty("summary");
         Assert.Equal(await ScalarAsync<decimal>($"SELECT sum(market_value) FROM core.position_snapshot WHERE {where}"), summary.GetProperty("market_value").GetDecimal());
         Assert.Equal(await ScalarAsync<decimal>($"SELECT sum(dv01) FROM core.position_snapshot WHERE {where}"), summary.GetProperty("dv01").GetDecimal());
-        var wavg = await ScalarAsync<double>($"SELECT sum(spread_bp * market_value::float8) / sum(market_value::float8) FROM core.position_snapshot WHERE {where}");
+        var wavg = await ScalarAsync<double>($"SELECT sum(spread_bp * abs(market_value)::float8) / nullif(sum(abs(market_value)::float8) FILTER (WHERE spread_bp IS NOT NULL), 0) FROM core.position_snapshot WHERE {where}");
         Assert.Equal(wavg, summary.GetProperty("spread_bp").GetDouble(), 6);
         Assert.False(summary.TryGetProperty("deal_name", out _)); // text columns have no aggregate
 
