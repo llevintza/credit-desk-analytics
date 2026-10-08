@@ -298,6 +298,53 @@ jobs:
       - if: failure()
         run: docker compose logs
 
+  budgets:
+    # README §10 / §14.1 step 9: P1 first-block payload budgets on the compose stack, seeded at scale 1.0.
+    # Fails above the "Risk" budget (60 KB on the wire); warns above "All" (250 KB). No secrets: the database
+    # password and the throwaway account's password are generated per run and masked.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: ./.github/actions/build-db-tools
+      - name: Generate a throwaway local password (never stored)
+        run: |
+          pw=$(openssl rand -hex 16)
+          echo "::add-mask::$pw"
+          echo "POSTGRES_PASSWORD=$pw" > .env
+      - env:
+          APP_VERSION: ${{ github.sha }}
+        run: docker compose up -d --build
+      - name: Migrate and seed (scale 1.0)
+        run: |
+          set -a; . ./.env; set +a
+          export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
+          for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U desk -d creditdesk && break; sleep 2; done
+          dbtools/efbundle
+          dbtools/seeder/Desk.Seeder --force --scale 1.0
+      - name: Payload budgets
+        run: |
+          set -a; . ./.env; set +a
+          export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
+          # A throwaway viewer for this run; the CLI prints its generated password once, captured and masked here.
+          out=$(dotnet run -c Release --project src/Desk.UserAdmin -- add --email budgets@example.com --role viewer --expires 2099-12-31)
+          DESK_PASSWORD=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
+          echo "::add-mask::$DESK_PASSWORD"
+          test -n "$DESK_PASSWORD"
+          for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
+          BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
+            node perf/payload-size.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: failure()
+        run: docker compose logs
+
   db-tools:
     # Build-only rehearsal of deploy/db-ops (README §14.2 / §14.3): same composite
     # action, clean checkout, no prior restore/build, no secrets, no production
