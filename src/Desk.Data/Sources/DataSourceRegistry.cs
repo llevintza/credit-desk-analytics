@@ -48,13 +48,17 @@ public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounte
     /// </summary>
     internal static string Normalize(string cs, int maxPoolSize)
     {
-        var builder = new NpgsqlConnectionStringBuilder(cs);
-        // The builder keeps key order, so drop and re-append: strings that differ only in these keys key one pool.
-        builder.Remove("Command Timeout");
-        builder.Remove("Maximum Pool Size");
-        builder.CommandTimeout = ServiceCollectionExtensions.CommandTimeoutSeconds;
-        builder.MaxPoolSize = maxPoolSize;
-        return builder.ConnectionString;
+        var parsed = new NpgsqlConnectionStringBuilder(cs);
+        parsed.Remove("Command Timeout");
+        parsed.Remove("Maximum Pool Size");
+        // Rebuild in a fixed key order: Remove + re-add reuses the freed slot, so the output order (part of the
+        // pool key) would otherwise depend on where the keys were, and one database could get two pools.
+        var canonical = new NpgsqlConnectionStringBuilder();
+        foreach (var key in parsed.Keys.Cast<string>().Order(StringComparer.OrdinalIgnoreCase))
+            canonical[key] = parsed[key];
+        canonical.CommandTimeout = ServiceCollectionExtensions.CommandTimeoutSeconds;
+        canonical.MaxPoolSize = maxPoolSize;
+        return canonical.ConnectionString;
     }
 
     // A typo or 0 must not lift the cap: anything that isn't a positive integer falls back to the default (as LimitsOptions).

@@ -107,6 +107,23 @@ public sealed class DataSourceRegistryTests
         Assert.Contains("Maximum Pool Size=15", registry.Get(ConnectionStrings.Market).ConnectionString);
     }
 
+    [Theory]
+    [InlineData("Command Timeout=300;Host=db;Database=desk;Username=u")]
+    [InlineData("MaxPoolSize=50;Host=db;Database=desk;Username=u")]
+    [InlineData("Host=db;Command Timeout=300;Database=desk;Username=u")]
+    [InlineData("Username=u;Database=desk;Host=db")]
+    public async Task Sources_on_one_database_share_a_pool_wherever_the_normalised_keys_sit(string market)
+    {
+        // R201-02: the pool key must not depend on key order in the configured string.
+        await using var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u",
+            ["ConnectionStrings:Market"] = market,
+        }), new DbConnectionCounter());
+        Assert.Same(registry.Get(ConnectionStrings.Core), registry.Get(ConnectionStrings.Market));
+        Assert.Equal(1, registry.DistinctDataSources);
+    }
+
     [Fact]
     public async Task Nothing_resolves_until_first_use_and_a_missing_setting_names_the_variable()
     {
