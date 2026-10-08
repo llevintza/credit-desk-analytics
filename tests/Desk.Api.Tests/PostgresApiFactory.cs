@@ -72,13 +72,25 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         if (code != 0) throw new InvalidOperationException($"seed failed ({code}): {output}");
     }
 
-    public override async ValueTask DisposeAsync()
+    public override ValueTask DisposeAsync() => TeardownAsync(_time, () => base.DisposeAsync(), _pg.DisposeAsync);
+
+    /// <summary>
+    /// Order-independent guard: whichever test moved the shared clock, the collection fails here (#226). The clock
+    /// is read before anything is torn down, and every disposal still runs, so a teardown error can neither skip
+    /// the check nor hide it: each failure is reported on its own (#262).
+    /// </summary>
+    internal static async ValueTask TeardownAsync(TimeProvider clock, params Func<ValueTask>[] disposals)
     {
-        await base.DisposeAsync();
-        await _pg.DisposeAsync();
-        // Order-independent guard: whichever test moved the shared clock, the collection fails here.
-        if (_time.GetUtcNow() != Start)
-            throw new InvalidOperationException($"A test moved the shared api-postgres clock to {_time.GetUtcNow():O}; advance time on api.WithOwnClock() instead (#226).");
+        var now = clock.GetUtcNow();
+        var errors = new List<Exception>();
+        if (now != Start)
+            errors.Add(new InvalidOperationException($"A test moved the shared api-postgres clock to {now:O}; advance time on api.WithOwnClock() instead (#226)."));
+        foreach (var dispose in disposals)
+        {
+            try { await dispose(); }
+            catch (Exception e) { errors.Add(e); }
+        }
+        if (errors.Count > 0) throw new AggregateException(errors);
     }
 
     /// <summary>

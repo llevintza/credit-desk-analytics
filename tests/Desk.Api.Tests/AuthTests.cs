@@ -408,6 +408,34 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Fixture_teardown_reports_a_moved_clock_even_when_a_disposal_throws()
+    {
+        // #262: the clock is read before teardown and every disposal still runs, so neither failure hides the other.
+        var clock = new FakeTimeProvider(PostgresApiFactory.Start);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var ran = new List<string>();
+        var error = await Assert.ThrowsAsync<AggregateException>(async () => await PostgresApiFactory.TeardownAsync(clock,
+            () => { ran.Add("host"); throw new IOException("host teardown failed"); },
+            () => { ran.Add("db"); clock.Advance(TimeSpan.FromMinutes(1)); return ValueTask.CompletedTask; }));
+        Assert.Equal(["host", "db"], ran);
+        Assert.Collection(error.InnerExceptions,
+            e => Assert.Contains("moved the shared api-postgres clock to 2026-10-07T12:01:00", Assert.IsType<InvalidOperationException>(e).Message),
+            e => Assert.Equal("host teardown failed", Assert.IsType<IOException>(e).Message));
+    }
+
+    [Fact]
+    public async Task Fixture_teardown_passes_on_an_unmoved_clock_and_reports_teardown_errors_alone()
+    {
+        var clock = new FakeTimeProvider(PostgresApiFactory.Start);
+        var ran = 0;
+        await PostgresApiFactory.TeardownAsync(clock, () => { ran++; return ValueTask.CompletedTask; });
+        Assert.Equal(1, ran);
+        var error = await Assert.ThrowsAsync<AggregateException>(async () => await PostgresApiFactory.TeardownAsync(clock,
+            () => throw new IOException("db teardown failed")));
+        Assert.IsType<IOException>(Assert.Single(error.InnerExceptions));
+    }
+
+    [Fact]
     public async Task Own_clock_hosts_leave_the_shared_clock_where_it_was()
     {
         var (host, clock) = api.WithOwnClock();
