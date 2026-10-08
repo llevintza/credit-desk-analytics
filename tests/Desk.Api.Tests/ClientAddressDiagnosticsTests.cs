@@ -169,6 +169,22 @@ public sealed class ClientAddressDiagnosticsTests
     }
 
     [Fact]
+    public void One_request_resolved_by_several_limiters_counts_once()
+    {
+        var diagnostics = Diagnostics();
+        var clients = new ClientAddress(true);
+        var first = Request(diagnostics, RenderLb);
+        clients.For(first);
+        clients.For(first);
+        var second = Request(diagnostics, RenderLb);
+        for (var i = 0; i < 3; i++) clients.For(second); // the global bucket, the login window, the re-partition
+        _time.Advance(ClientAddressDiagnostics.FallbackInterval);
+        clients.For(Request(diagnostics, RenderLb));
+        Assert.Equal(2, _log.Lines.Count);
+        Assert.Contains("Suppressed=1", _log.Lines.Last().Text);
+    }
+
+    [Fact]
     public void Concurrent_fallbacks_log_once_per_interval_and_count_every_other_call()
     {
         const int calls = 2000;

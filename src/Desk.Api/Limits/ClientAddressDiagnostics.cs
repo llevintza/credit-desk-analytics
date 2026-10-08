@@ -67,6 +67,9 @@ public sealed class ClientAddressDiagnostics(
     /// <summary>A request behind the proxy keyed on something every client shares (throttled).</summary>
     public void Fallback(HttpContext http, ClientAddress.Source source)
     {
+        // Each limiter resolves the key again; count the request once, not each lookup (R175-06).
+        if (!http.Items.TryAdd(typeof(ClientAddressDiagnostics), null))
+            return;
         var i = (int)source;
         var now = time.GetElapsedTime(_started).Ticks;
         var next = Interlocked.Read(ref _nextFallback[i]);
