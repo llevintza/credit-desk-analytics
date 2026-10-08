@@ -194,7 +194,7 @@ In production all six settings point at the same Neon database (`DATABASE_URL`) 
 | `core.position_snapshot` | **20,000 per as-of date**, **2 as-of dates** (today and the prior business day) | **wide, about 200 columns**, see 5.3 |
 | `core.position_history` | about 24 month-ends × 20,000 | **narrow**: as_of_date, position_id, market_value, face, price, spread, dv01, cs01, wal, pnl_mtd |
 | `core.trade` | ~150,000 over 2 years | trade_id, bond_id, portfolio_id, trade_ts `timestamptz` (realistic intraday times), side, face, price, counterparty_id, trader |
-| `core.fund_performance` | 36–60 months per fund | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
+| `core.fund_performance` | about 40–70 months per fund (from each fund's inception through the month before as-of) | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
 
 **Deliberate edge cases the seed MUST include** (tests depend on them):
 - at least **3 deals with zero bonds** (newly announced, pricing pending)
@@ -237,7 +237,9 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | deal, bond, reference, app | small | < 10 MB |
 | **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
 
-The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB.
+The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
+
+**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
 
 **Measured (phase 1, scale 1.0, SEED=42):**
 - **1,563,791 rows** across 20 tables, loaded in **about 8–10 s** locally.
@@ -837,7 +839,7 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 |---|---|
 | **1. db-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
 | **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
-| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it reseeds inside a transaction per table and updates the metadata. The step prints the DB size and fails over budget (§5.4). |
+| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it truncates and reloads all seeded tables in one transaction; the metadata row is written in the same transaction after a pre-commit size guard. The step prints the DB size and fails over budget (§5.4). |
 | **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
 | **5. smoke** | Poll `$APP_URL/health` (up to 15 min, every 15 s; the free tier builds slowly and cold-starts) until `version` equals `github.sha`. Then `GET /` returns 200 HTML, and `GET /api/me` returns 401 (auth enforced). The workflow summary shows URL, version, migration list, seed action (skipped / reseeded) and DB size. |
 

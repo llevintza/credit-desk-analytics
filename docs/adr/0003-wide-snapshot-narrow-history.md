@@ -46,3 +46,5 @@ The columns come from a single **column catalog** (`ColumnCatalog.cs`). The same
 - **Adding a measure takes a migration plus a catalog entry.** The pin test fails if only one of them changes.
 - **Trends are limited to the measures in the narrow table.** A new trend measure means widening history deliberately.
 - **Only two snapshot dates are kept.** That keeps the database at about 271 MB of the 350 MB budget, with headroom.
+- **Business days are weekend-only.** README §5.1 lists a `reference` holiday calendar; this phase uses Saturday/Sunday only (`PreviousBusinessDay` / `LastBusinessDayOfMonth`). A synthetic US holiday table is deferred until a blotter needs it.
+- **Fact-table FKs are logical, not declared.** Snapshot, history, trades, remittances and marks carry ids that match the dimension tables, but the DDL omits those foreign keys so binary COPY is not blocked by check order. Portfolio→fund, bond→deal and the fund child tables are declared.
