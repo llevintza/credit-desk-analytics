@@ -24,7 +24,8 @@ try
 {
     return await SeedRunner.RunAsync(options, connectionString, Console.Out, Console.Error, cts.Token);
 }
-catch (OperationCanceledException) when (cts.IsCancellationRequested)
+// Any failure once cancellation was requested is the cancellation (it can surface as e.g. an NpgsqlException).
+catch (Exception) when (cts.IsCancellationRequested)
 {
     Console.Error.WriteLine("ERROR: cancelled; the seeding transaction was rolled back.");
     return 130;

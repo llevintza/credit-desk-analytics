@@ -291,6 +291,20 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     }
 
     [Fact]
+    public async Task Cancellation_surfacing_as_a_database_error_is_not_reported_as_unreadable_size()
+    {
+        // R217-08: a cancelled probe that fails with a non-OCE propagates (exit 130 in Program.cs) instead of exit 2.
+        var before = await StateAsync();
+        var err = new StringWriter();
+        using var cts = new CancellationTokenSource();
+        await Assert.ThrowsAsync<NpgsqlException>(() =>
+            SeedRunner.RunAsync(SeededDatabase.Options(force: true), db.ConnectionString, new StringWriter(), err,
+                (_, _) => { cts.Cancel(); throw new NpgsqlException("connection broken by cancel"); }, cts.Token));
+        Assert.DoesNotContain("cannot read the current database size", err.ToString());
+        Assert.Equal(before, await StateAsync());
+    }
+
+    [Fact]
     public async Task Skip_path_with_unreadable_size_exits_0()
     {
         // Neither the peak cap nor an unreadable size may fail an unchanged --if-changed run (#109 req. 2, R217-02).

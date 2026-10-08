@@ -63,7 +63,8 @@ public static class SeedRunner
                 // TRUNCATE keeps the old files until COMMIT, so the reseed peaks near current size + new data.
                 long dbBefore;
                 try { dbBefore = await databaseSize(conn, ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                // A cancellation can surface as a non-OCE (e.g. NpgsqlException); let it propagate so it exits 130, not 2.
+                catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
                 {
                     err.WriteLine($"ERROR: cannot read the current database size ({ex.GetType().Name}: {ex.Message}), so the reseed peak " +
                                   $"cannot be checked against the {options.CapMegabytes} MB cap. Refused before TRUNCATE; nothing was changed.");
