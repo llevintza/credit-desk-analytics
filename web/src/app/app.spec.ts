@@ -26,6 +26,15 @@ describe('App', () => {
     http.verify();
   });
 
+  it('labels the shell as a preview, not a hard-coded phase that goes stale', async () => {
+    const fixture = TestBed.createComponent(App);
+    await fixture.whenStable();
+    const stage = (fixture.nativeElement as HTMLElement).querySelector('[data-testid=stage]');
+    expect(stage?.textContent?.trim()).toBe('Preview');
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toMatch(/phase \d/i);
+    TestBed.inject(HttpTestingController).expectOne('/health').flush({ status: 'ok', version: 'v' });
+  });
+
   it('shows the maintenance banner when /health says so', async () => {
     const fixture = TestBed.createComponent(App);
     const http = TestBed.inject(HttpTestingController);
