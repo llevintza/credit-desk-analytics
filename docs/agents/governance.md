@@ -206,7 +206,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 
 ```
 /.github/ @llevintza
-/.github/workflows/agents-governance.yml @llevintza  # agents-governance.yml (planned; arrives with the harness build PR)
+/.github/workflows/agents-governance.yml @llevintza
 /AGENTS.md @llevintza
 **/AGENTS.md @llevintza
 /CLAUDE.md @llevintza
@@ -233,6 +233,8 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 /src/Desk.Api/Auth/ @llevintza
 /src/Desk.Data/Auth/ @llevintza
 ```
+
+`agents-governance.yml` is planned; it arrives with the harness build PR.
 
 - **[TW]** `main` @ `99c0911e` (9:55 PM ET) has seven of these lines: `/.github/`, `/.claude/`, `/CLAUDE.md`, `/AGENTS.md`, `/.gitleaks.toml`, `/perf/coverage-*`, `/tests/testconfig.json`. The `**/AGENTS.md` and `**/CLAUDE.md` lines cover the seven new nested nodes (rev 11 adds `src/Desk.UserAdmin`).
 - **Rev 11 (H19):** `/src/Desk.UserAdmin/`, `/src/Desk.Api/Auth/` and `/src/Desk.Data/Auth/` are **advisory** lines for the account and auth surface (UserAdmin can create admin accounts and, after #122, grant portfolios). They are visibility only and not governance paths. **They are not the barrier (rev 12, R11-F3):** no ruleset rule requires code-owner review, so they request review and enforce nothing. What protects production data and accounts is (a) the **governance-locked rules**: the root "local/test databases only" rule (root `AGENTS.md` is a governance path; **PENDING #123**: still open with no PR, so the rule is not in root at `9b83f7ef` or `5f91d26f`; Helms signed off the wording, #123 comment 6052455667; #123's merge is a build-PR hard precondition, rev 13 H20) and the nested `src/Desk.UserAdmin/AGENTS.md`, covered by `**/AGENTS.md`, so a PR editing it without a `[workflows]` title fails governance-paths (`testing.md`); and (b) **credential isolation**: production secrets live only in the `production` environment; UserAdmin is in neither `deploy.yml` nor `db-ops.yml` (governance paths), the runtime image or the db-tools bundle; agents never hold a Neon or production connection string (OQ-12; that README §12 line is a build-PR hard precondition, rev 13 H20); and the admin-session route is the tracked R6-M1 residual (OQ5). UserAdmin has no code-level connection-string guard at `9b83f7ef`, so a production connection string is its only way to production. The gate and Code Reviewer's review stay the process control.
