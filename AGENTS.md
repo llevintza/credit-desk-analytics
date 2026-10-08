@@ -89,7 +89,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Whole stack | `docker compose up --build` (http://localhost:8080) |
 | Lint workflows | `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest` |
 | Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
-| E2E (phase 4) | `cd e2e && npx playwright test` |
+| E2E (phase 4) | `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build`, migrate, seed `--scale 0.2`, create a viewer with Desk.UserAdmin, then `cd e2e && npm ci && npx playwright install chromium && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test` (CI `e2e` job; `PERF=1 … npx playwright test perf` for ADR-0009 numbers) |
 | Payload budget (phase 3) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs` (CI `budgets` job; exit 1 over the Risk budget) |
 | Grid benchmarks (ADR-0006/7/8) | `DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out`, then `(cd perf && npm ci) && node perf/parse-bench.mjs perf/out` |
 | API latency p95 (k6) | `docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=… -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js` (raise `RATE_LIMIT_PER_USER_*` for the run) |

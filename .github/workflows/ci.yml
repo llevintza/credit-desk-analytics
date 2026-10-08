@@ -345,6 +345,67 @@ jobs:
       - if: failure()
         run: docker compose logs
 
+  e2e:
+    # README §11 / §14.1 step 10: Playwright against the compose stack seeded at scale 0.2, logged in as a
+    # throwaway viewer (generated, masked password). Uploads the report and the dark/light screenshots.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: ./.github/actions/build-db-tools
+      - name: Generate a throwaway local password (never stored)
+        run: |
+          pw=$(openssl rand -hex 16)
+          echo "::add-mask::$pw"
+          echo "POSTGRES_PASSWORD=$pw" > .env
+      - env:
+          APP_VERSION: ${{ github.sha }}
+        run: docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build
+      - name: Migrate, seed (scale 0.2) and create a throwaway viewer
+        run: |
+          set -a; . ./.env; set +a
+          export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
+          for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U desk -d creditdesk && break; sleep 2; done
+          dbtools/efbundle
+          dbtools/seeder/Desk.Seeder --force --scale 0.2
+          out=$(dotnet run -c Release --project src/Desk.UserAdmin -- add --email e2e@example.com --role viewer --expires 2099-12-31)
+          pw=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
+          test -n "$pw" # fail loudly if the CLI's output format changes
+          echo "::add-mask::$pw"
+          echo "DESK_PASSWORD=$pw" >> "$GITHUB_ENV"
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Playwright
+        working-directory: e2e
+        env:
+          BASE_URL: http://localhost:8080
+          DESK_EMAIL: e2e@example.com
+        run: |
+          for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
+          npx playwright test
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+            docs/screenshots
+          if-no-files-found: ignore
+      - if: failure()
+        run: docker compose logs
+
   db-tools:
     # Build-only rehearsal of deploy/db-ops (README §14.2 / §14.3): same composite
     # action, clean checkout, no prior restore/build, no secrets, no production
