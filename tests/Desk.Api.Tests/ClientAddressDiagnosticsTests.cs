@@ -69,17 +69,21 @@ public sealed class ClientAddressDiagnosticsTests
     public void The_first_rejection_is_logged_once_with_the_chain_shape_and_hashed_addresses()
     {
         var diagnostics = Diagnostics();
-        var http = Request(diagnostics, RenderLb, $"{Spoof}, {Client}, {CfEdge}", Client);
-        http.SetEndpoint(new RouteEndpoint(_ => Task.CompletedTask, RoutePatternFactory.Parse("/api/auth/login"), 0,
-            new EndpointMetadataCollection(new EnableRateLimitingAttribute(RateLimiting.LoginPolicy)), "login"));
-        diagnostics.Rejected(http);
-        diagnostics.Rejected(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}", Client));
+        HttpContext Login(string xff)
+        {
+            var http = Request(diagnostics, RenderLb, xff, Client);
+            http.SetEndpoint(new RouteEndpoint(_ => Task.CompletedTask, RoutePatternFactory.Parse("/api/auth/login"), 0,
+                new EndpointMetadataCollection(new EnableRateLimitingAttribute(RateLimiting.LoginPolicy)), "login"));
+            return http;
+        }
+        diagnostics.Rejected(Login($"{Spoof}, {Client}, {CfEdge}"));
+        diagnostics.Rejected(Login($"{Client}, {CfEdge}"));
 
         var line = Assert.Single(_log.Lines);
         Assert.Equal(LogLevel.Warning, line.Level);
         Assert.StartsWith("First rate-limited request:", line.Text);
         Assert.Contains("Route=/api/auth/login", line.Text);
-        Assert.Contains("Policy=login", line.Text);
+        Assert.Contains("EndpointPolicy=login", line.Text);
         Assert.Contains("Source=CfConnectingIp", line.Text);
         Assert.Contains($"Peer={RenderLb}", line.Text);
         Assert.Contains("PeerIsRender=True", line.Text);
@@ -95,6 +99,20 @@ public sealed class ClientAddressDiagnosticsTests
     }
 
     [Fact]
+    public void Each_endpoint_policy_gets_its_own_first_rejection_line()
+    {
+        var diagnostics = Diagnostics();
+        diagnostics.Rejected(Request(diagnostics, RenderLb, path: "/api/me")); // global: no endpoint policy
+        var login = Request(diagnostics, RenderLb);
+        login.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(new EnableRateLimitingAttribute(RateLimiting.LoginPolicy)), "login"));
+        diagnostics.Rejected(login);
+        diagnostics.Rejected(Request(diagnostics, RenderLb));
+        Assert.Collection(_log.Lines,
+            l => Assert.Contains("EndpointPolicy=global", l.Text),
+            l => Assert.Contains("EndpointPolicy=login", l.Text));
+    }
+
+    [Fact]
     public void A_global_limiter_rejection_without_a_peer_still_logs()
     {
         var diagnostics = Diagnostics();
@@ -105,7 +123,7 @@ public sealed class ClientAddressDiagnosticsTests
 
         var text = Assert.Single(_log.Lines).Text;
         Assert.Contains("Route=(unmatched)", text);
-        Assert.Contains("Policy=global", text);
+        Assert.Contains("EndpointPolicy=global", text);
         Assert.Contains("Source=UntrustedPeer", text);
         Assert.Contains("Peer=none", text);
         Assert.Contains("PeerIsRender=False", text);

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -15,7 +16,7 @@ namespace Desk.Api.Limits;
 /// instead of guessed at (#165, #116). Three lines, all structured:
 /// <list type="bullet">
 /// <item>at start-up, the resolver mode and the host's effective forwarded-headers options;</item>
-/// <item>once per process, the first rate-limited request;</item>
+/// <item>once per process and endpoint policy, the first rate-limited request;</item>
 /// <item>at most every <see cref="FallbackInterval"/> per <see cref="ClientAddress.Source"/>, a request behind the proxy whose key every client shares.</item>
 /// </list>
 /// No raw client address is logged: the socket peer and private hops are infrastructure and are logged as they are,
@@ -33,7 +34,7 @@ public sealed class ClientAddressDiagnostics(
     private static readonly IPNetwork SixToFour = IPNetwork.Parse("2002::/16");
 
     private readonly byte[] _hashKey = RandomNumberGenerator.GetBytes(32);
-    private int _rejected;
+    private readonly ConcurrentDictionary<string, byte> _rejected = new();
     // One throttle per Source, so a steady fallback of one kind can't mask another (R175-05). Monotonic: elapsed
     // ticks since start, so a wall-clock step can't mute the warning.
     private readonly long _started = time.GetTimestamp();
@@ -57,12 +58,16 @@ public sealed class ClientAddressDiagnostics(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    /// <summary>The first request any limiter rejects, once per process.</summary>
+    /// <summary>
+    /// The first rejected request on each endpoint policy (<c>login</c>, or <c>global</c> for endpoints without one),
+    /// once per process, so a 429 elsewhere can't use up the login line (R175-08). The policy is the endpoint's, not
+    /// necessarily the limiter that rejected it. Bounded: one entry per policy name.
+    /// </summary>
     public void Rejected(HttpContext http)
     {
-        if (Interlocked.Exchange(ref _rejected, 1) != 0)
-            return;
         var policy = http.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName ?? "global";
+        if (!_rejected.TryAdd(policy, 0))
+            return;
         Log(LogLevel.Warning, "First rate-limited request", http, policy, 0);
     }
 
@@ -103,7 +108,7 @@ public sealed class ClientAddressDiagnostics(
         var chain = ClientAddress.ForwardedFor(headers);
         logger.Log(
             level,
-            "{What}: Route={Route} Policy={Policy} Source={Source} Peer={Peer} PeerIsRender={PeerIsRender} ForwardedForLines={ForwardedForLines} ForwardedForHops={ForwardedForHops} ForwardedForShape={ForwardedForShape} CfConnectingIp={CfConnectingIp} TrueClientIp={TrueClientIp} Key={Key} Suppressed={Suppressed}",
+            "{What}: Route={Route} EndpointPolicy={EndpointPolicy} Source={Source} Peer={Peer} PeerIsRender={PeerIsRender} ForwardedForLines={ForwardedForLines} ForwardedForHops={ForwardedForHops} ForwardedForShape={ForwardedForShape} CfConnectingIp={CfConnectingIp} TrueClientIp={TrueClientIp} Key={Key} Suppressed={Suppressed}",
             what,
             // The route template, never the raw path: that is the caller's text, of any length (R175-04).
             (http.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "(unmatched)",
