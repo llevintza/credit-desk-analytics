@@ -58,9 +58,10 @@ public sealed class PositionsUnitTests
         var data = (object?[])doc["data"]!;
         Assert.All(data, col => Assert.Null(((object?[])col!)[1]));
         Assert.Equal(99.5, ((object?[])data[3]!)[0]);
+        Assert.Equal("1250000.25", ((object?[])data[2]!)[0]); // money stays exact: a decimal string, not a float
         Assert.Equal("2026-11-25", ((object?[])data[5]!)[0]);
         var summary = (Dictionary<object, object?>)doc["summary"]!;
-        Assert.Equal(1250000.25, summary["market_value"]);
+        Assert.Equal("1250000.25", summary["market_value"]);
         Assert.Equal(15, Convert.ToInt32(summary["loan_total"]));
         Assert.Null(summary["yield"]);
         Assert.Null(summary["dv01"]);
@@ -138,9 +139,10 @@ public sealed class PositionsUnitTests
     {
         var normalizer = new GridQueryNormalizer(ColumnCatalog.PositionSnapshot);
         DateOnly[] dates = [new(2026, 10, 6)];
-        Assert.True(new MetaSnapshot(ColumnCatalog.PositionSnapshot, normalizer, dates, "v", [], DateTimeOffset.MaxValue).HasData);
-        Assert.False(new MetaSnapshot(ColumnCatalog.PositionSnapshot, normalizer, [], "v", [], DateTimeOffset.MaxValue).HasData);
-        Assert.False(new MetaSnapshot([], null, dates, "v", [], DateTimeOffset.MaxValue).HasData);
+        var never = DateTimeOffset.MaxValue;
+        Assert.True(new MetaSnapshot(ColumnCatalog.PositionSnapshot, normalizer, dates, "v", [], never, never).HasData);
+        Assert.False(new MetaSnapshot(ColumnCatalog.PositionSnapshot, normalizer, [], "v", [], never, never).HasData);
+        Assert.False(new MetaSnapshot([], null, dates, "v", [], never, never).HasData);
     }
 
     [Fact]

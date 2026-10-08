@@ -47,11 +47,18 @@ public static class MetaEndpoints
         return api;
     }
 
-    internal static async Task<IResult> AsOfAsync(HttpContext http, MetaCache cache, CancellationToken ct)
+    /// <summary>Reads the snapshot and reports honestly whether this request loaded it from the database.</summary>
+    private static async Task<MetaSnapshot> MetaAsync(HttpContext http, MetaCache cache, CancellationToken ct)
     {
         var started = Stopwatch.GetTimestamp();
-        var meta = await cache.GetAsync(ct);
-        PositionsEndpoints.SetTiming(http, "HIT", 0, 0, started);
+        var (meta, loadMs) = await cache.GetWithStatusAsync(ct);
+        PositionsEndpoints.SetTiming(http, loadMs is null ? "HIT" : "MISS", loadMs ?? 0, 0, started);
+        return meta;
+    }
+
+    internal static async Task<IResult> AsOfAsync(HttpContext http, MetaCache cache, CancellationToken ct)
+    {
+        var meta = await MetaAsync(http, cache, ct);
         return meta.AsOfDates.Count == 0
             ? Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "No data loaded")
             : Results.Ok(new AsOfResponse(meta.AsOfDates[0], [.. meta.AsOfDates]));
@@ -59,18 +66,14 @@ public static class MetaEndpoints
 
     internal static async Task<IResult> ColumnsAsync(HttpContext http, MetaCache cache, CancellationToken ct)
     {
-        var started = Stopwatch.GetTimestamp();
-        var meta = await cache.GetAsync(ct);
-        PositionsEndpoints.SetTiming(http, "HIT", 0, 0, started);
+        var meta = await MetaAsync(http, cache, ct);
         return Results.Ok(meta.Catalog.Select(c => new CatalogColumn(c.Name, c.Group, c.Kind.ToString(), c.Aggregation.ToString(), c.Header)).ToArray());
     }
 
     internal static async Task<IResult> PortfoliosAsync(HttpContext http, MetaCache cache, IPortfolioEntitlements entitlements, CancellationToken ct)
     {
-        var started = Stopwatch.GetTimestamp();
-        var meta = await cache.GetAsync(ct);
+        var meta = await MetaAsync(http, cache, ct);
         var allowed = entitlements.For(http.User, meta);
-        PositionsEndpoints.SetTiming(http, "HIT", 0, 0, started);
         return Results.Ok(meta.Portfolios.Where(p => allowed.Contains(p.PortfolioId))
             .Select(p => new PortfolioResponse(p.PortfolioId, p.Name, p.FundId, p.FundName)).ToArray());
     }
@@ -78,11 +81,9 @@ public static class MetaEndpoints
     internal static async Task<IResult> ListPresetsAsync(string page, HttpContext http, PresetRepository presets, CancellationToken ct)
     {
         if (!Pages.Contains(page)) return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown page");
-        var builtIn = BuiltInPresets.ByName.Select(p => new PresetResponse(p.Key, true,
-            JsonSerializer.SerializeToElement(new BuiltInState(p.Value), DeskJsonContext.Default.BuiltInState), null));
         var own = (await presets.ListAsync(UserId(http.User), page, ct))
-            .Select(p => new PresetResponse(p.Name, false, JsonDocument.Parse(p.State).RootElement.Clone(), p.UpdatedAt));
-        return Results.Ok(builtIn.Concat(own).ToArray());
+            .Select(p => new PresetResponse(p.Name, false, JsonElement.Parse(p.State), p.UpdatedAt));
+        return Results.Ok(BuiltIns.Concat(own).ToArray());
     }
 
     internal static async Task<IResult> SavePresetAsync(string page, SavePresetRequest body, HttpContext http, PresetRepository presets, CancellationToken ct)
@@ -93,20 +94,29 @@ public static class MetaEndpoints
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid preset name",
                 detail: "Use 1-64 characters, not the name of a built-in preset.");
         var state = body.State.ValueKind == JsonValueKind.Object ? body.State.GetRawText() : null;
-        if (state is null || state.Length > MaxPresetStateBytes)
+        // jsonb can't store the NUL character; Postgres would reject the write with a 500.
+        if (state is null || state.Length > MaxPresetStateBytes || state.Contains("\\u0000", StringComparison.Ordinal))
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid preset state",
-                detail: $"State must be a JSON object of at most {MaxPresetStateBytes / 1024} KB.");
+                detail: $"State must be a JSON object of at most {MaxPresetStateBytes / 1024} KB, without NUL characters.");
 
-        return await presets.SaveAsync(UserId(http.User), page, name, state, ct)
-            ? Results.NoContent()
-            : Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Too many presets",
-                detail: $"Delete one first: at most {PresetRepository.MaxPresetsPerPage} per page.");
+        return await presets.SaveAsync(UserId(http.User), page, name, state, ct) switch
+        {
+            PresetSaveResult.Saved => Results.NoContent(),
+            PresetSaveResult.AtLimit => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Too many presets",
+                detail: $"Delete one first: at most {PresetRepository.MaxPresetsPerPage} per page."),
+            _ => Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Preset changed concurrently", detail: "Try again."),
+        };
     }
 
     internal static async Task<IResult> DeletePresetAsync(string page, string? name, HttpContext http, PresetRepository presets, CancellationToken ct) =>
         Pages.Contains(page) && name is not null && await presets.DeleteAsync(UserId(http.User), page, name, ct)
             ? Results.NoContent()
             : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "No such preset");
+
+    /// <summary>The built-in presets never change at runtime: build their responses once.</summary>
+    private static readonly PresetResponse[] BuiltIns = BuiltInPresets.ByName
+        .Select(p => new PresetResponse(p.Key, true, JsonSerializer.SerializeToElement(new BuiltInState(p.Value), DeskJsonContext.Default.BuiltInState), null))
+        .ToArray();
 
     private static Guid UserId(ClaimsPrincipal user) => Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }

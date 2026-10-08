@@ -44,8 +44,11 @@ public static class PositionsEndpoints
     {
         var started = Stopwatch.GetTimestamp();
         var meta = await metaCache.GetAsync(ct);
-        if (Resolve(request, meta, entitlements, http) is not { } query)
+        if (Resolve(request, meta, entitlements, http) is not { } resolved)
             return Unavailable(meta, request);
+        if (resolved.Error is not null)
+            return resolved.Error;
+        var query = resolved.Query!;
 
         var msgpack = WantsMsgPack(http.Request);
         var contentType = msgpack ? ColumnarSerializer.MsgPackContentType : ColumnarSerializer.JsonContentType;
@@ -79,7 +82,7 @@ public static class PositionsEndpoints
         var block = await grid.ReadBlockAsync(query, meta.Catalog, ct, summary);
         if (summary is null)
             cache.Cache.Set(summaryKey, new GridSummary(block.RowCount, block.Summary),
-                new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpiration = meta.ExpiresAt });
+                new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpiration = meta.BatchEndsAt });
         var serializeStarted = Stopwatch.GetTimestamp();
         var generatedAt = time.GetUtcNow();
         var bytes = msgpack
@@ -87,7 +90,7 @@ public static class PositionsEndpoints
             : ColumnarSerializer.ToJson(block, query.AsOf, generatedAt);
         var serializeMs = Stopwatch.GetElapsedTime(serializeStarted).TotalMilliseconds;
 
-        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = meta.ExpiresAt });
+        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = meta.BatchEndsAt });
         SetTiming(http, "MISS", block.DbMs, serializeMs, started);
         if (audit is not null)
         {
@@ -102,8 +105,11 @@ public static class PositionsEndpoints
         GridRepository grid, CancellationToken ct)
     {
         var meta = await metaCache.GetAsync(ct);
-        if (Resolve(request, meta, entitlements, http) is not { } query)
+        if (Resolve(request, meta, entitlements, http) is not { } resolved)
             return Unavailable(meta, request);
+        if (resolved.Error is not null)
+            return resolved.Error;
+        var query = resolved.Query!;
 
         // One export at a time per user (README §7.2): exports hold a database connection for a while.
         var user = http.User.Identity!.Name!;
@@ -149,13 +155,25 @@ public static class PositionsEndpoints
 
     internal static void EndExport(string user) => ActiveExports.TryRemove(user, out _);
 
-    /// <summary>Validates the as-of date and whitelists the request; null when there's no data or the date is unknown.</summary>
-    private static GridQuery? Resolve(GridRequest request, MetaSnapshot meta, IPortfolioEntitlements entitlements, HttpContext http)
+    private sealed record Resolved(GridQuery? Query, IResult? Error);
+
+    /// <summary>
+    /// Validates the as-of date and whitelists the request. Null when there's no data or the date is unknown; an
+    /// error result when a filter is too large to apply (dropping it would widen the result).
+    /// </summary>
+    private static Resolved? Resolve(GridRequest request, MetaSnapshot meta, IPortfolioEntitlements entitlements, HttpContext http)
     {
         if (!meta.HasData) return null;
         var asOf = request.AsOf ?? meta.AsOfDates[0];
         if (!meta.AsOfDates.Contains(asOf)) return null;
-        return meta.Normalizer!.Normalize(request, asOf, entitlements.For(http.User, meta));
+        try
+        {
+            return new Resolved(meta.Normalizer!.Normalize(request, asOf, entitlements.For(http.User, meta)), null);
+        }
+        catch (GridRequestException e)
+        {
+            return new Resolved(null, Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Filter too large", detail: e.Message));
+        }
     }
 
     private static IResult Unavailable(MetaSnapshot meta, GridRequest request) => meta.HasData

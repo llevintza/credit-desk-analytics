@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Desk.Api;
+using Desk.Api.Admin;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
 using Desk.Api.Hardening;
@@ -84,6 +85,7 @@ app.MapHealthEndpoints(api);
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();
 api.MapPositionsEndpoints();
+api.MapAdminEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 
 // Client-side routes fall back to the SPA; /api/* never does. /swagger and /openapi are

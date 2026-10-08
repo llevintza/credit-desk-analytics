@@ -82,8 +82,8 @@ public static class ColumnarSerializer
     }
 
     /// <summary>
-    /// The same document as MessagePack (on <c>Accept: application/x-msgpack</c>). MessagePack has no decimal, so
-    /// money goes as float64: exact to the cent below about 9e13, far above any position here.
+    /// The same document as MessagePack (on <c>Accept: application/x-msgpack</c>). MessagePack has no decimal type,
+    /// so money goes as its exact invariant string ("1250000.25"), never as a binary float (AGENTS.md money rule).
     /// </summary>
     public static byte[] ToMsgPack(GridBlock block, DateOnly asOf, DateTimeOffset generatedAt)
     {
@@ -111,7 +111,7 @@ public static class ColumnarSerializer
             w.Write(s.Column.Name);
             switch (s.Value)
             {
-                case decimal d: w.Write((double)d); break;
+                case decimal d: w.Write(Money(d)); break;
                 case long l: w.Write(l); break;
                 case double d when double.IsFinite(d): w.Write(d); break;
                 default: w.WriteNil(); break;
@@ -125,13 +125,15 @@ public static class ColumnarSerializer
         return buffer.WrittenSpan.ToArray();
     }
 
+    private static string Money(decimal d) => d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     private static void WriteMsgPackColumn(ref MessagePackWriter w, GridColumn column)
     {
         switch (column)
         {
             case Int64Column c: foreach (var v in c.Values) if (v is { } x) w.Write(x); else w.WriteNil(); break;
             case Int32Column c: foreach (var v in c.Values) if (v is { } x) w.Write(x); else w.WriteNil(); break;
-            case DecimalColumn c: foreach (var v in c.Values) if (v is { } x) w.Write((double)x); else w.WriteNil(); break;
+            case DecimalColumn c: foreach (var v in c.Values) if (v is { } x) w.Write(Money(x)); else w.WriteNil(); break;
             case DoubleColumn c: foreach (var v in c.Values) if (v is { } x && double.IsFinite(x)) w.Write(x); else w.WriteNil(); break;
             case BoolColumn c: foreach (var v in c.Values) if (v is { } x) w.Write(x); else w.WriteNil(); break;
             case DateColumn c: foreach (var v in c.Values) if (v is { } x) w.Write(x.ToString("yyyy-MM-dd")); else w.WriteNil(); break;

@@ -173,7 +173,8 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.Equal(json.GetProperty("rowCount").GetInt32(), Convert.ToInt32(doc["rowCount"]));
         Assert.Equal(7, ((object[])doc["columns"]).Length);
         Assert.Equal(3, ((object[])((object[])doc["data"])[1]).Length);
-        Assert.Equal(json.GetProperty("summary").GetProperty("market_value").GetDouble(), Convert.ToDouble(((Dictionary<object, object>)doc["summary"])["market_value"]), 2);
+        Assert.Equal(json.GetProperty("summary").GetProperty("market_value").GetDecimal(),
+            decimal.Parse((string)((Dictionary<object, object>)doc["summary"])["market_value"], System.Globalization.CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -278,6 +279,56 @@ public sealed class PositionsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_set_filter_too_large_to_apply_is_400_not_silently_widened()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        var values = Enumerable.Range(0, GridQueryNormalizer.MaxSetValues + 1).Select(i => $"v{i}").ToArray();
+        var res = await client.SendAsync(Query(xsrf, new { filterModel = new { cusip = new { filterType = "set", values } } }), Ct);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("Filter too large", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+        var export = await client.SendAsync(Query(xsrf, new { filterModel = new { cusip = new { filterType = "set", values } } }, path: "/api/positions/export"), Ct);
+        Assert.Equal(HttpStatusCode.BadRequest, export.StatusCode);
+    }
+
+    [Fact]
+    public async Task Crafted_filter_text_cannot_share_a_cache_entry_with_a_different_query()
+    {
+        var (client, xsrf, _) = await api.SignedInAsync();
+        // Under the old delimiter-joined key these two produced the same key and ETag.
+        var crafted = await client.SendAsync(Query(xsrf, new
+        {
+            columns = new[] { "deal_name" },
+            filterModel = new { @class = new { filterType = "text", type = "contains", filter = "x,,);deal_name:Text.Contains(y" } },
+        }), Ct);
+        var real = await client.SendAsync(Query(xsrf, new
+        {
+            columns = new[] { "deal_name" },
+            filterModel = new Dictionary<string, object>
+            {
+                ["class"] = new { filterType = "text", type = "contains", filter = "x" },
+                ["deal_name"] = new { filterType = "text", type = "contains", filter = "y" },
+            },
+        }), Ct);
+        Assert.NotEqual(crafted.Headers.ETag!.ToString(), real.Headers.ETag!.ToString());
+        Assert.Equal("MISS", real.Headers.GetValues("X-Cache").Single());
+    }
+
+    [Fact]
+    public async Task Admin_cache_clear_drops_cached_blocks()
+    {
+        var (admin, xsrf, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
+        var body = new { columns = new[] { "jtd" }, quickFilter = "clear-test" };
+        await admin.SendAsync(Query(xsrf, body), Ct);
+        Assert.Equal("HIT", (await admin.SendAsync(Query(xsrf, body), Ct)).Headers.GetValues("X-Cache").Single());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.SendAsync(Query(xsrf, new { }, path: "/api/admin/cache/clear"), Ct)).StatusCode);
+        Assert.Equal("MISS", (await admin.SendAsync(Query(xsrf, body), Ct)).Headers.GetValues("X-Cache").Single());
+
+        var (viewer, viewerXsrf, _) = await api.SignedInAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.SendAsync(Query(viewerXsrf, new { }, path: "/api/admin/cache/clear"), Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Export_of_an_unknown_date_is_400()
     {
         var (client, xsrf, _) = await api.SignedInAsync();
@@ -288,13 +339,23 @@ public sealed class PositionsTests(PostgresApiFactory api)
     [Fact]
     public async Task Concurrent_first_requests_share_one_meta_load_and_invalidate_reloads()
     {
-        var cache = new MetaCache(api.Services.GetRequiredService<MetaRepository>(), TimeProvider.System);
-        var first = cache.GetAsync(Ct).AsTask();
-        var second = cache.GetAsync(Ct).AsTask(); // waits on the gate, then finds the fresh snapshot
-        Assert.Same(await first, await second);
-        Assert.Same(await first, await cache.GetAsync(Ct));
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(api.Time.GetUtcNow());
+        var cache = new MetaCache(api.Services.GetRequiredService<MetaRepository>(), time);
+        var first = cache.GetWithStatusAsync(Ct).AsTask();
+        var second = cache.GetWithStatusAsync(Ct).AsTask(); // waits on the gate, then finds the fresh snapshot
+        Assert.Same((await first).Snapshot, (await second).Snapshot);
+        Assert.NotNull((await first).LoadMs);
+        Assert.Null((await second).LoadMs);
+        Assert.Same((await first).Snapshot, await cache.GetAsync(Ct));
+
         cache.Invalidate();
-        Assert.NotSame(await first, await cache.GetAsync(Ct));
+        var reloaded = await cache.GetAsync(Ct);
+        Assert.NotSame((await first).Snapshot, reloaded);
+
+        // Re-read while traffic continues, so a reseed is noticed within minutes; never past the batch.
+        Assert.True(reloaded.ExpiresAt <= reloaded.BatchEndsAt);
+        time.Advance(MetaCache.Revalidate);
+        Assert.NotSame(reloaded, await cache.GetAsync(Ct));
     }
 
     [Fact]

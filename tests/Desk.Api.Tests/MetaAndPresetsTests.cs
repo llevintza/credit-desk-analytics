@@ -7,6 +7,9 @@ using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace Desk.Api.Tests;
@@ -31,6 +34,18 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var res = await client.GetFromJsonAsync<AsOfResponse>("/api/meta/as-of", Ct);
         Assert.Equal(PostgresApiFactory.AsOf, res!.Latest);
         Assert.Equal([PostgresApiFactory.AsOf, new DateOnly(2026, 10, 5)], res.Dates);
+    }
+
+    [Fact]
+    public async Task Meta_reports_a_miss_when_it_loads_and_a_hit_after()
+    {
+        var (admin, xsrf, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
+        using var clear = Send(HttpMethod.Post, "/api/admin/cache/clear", xsrf);
+        await admin.SendAsync(clear, Ct);
+        var first = await admin.GetAsync("/api/meta/columns", Ct);
+        Assert.Equal("MISS", first.Headers.GetValues("X-Cache").Single());
+        Assert.DoesNotContain("db;dur=0.0,", first.Headers.GetValues("Server-Timing").Single());
+        Assert.Equal("HIT", (await admin.GetAsync("/api/meta/columns", Ct)).Headers.GetValues("X-Cache").Single());
     }
 
     [Fact]
@@ -91,6 +106,7 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     [InlineData("""{"state":{}}""")]
     [InlineData("""{"name":"x","state":[1,2]}""")]
     [InlineData("""{"name":"x","state":"text"}""")]
+    [InlineData("""{"name":"x","state":{"a":"\u0000"}}""")]
     public async Task Invalid_presets_are_400(string json)
     {
         var (client, xsrf, _) = await api.SignedInAsync();
@@ -126,14 +142,58 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", null, new { name = "x", state = new { } }), Ct)).StatusCode);
     }
 
-    [Fact]
-    public async Task Concurrent_first_saves_of_one_name_both_succeed()
+    [Theory]
+    [InlineData(false, HttpStatusCode.NoContent)] // lost the insert race: the winner's row is updated instead
+    [InlineData(true, HttpStatusCode.Conflict)]   // ...and that row was deleted again before the update: say so
+    public async Task A_save_that_loses_the_unique_index_race_updates_or_reports_a_conflict(bool deleteBeforeUpdate, HttpStatusCode expected)
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
-        var saves = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
-            client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "race", state = new { i } }), Ct)));
-        Assert.All(saves, r => Assert.Equal(HttpStatusCode.NoContent, r.StatusCode));
-        Assert.Single((await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!, p => p.Name == "race");
+        var race = new PresetRace(api.ConnectionString, deleteBeforeUpdate);
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(race)));
+        var user = await api.CreateUserAsync();
+        race.UserId = user.Id;
+        var client = PostgresApiFactory.NewClient(host);
+        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+
+        var res = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "race", state = new { mine = true } }), Ct);
+        Assert.Equal(expected, res.StatusCode);
+        Assert.True(race.Raced);
+    }
+
+    /// <summary>
+    /// Just before EF inserts a preset, another "request" inserts the same name on its own connection, so the
+    /// insert hits the unique index every time. Optionally deletes that row again before the follow-up update.
+    /// </summary>
+    private sealed class PresetRace(string connectionString, bool deleteBeforeUpdate) : DbCommandInterceptor
+    {
+        public Guid UserId { get; set; }
+        public bool Raced { get; private set; }
+
+        public override async ValueTask<InterceptionResult<System.Data.Common.DbDataReader>> ReaderExecutingAsync(
+            System.Data.Common.DbCommand command, CommandEventData eventData, InterceptionResult<System.Data.Common.DbDataReader> result, CancellationToken ct = default)
+        {
+            if (!Raced && command.CommandText.Contains("INSERT INTO app.preset", StringComparison.Ordinal))
+            {
+                Raced = true;
+                await ExecAsync($"INSERT INTO app.preset (user_id, page, name, state, updated_at) VALUES ('{UserId}', 'positions', 'race', '{{}}', now())", ct);
+            }
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            System.Data.Common.DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
+        {
+            if (Raced && deleteBeforeUpdate && command.CommandText.StartsWith("UPDATE app.preset", StringComparison.Ordinal))
+                await ExecAsync($"DELETE FROM app.preset WHERE user_id = '{UserId}' AND name = 'race'", ct);
+            return result;
+        }
+
+        private async Task ExecAsync(string sql, CancellationToken ct)
+        {
+            await using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync(ct);
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 
     [Fact]
@@ -158,6 +218,13 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
             new Desk.Data.Sources.DataSourceRegistry(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["DATABASE_URL"] = empty }).Build(), new Desk.Data.DbConnectionCounter()));
         Assert.Equal("empty", await emptyRepo.DataVersionAsync(Ct));
+        // An empty snapshot is retried within seconds, so a seed into a running API is picked up.
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var emptyCache = new MetaCache(emptyRepo, time);
+        var none = await emptyCache.GetAsync(Ct);
+        Assert.False(none.HasData);
+        time.Advance(MetaCache.RetryEmpty);
+        Assert.NotSame(none, await emptyCache.GetAsync(Ct));
         Assert.Empty(await emptyRepo.CatalogAsync(Ct));
         Assert.Empty(await emptyRepo.AsOfDatesAsync(Ct));
 
