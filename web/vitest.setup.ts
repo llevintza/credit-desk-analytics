@@ -7,3 +7,9 @@ Object.defineProperty(globalThis, 'performance', {
   configurable: true,
   writable: true,
 });
+
+// Node's performance is one object per worker thread, shared by every spec file that worker runs: start each
+// file with an empty timeline so marks, measures and resource entries can't leak between files (#247).
+nodePerformance.clearMarks();
+nodePerformance.clearMeasures();
+nodePerformance.clearResourceTimings();
