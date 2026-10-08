@@ -14,6 +14,7 @@ import {
   finitePercent,
   meetsFloor,
   parseArgs,
+  parseSuites,
   runGate,
   summarizeDotnet,
   validateBaseline,
@@ -1986,3 +1987,118 @@ test("hacked HEAD gate would pass if CI fell back; missing _base does not", () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// #169: --suites names the suites that ran; a skipped suite is skipped, not passed on stale data.
+function runQuiet(dir, argv) {
+  let stdout = "";
+  const r = runGate({ root: dir, argv, stdoutWrite: (t) => (stdout += t), stderrWrite: () => {} });
+  return { ...r, stdout };
+}
+
+test("parseSuites: default both, ordered subset, rejects empty/unknown/duplicates", () => {
+  assert.deepEqual(parseSuites(undefined), ["dotnet", "web"]);
+  assert.deepEqual(parseSuites("web"), ["web"]);
+  assert.deepEqual(parseSuites(" web , dotnet "), ["dotnet", "web"]);
+  for (const bad of ["", ",", "true", "java", "web,web", "dotnet,java"]) {
+    assert.throws(() => parseSuites(bad), GateFailure, bad);
+  }
+});
+
+test("--suites with an unknown suite fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "dotnet,java"]));
+    assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/suites");
+    assert.match(r.output, /--suites must be/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--suites dotnet,web matches the default (both evaluated)", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "dotnet,web"]));
+    assert.equal(r.failed, false, r.output);
+    assert.doesNotMatch(r.output, /skipped/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("web-only run skips the dotnet gates instead of failing on missing data", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(dir, "web/src/app/app.ts", "export const x = 2;\n");
+    commit(dir, "web change");
+    rmSync(join(dir, "cov/dotnet"), { recursive: true, force: true });
+
+    // Without --suites the missing dotnet data still counts as 0% and fails (unchanged behaviour).
+    const legacy = runQuiet(dir, gateArgs(base));
+    assert.equal(legacy.failed, true);
+    assert.match(legacy.output, /dotnet overall line 0\.0% dropped/);
+
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
+    assert.equal(r.failed, false, r.output);
+    assert.match(r.output, /\| dotnet \| skipped \| skipped \| skipped \| skipped \| 100\.0% \| 100\.0% \|/);
+    assert.match(r.output, /\*\*Skipped:\*\* the dotnet suite did not run/);
+    assert.match(r.output, /\| web \| 100\.0% \| 100\.0% \|/);
+    assert.deepEqual(r.expected.dotnet, { line: 100, branch: 100 });
+    assert.match(r.stdout, /Measured baseline JSON/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a skipped suite whose sources changed fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() { } }\n");
+    commit(dir, "api change");
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
+    assert.equal(r.failed, true);
+    assert.match(r.output, /the dotnet suite did not run, but its sources changed: `src\/Desk\.Api\/Hello\.cs`/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a suite that ran with no coverage data fails closed", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    rmSync(join(dir, "cov/web"), { recursive: true, force: true });
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
+    assert.equal(r.failed, true);
+    assert.match(r.output, /the web suite ran but has no coverage data/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a skipped suite's committed baseline still may not drop below the floor", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    headJson(dir, { dotnet: { line: 50, branch: 100 }, web: { line: 100, branch: 100 } });
+    commit(dir, "lower dotnet baseline");
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
+    assert.equal(r.failed, true);
+    assert.match(r.output, /lowers the committed baseline/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an override needs every suite measured", () => {
+  const { dir, base } = setupPassRepo();
+  try {
+    writeStaleOverride(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    commit(dir, "override");
+    const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
+    assert.equal(r.failed, true);
+    assert.match(r.output, /coverage-override\.json changed, but the dotnet suite did not run/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

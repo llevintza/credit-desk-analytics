@@ -27,6 +27,13 @@
  * `perf/coverage-override.json` is applied only when the file differs from
  * BASE_SHA (documented measurement-scope change).
  *
+ * `--suites dotnet,web` (#169) names the suites that ran in this CI run; it
+ * defaults to both. A suite that did not run is skipped, not passed on stale
+ * data: its overall, diff and measured-baseline checks are not evaluated, and
+ * its committed baseline must still not drop below the floor. A suite that ran
+ * with no coverage data, a skipped suite whose sources changed, and an override
+ * without every suite all fail closed.
+ *
  * Fail closed: missing/empty/non-numeric/NaN schema, unresolvable BASE_SHA or
  * merge-base, or a git show/diff error. Comparisons use `!(actual >= floor)` so
  * NaN/undefined fail.
@@ -52,6 +59,24 @@ export const OVERRIDE_FILE = "perf/coverage-override.json";
 export const TESTCONFIG_FILE = "tests/testconfig.json";
 
 export const NO_DROP_EPS = 1e-9;
+
+export const SUITES = Object.freeze(["dotnet", "web"]);
+
+/** `--suites` value to the list of suites that ran; throws GateFailure on anything else. */
+export function parseSuites(value) {
+  if (value === undefined) return [...SUITES];
+  const list = String(value)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const unknown = list.filter((s) => !SUITES.includes(s));
+  if (list.length === 0 || unknown.length || new Set(list).size !== list.length) {
+    throw new GateFailure(
+      `--suites must be a non-empty, duplicate-free subset of ${SUITES.join(",")}, got ${JSON.stringify(value)}.`,
+    );
+  }
+  return SUITES.filter((s) => list.includes(s));
+}
 
 const THRESHOLD_KEYS = Object.freeze([
   "baselineMatchTolerancePercent",
@@ -225,6 +250,15 @@ export function runGate(options = {}) {
 
     const dotnetDir = resolve(repoRoot, args.dotnet ?? "TestResults/coverage");
     const webDir = resolve(repoRoot, args.web ?? "web/coverage");
+    let suites;
+    try {
+      suites = parseSuites(args.suites);
+    } catch (e) {
+      decisionPath = "fail/suites";
+      failHard(e.message);
+    }
+    const ran = (name) => suites.includes(name);
+    const skipped = SUITES.filter((s) => !ran(s));
 
     decisionPath = "fail/missing-base-sha";
     requireCommit(repoRoot, baseSha, failHard);
@@ -319,7 +353,26 @@ export function runGate(options = {}) {
     }
 
     const measured = { dotnet, web };
+    if (args.suites !== undefined) {
+      for (const name of suites) {
+        if (measured[name].lineTotal === 0) {
+          failHard(`the ${name} suite ran but has no coverage data. A missing artifact for a suite that ran fails closed.`);
+        }
+      }
+    }
     const changed = changedLines(repoRoot, mergeBase, failHard);
+    const sourcePred = { dotnet: isDotnetSource, web: isWebSource };
+    for (const name of skipped) {
+      const touched = [...changed.files.keys()].filter((p) => sourcePred[name](p) && isCoverableSource(p));
+      if (touched.length) {
+        failHard(
+          `the ${name} suite did not run, but its sources changed: ${touched.map((p) => `\`${p}\``).join(", ")}. Failing closed.`,
+        );
+      }
+    }
+    if (override && skipped.length) {
+      failHard(`${OVERRIDE_FILE} changed, but the ${skipped.join(", ")} suite did not run. An override needs every suite measured.`);
+    }
     const unmapped = [];
     const diff = {
       dotnet: diffCoverage(changed, dotnet.files, (p) => isDotnetSource(p), unmapped),
@@ -335,15 +388,23 @@ export function runGate(options = {}) {
     say("");
     say("| Project | Overall line | Overall branch | Diff line | Diff branch | Floor (BASE_SHA) line | Floor (BASE_SHA) branch |");
     say("|---|---:|---:|---:|---:|---:|---:|");
-    for (const name of ["dotnet", "web"]) {
+    for (const name of SUITES) {
       const m = measured[name];
       const d = diff[name];
       const f = overallFloor[name];
+      if (!ran(name)) {
+        say(`| ${name} | skipped | skipped | skipped | skipped | ${pct(f.line)}% | ${pct(f.branch)}% |`);
+        continue;
+      }
       say(
         `| ${name} | ${pct(m.line)}% | ${pct(m.branch)}% | ${diffPct(d.line)} | ${diffPct(d.branch)} | ${pct(f.line)}% | ${pct(f.branch)}% |`,
       );
     }
     say("");
+    for (const name of skipped) {
+      say(`- **Skipped:** the ${name} suite did not run in this CI run (#169); its coverage gates were not evaluated.`);
+    }
+    if (skipped.length) say("");
     const tol = thresholds.baselineMatchTolerancePercent;
     say(`gate-path: ${decisionPath}`);
     say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`. Default branch: \`${defaultBranch}\`${defaultSha ? ` (\`${defaultSha}\`)` : ""}.`);
@@ -364,7 +425,7 @@ export function runGate(options = {}) {
       );
     }
 
-    for (const name of ["dotnet", "web"]) {
+    for (const name of suites) {
       const m = measured[name];
       const f = overallFloor[name];
       if (thresholds.overallMustNotDrop) {
@@ -392,7 +453,7 @@ export function runGate(options = {}) {
       }
     }
 
-    for (const name of ["dotnet", "web"]) {
+    for (const name of SUITES) {
       const m = measured[name];
       const c = committed[name];
       const f = overallFloor[name];
@@ -400,6 +461,7 @@ export function runGate(options = {}) {
         failed = true;
         say(`- **FAIL** committed baseline ${name} is below the BASE_SHA floor.`);
       }
+      if (!ran(name)) continue;
       if (!(round1(c.line) <= round1(m.line) + NO_DROP_EPS) || !(round1(c.branch) <= round1(m.branch) + NO_DROP_EPS)) {
         failed = true;
         say(
@@ -449,10 +511,15 @@ export function runGate(options = {}) {
     const summary = options.summaryPath ?? env("GITHUB_STEP_SUMMARY");
     if (summary) appendFileSync(summary, body);
 
-    const expected = {
-      dotnet: { line: round1(dotnet.line), branch: round1(dotnet.branch) },
-      web: { line: round1(web.line), branch: round1(web.branch) },
-    };
+    // A skipped suite keeps its committed numbers, so the JSON stays a valid baseline to paste.
+    const expected = Object.fromEntries(
+      SUITES.map((name) => [
+        name,
+        ran(name)
+          ? { line: round1(measured[name].line), branch: round1(measured[name].branch) }
+          : { line: committed[name].line, branch: committed[name].branch },
+      ]),
+    );
     write("\nMeasured baseline JSON:\n" + JSON.stringify(expected, null, 2) + "\n");
 
     return { failed, output: body, expected, exitCode: failed ? 1 : 0, bootstrapped: false, mergeBase, baseSha };
