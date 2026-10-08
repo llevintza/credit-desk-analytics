@@ -359,6 +359,29 @@ public sealed class PositionsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Meta_snapshot_expires_at_the_batch_when_it_comes_before_the_revalidate_window()
+    {
+        // Pinned clocks on both sides of the batch, so neither depends on where the shared clock or the wall clock is.
+        var batch = BatchClock.NextBatchAfter(new DateTimeOffset(2026, 10, 7, 0, 0, 0, TimeSpan.Zero));
+        var repo = api.Services.GetRequiredService<MetaRepository>();
+
+        var early = await new MetaCache(repo, new Microsoft.Extensions.Time.Testing.FakeTimeProvider(batch.AddHours(-1))).GetAsync(Ct);
+        Assert.Equal(batch.AddHours(-1) + MetaCache.Revalidate, early.ExpiresAt);
+        Assert.Equal(batch, early.BatchEndsAt);
+
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(batch.AddMinutes(-5));
+        var cache = new MetaCache(repo, time);
+        var late = await cache.GetAsync(Ct);
+        Assert.Equal(batch, late.ExpiresAt);
+
+        // The batch reloads it, five minutes before the revalidate window would have.
+        time.Advance(TimeSpan.FromMinutes(5));
+        var next = await cache.GetAsync(Ct);
+        Assert.NotSame(late, next);
+        Assert.True(next.BatchEndsAt > batch);
+    }
+
+    [Fact]
     public async Task One_export_at_a_time_per_user()
     {
         var (client, xsrf, user) = await api.SignedInAsync();
