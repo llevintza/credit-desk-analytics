@@ -172,7 +172,7 @@ public static class PositionsEndpoints
         }
         catch (GridRequestException e)
         {
-            return new Resolved(null, Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Filter too large", detail: e.Message));
+            return new Resolved(null, Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Filter can't be applied", detail: e.Message));
         }
     }
 

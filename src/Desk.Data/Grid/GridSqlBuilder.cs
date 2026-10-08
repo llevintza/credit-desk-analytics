@@ -99,7 +99,7 @@ public static class GridSqlBuilder
             // Quick filter: every token must appear in one of the text columns (like AG Grid's client-side quick filter).
             var haystack = $"concat_ws(' ', {string.Join(", ", catalog.Where(c => c.Kind == ColumnKind.Text).Select(c => Quote(c.Name)))})";
             foreach (var token in q.QuickTokens)
-                clauses.Add($"{haystack} ILIKE {Add(p, $"%{EscapeLike(token)}%")}");
+                clauses.Add($"{haystack} ILIKE {Like(Add(p, $"%{EscapeLike(token)}%"))}");
         }
         return string.Join(" AND ", clauses);
     }
@@ -113,12 +113,12 @@ public static class GridSqlBuilder
             (_, FilterOp.NotBlank) => $"{name} IS NOT NULL",
             (FilterKind.Set, _) => SetCondition(col, c.Values!, p),
 
-            (FilterKind.Text, FilterOp.Contains) => $"{name} ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}%")}",
-            (FilterKind.Text, FilterOp.NotContains) => $"({name} IS NULL OR {name} NOT ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}%")})",
-            (FilterKind.Text, FilterOp.StartsWith) => $"{name} ILIKE {Add(p, $"{EscapeLike((string)c.Value!)}%")}",
-            (FilterKind.Text, FilterOp.EndsWith) => $"{name} ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}")}",
-            (FilterKind.Text, FilterOp.Equals) => $"{name} ILIKE {Add(p, EscapeLike((string)c.Value!))}",
-            (FilterKind.Text, _) => $"({name} IS NULL OR {name} NOT ILIKE {Add(p, EscapeLike((string)c.Value!))})",
+            (FilterKind.Text, FilterOp.Contains) => $"{name} ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}%"))}",
+            (FilterKind.Text, FilterOp.NotContains) => $"({name} IS NULL OR {name} NOT ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}%"))})",
+            (FilterKind.Text, FilterOp.StartsWith) => $"{name} ILIKE {Like(Add(p, $"{EscapeLike((string)c.Value!)}%"))}",
+            (FilterKind.Text, FilterOp.EndsWith) => $"{name} ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}"))}",
+            (FilterKind.Text, FilterOp.Equals) => $"{name} ILIKE {Like(Add(p, EscapeLike((string)c.Value!)))}",
+            (FilterKind.Text, _) => $"({name} IS NULL OR {name} NOT ILIKE {Like(Add(p, EscapeLike((string)c.Value!)))})",
 
             // Number and date filters share comparison operators; AG Grid's inRange is exclusive at both ends.
             (_, FilterOp.Equals) => $"{name} = {Add(p, c.Value!)}",
@@ -156,9 +156,18 @@ public static class GridSqlBuilder
         return "@" + name;
     }
 
-    /// <summary>Catalog names are snake_case already; quoting keeps reserved words (e.g. <c>class</c>) safe.</summary>
-    internal static string Quote(string identifier) => $"\"{identifier}\"";
+    /// <summary>
+    /// Catalog names are snake_case already (the API's meta cache refuses any other on load); quoting keeps reserved words
+    /// (e.g. <c>class</c>) safe, and an embedded quote is doubled so no name can end the identifier early.
+    /// </summary>
+    internal static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";
 
-    /// <summary>LIKE wildcards in user text match literally (Postgres' default LIKE escape is backslash).</summary>
+    /// <summary>
+    /// A LIKE pattern parameter with its escape character stated, not left to the server's default (#130 N1), so
+    /// <see cref="EscapeLike"/>'s backslashes always mean "literal".
+    /// </summary>
+    private static string Like(string parameter) => parameter + " ESCAPE '\\'";
+
+    /// <summary>LIKE wildcards in user text match literally (the escape character is backslash, see <see cref="Like"/>).</summary>
     internal static string EscapeLike(string s) => s.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 }
