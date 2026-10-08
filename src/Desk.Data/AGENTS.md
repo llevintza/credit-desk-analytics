@@ -19,8 +19,8 @@ Area file for `src/Desk.Data/` (EF Core DbContexts and migrations, Dapper query 
 - Use the `ef-migration-safety` skill (or the `ef-migration` role) for any schema change.
 - A change to the seeded schema also needs a `SeedVersion` bump (`src/Desk.Seeder/AGENTS.md`); otherwise production keeps the old data.
 - Never run DDL from the app at start-up.
-
 - Long-form guidance: [ef-postgres-migrations.md](../../docs/agents/guidelines/ef-postgres-migrations.md), [sql-dapper.md](../../docs/agents/guidelines/sql-dapper.md).
+
 ## Commands
 
 | Task | Command |

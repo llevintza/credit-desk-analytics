@@ -13,7 +13,7 @@
 | Root `AGENTS.md` | Always (VERIFIED) | Always (VERIFIED) | Not stated in the inputs |
 | Nested `AGENTS.md` | When working in that subtree (VERIFIED, TR) | **UNVERIFIED (U1)**; fallback: generated `.cursor/rules/areas/<area>.mdc` | Not stated |
 | `CLAUDE.md` stubs | Root always applied (1 line; `@` not inlined). Nested: UNVERIFIED (U6) | Root (VERIFIED) | Not stated |
-| `.claude/skills/`, `.claude/agents/` | Compat locations (VERIFIED) | Skills (VERIFIED) | Not stated |
+| `.claude/skills/`, `.claude/agents/` | Compat locations (VERIFIED). Project skills in `.claude/skills/` (8) via the compat path (cursor.com/docs/context/skills) | Skills (VERIFIED) | Not stated |
 | Claude hooks from `.claude/settings.json` | Imported when "Include Third-Party Plugins, Skills, and Other Configs" is on (default on; VERIFIED, U10/U15) | Read and merged (VERIFIED) | **UNVERIFIED (U9)** |
 | `.cursor/cli.json` | n/a | Project permissions (VERIFIED) | **UNVERIFIED (U9)** |
 | `.cursor/hooks.json` | Runs (VERIFIED) | Runs | Runs (the only hook source the Cloud Agents page documents) |
@@ -31,7 +31,7 @@
 | `.cursorignore` | Derived from the Claude `Read(...)` denies | Steering |
 | `.cursor/rules/areas/<area>.mdc` | Only if `cursorAreaRules: true` (U1 fails): `alwaysApply: false`, `globs: <dir>/**`, body = generated copy of the nested AGENTS.md | Fallback |
 
-With this tree, the U1 fallback would emit seven `.mdc` files, one per nested node: `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.Seeder/**`, `src/Desk.UserAdmin/**` (rev 11, H19), `web/**`, `.github/**`, `deploy/**`. None counts toward D13 (`alwaysApply: false`).
+With this tree, the U1 fallback would emit eight `.mdc` files, one per nested node: `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.Seeder/**`, `src/Desk.UserAdmin/**` (rev 11, H19), `web/**`, `.github/**`, `deploy/**`, `tests/**`. None counts toward D13 (`alwaysApply: false`).
 
 ## Permissions: expected `.cursor/cli.json` (generator output, preview)
 
@@ -68,3 +68,5 @@ Derived mechanically from the Claude draft by the rev 9 mapping (`Edit`→`Write
 | U22 `Mcp(server:tool)` wildcards | UNVERIFIED | MCP denies not counted; rev 10 generates the Cursor MCP matcher `MCP:.*` |
 | Cloud agents' identity | Cursor GitHub App (rev 10) | DEP-R1 must cover the App (no bypass); U9 still decides whether `cli.json` and imported hooks apply |
 | Local double run (imported hook + `hooks.json`) | Expected | The guard evaluates once per tool call (rev 10); D7 exempts the pair |
+
+U24 (Cursor loads `.claude/skills` with default settings): PENDING: needs a human-run Cursor install before merge (§6).

@@ -12,10 +12,12 @@
 | [`workflow.md`](workflow.md) | **[TW] new.** Agent session rules in full: push, never force-push, update by merge, gitleaks stop-and-report, heredoc commits, health checks without curl, curl/wget, web fetch, gh canonical form, who signs off, TC-only actions, rejected command shapes |
 | [`harness-claude-code.md`](harness-claude-code.md), [`harness-cursor.md`](harness-cursor.md), [`harness-grok.md`](harness-grok.md) | **[TW] new.** Per-harness notes: what each reads, the exact thin adapter files, the permission/deny config that backs the workflow rules, and the unverified items |
 | [`roles-and-skills.md`](roles-and-skills.md) | Roles table (tool scopes, preloads), skills table, `pr-ready` commands, generated-header formats, `cli.json` no-marker rationale (restored from rev 3, R4-F6) |
+| `guidelines/*.md` | Eight stack how-tos: [`dotnet-api.md`](guidelines/dotnet-api.md), [`ef-postgres-migrations.md`](guidelines/ef-postgres-migrations.md), [`sql-dapper.md`](guidelines/sql-dapper.md), [`angular-ag-grid.md`](guidelines/angular-ag-grid.md), [`tests-and-coverage.md`](guidelines/tests-and-coverage.md), [`e2e-playwright.md`](guidelines/e2e-playwright.md), [`security.md`](guidelines/security.md), [`perf-budgets.md`](guidelines/perf-budgets.md) |
+| Skills: `.claude/skills/` (8; SKILL.md is canonical) | `start-phase`, `pr-ready`, `add-endpoint`, `ef-migration-safety`, `fix-review-feedback`, `perf-budgets`, `adr`, `seeding` |
 
 ## Nested AGENTS.md map [TW]
 
-Five areas, seven directory nodes (ADR §1 paths; Tech Coordinator's area list; **rev 11, H19:** `src/Desk.UserAdmin` added). Each node has a sibling `CLAUDE.md` that is exactly the one-line import stub (D2).
+Six areas, eight directory nodes (ADR §1 paths; Tech Coordinator's area list; **rev 11, H19:** `src/Desk.UserAdmin` added). Each node has a sibling `CLAUDE.md` that is exactly the one-line import stub (D2).
 
 | Area | Nodes | Carries |
 |---|---|---|
@@ -24,6 +26,7 @@ Five areas, seven directory nodes (ADR §1 paths; Tech Coordinator's area list; 
 | Web | `web/AGENTS.md` | Angular and AG Grid rules, web commands, UI PR needs |
 | Admin CLI (rev 11, H19) | `src/Desk.UserAdmin/AGENTS.md` | Local/test-database rule detail, password and output contract (CI `budgets` parses it), security-stamp semantics (ADR-0021), exit codes, not deployed |
 | Infra and CI | `.github/AGENTS.md`, `deploy/AGENTS.md` | Workflow governance rules, TC-only Actions writes, actionlint and gate-script commands; image and start-up rules, deploy facts |
+| Tests (Helms 2026-10-08, Q2) | `tests/AGENTS.md` | Testcontainers needs Docker; never skip; coverlet MTP; `testconfig.json` is governance; don't mutate seeded rows |
 
 Hard rules stay in the root file as one-liners, because every harness loads the root and Cursor CLI may not load nested files (U1, ADR §1).
 
@@ -58,6 +61,7 @@ Statuses for U1, U3, U8, U9, U10 and U15 come from Tech Research's verification 
 | U22 | MCP merge/admin tools: exact tool names per harness (Claude `mcp__<server>__merge_pull_request`, Cursor `Mcp(server:tool)`), wildcard support in deny rules, and whether a `PreToolUse` matcher `mcp__.*` reaches the guard (R6-F3, H14) | UNVERIFIED | List the MCP tools in each harness; add a throwaway deny and matcher; call a read tool and a dry-run merge on a scratch PR | The guard blocks merge/admin MCP tools when the matcher fires (GitHub servers: allowlist, so `rename_branch`, `update_repository`, deploy-key and workflow tools block; rev 8); TC's per-merge check and the process rule ("Tech Coordinator merges") remain | **Yes** (merge residual) |
 | U23 | Built-in read-only web fetch per harness (H16 (3): the docs path once `curl`/`wget` are denied) | Claude Code `WebFetch`: **VERIFIED (docs)**, domain rules `WebFetch(domain:x)`, prompts except preapproved docs domains. Cursor web fetch: **VERIFIED (docs)**, `WebFetch(<domain>)` allow entries. Grok Build `web_fetch`: exists, **off by default** (`GROK_WEB_FETCH=1` or `[features] web_fetch = true`; `allow_local` false). Copilot: **none** | Fetch one docs page in each harness | Over-block accepted (ADR Residual 9); Leo may enable Grok's `web_fetch` | No (accepted residual) |
 | U21 | Cursor stdin shape and matcher rewrite for imported Claude hooks; the `Shell` matcher | UNVERIFIED (TR: docs silent; the third-party-hooks page's example uses `"matcher": "Shell"`). The `Shell` matcher is an **ASSUMPTION**; if it doesn't fire, the guard fails open **silently**. | `stdin-canary.mjs` in the IDE + CLI over the fixed operation set (imported hooks and `beforeShellExecution`), then an exit-2 pass (`testing.md`) | Guard fails **open** on unrecognized non-push input (warning + log), **closed** on recognized input, and **closed on any push/merge-shaped input whatever its shape** (H4, R4-M1(c)); the generated `.cursor/hooks.json` doesn't depend on the matcher (H8) | **Yes** (guard) |
+| U24 | Cursor loads .claude/skills with default settings | PENDING: needs a human-run Cursor install before merge (§6) | Customize → Skills | harness-cursor.md note | No |
 
 
 ## Repository dependencies (not harness behaviour)

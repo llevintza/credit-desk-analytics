@@ -9,7 +9,7 @@
 | Root `CLAUDE.md` → `AGENTS.md` | Always, at launch; re-injected after `/compact` | Claude reads AGENTS.md natively only when no `CLAUDE.md` exists (v2.1.277+). With the root stub present, AGENTS.md arrives through the import. VERIFIED (M§2). |
 | `<area>/CLAUDE.md` → `<area>/AGENTS.md` | On demand, when Claude uses Read/Write/Edit on a file in that directory | Without the stub, a nested AGENTS.md is **not** read while a root `CLAUDE.md` exists (default mode; the mode switch can't be committed). VERIFIED (M§2). On-demand load under the action: UNVERIFIED (U11). |
 | `.claude/settings.json` | Always | Permissions and hooks (below). |
-| `.claude/skills/<name>/SKILL.md` | Listing always; body on use | Six skills (`roles-and-skills.md`). |
+| `.claude/skills/<name>/SKILL.md` | Listing always; body on use | Eight skills (`roles-and-skills.md`). |
 | `.claude/agents/<role>.md` | On use | Six roles (`roles-and-skills.md`). |
 | `docs/agents/*` | Only when followed as a link | Never `@`-imported (N7, D16). |
 
@@ -21,7 +21,7 @@ Root and every nested area get the same one-line stub. Nothing else goes in it (
 @AGENTS.md
 ```
 
-Paths: `CLAUDE.md`, `src/Desk.Api/CLAUDE.md`, `src/Desk.Data/CLAUDE.md`, `src/Desk.Seeder/CLAUDE.md`, `src/Desk.UserAdmin/CLAUDE.md` (rev 11, H19), `web/CLAUDE.md`, `.github/CLAUDE.md`, `deploy/CLAUDE.md`. Each is exactly that one line plus a newline (11 bytes, like `main`'s root stub).
+Paths: `CLAUDE.md`, `src/Desk.Api/CLAUDE.md`, `src/Desk.Data/CLAUDE.md`, `src/Desk.Seeder/CLAUDE.md`, `src/Desk.UserAdmin/CLAUDE.md` (rev 11, H19), `web/CLAUDE.md`, `.github/CLAUDE.md`, `deploy/CLAUDE.md`, `tests/CLAUDE.md`. Each is exactly that one line plus a newline (11 bytes, like `main`'s root stub).
 
 Not allowed (D3, D5): `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, a committed `.claude/settings.local.json`, nested `.claude/` directories. The build work (Claude Code issue) adds `CLAUDE.local.md` and `.claude/settings.local.json` to `.gitignore` (ADR §1).
 

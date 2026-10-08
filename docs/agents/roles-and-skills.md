@@ -16,6 +16,8 @@
   - **Why no marker:** Cursor's handling of unknown keys in `cli.json` is undocumented. The docs also say "CLI performs self-repair for missing fields", and that files it treats as corrupted are backed up as `.bad` and recreated. A marker key could therefore cost every steering deny.
   - **Instead:** `scripts/agents/generated.lock.json` records `{path: sha256(sources)}`, and D14 checks it.
 
+**Build-PR spec:** `.claude/agents/` is not in PR-A (tool lists are permission scopes).
+
 ### 3. Roles (`.claude/agents/*.md`)
 
 Claude and Cursor read `.claude/agents/` natively (M§6); Grok support is UNVERIFIED (U4). Frontmatter is limited to `name`, `description`, `tools` (Claude), `skills` (Claude) and `readonly` (Cursor). **No `hooks:` or `allowed-tools:` keys** (D18). Fields a harness doesn't know are assumed ignored (U12).
@@ -35,19 +37,23 @@ Claude and Cursor read `.claude/agents/` natively (M§6); Grok support is UNVERI
 - **Frontmatter:** `name` equals the folder name. `description` is ≤ 200 characters, because every description is loaded on every turn. No `hooks:` or `allowed-tools:` (D18).
 - **"User" skills** set `disable-model-invocation: true`, so only a person can invoke them.
 
+`SKILL.md` is canonical; this table only names the skills (D8a).
+
 | Skill | Invocation | Does | Sources |
 |---|---|---|---|
 | `start-phase` | user | Checks that Tech Coordinator started the phase and the previous PR merged. Branches `phase-N/<slug>` from fresh `origin/main`. Lists the phase's ADRs and DoD. | AGENTS item 7, README §15 |
 | `pr-ready` | user | Pre-PR self-check (below) | Gate (ADR §7), README §10, §17 |
 | `ef-migration-safety` | model + user | Expand → deploy → contract. Nullable/default columns. No rename/drop in the same release. No seed data in migrations. `has-pending-model-changes` false. Migrate twice. | README §14.4, ci.yml `api` |
 | `seeding` | model | `--if-changed`. Bump `SeedVersion` when the generator or schema changes. COPY bulk load. < 90 s / < 350 MB, fails above 400 MB. Synthetic names only. | README §5.4–5.5 |
-| `ag-grid-infinite` | model | AG Grid **Community** Infinite Row Model with displayed-column requests, stable row ids, `switchMap`, no Enterprise modules | README §3, §6 P1, ADR-0008/0009 |
+| `add-endpoint` | model + user | Add or change an `/api` minimal-API endpoint (OpenAPI, entitlements, cache, tests). | `src/Desk.Api/AGENTS.md`, `guidelines/dotnet-api.md` |
+| `fix-review-feedback` | model + user | Fix Code Reviewer findings on the same branch; never resolve an unfixed thread; never post verdicts. | root review-gate bullets |
+| `perf-budgets` | model + user | Measure README §10 budgets on a local stack and write the before/after table. | `guidelines/perf-budgets.md` |
 | `adr` | model + user | Copies the template, takes the next free number (checks open PRs), adds the index row, includes measured numbers + a `perf/` script | AGENTS item 4, `docs/adr/README.md` |
 
 **`pr-ready` steps:**
 1. Build + test: `dotnet build`, `dotnet test`, `cd web && npm run lint && npm test -- --watch=false && npm run build`.
-2. Coverage: ≥ 80% on new or changed code, and main never drops. Since #5 (`741b19eb`): `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main`. For new `scripts/agents/**` code: `node --test` coverage (`testing.md`).
+2. Coverage: ≥ 80% on new or changed code, and main never drops. Since #5 (`741b19eb`): `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main`.
 3. Secrets: gitleaks with `--log-opts=origin/main..HEAD`. **[TW]** Run it with the same pinned image as `ci.yml` (`zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0…`; OQ-11, adopted). A finding on your own commit: stop and report to TC; no rewrite, no push (`workflow.md`).
-4. README §10 budgets: `node perf/payload-size.mjs`, initial JS bundle < 500 KB, before/after table.
+4. README §10 budgets: `node perf/payload-size.mjs`, initial JS bundle < 500 KB, before/after table. (local stack only, root rule).
 5. PR hygiene: template, §17 row, ADR links. Steering or enforcement paths require a `[workflows]` title (exception: a measured raise-only `perf/coverage-baseline.json` bump in the feature PR that earned it, per PR #107; only line and branch values that go up or stay the same, same keys; a same-PR change to `perf/coverage-thresholds.json`, `perf/coverage-override.json`, `tests/testconfig.json`, another coverage measurement/threshold file or another governance path voids it; a non-line/branch field change or an unparseable file fails; confirmed by Helms, `governance.md`).
 6. **[TW]** Commit messages in the quoted-heredoc form (`-F <file>` only for a file outside `.git/`); no curl/wget (no exception) or non-canonical gh anywhere in the commands (`workflow.md`).
