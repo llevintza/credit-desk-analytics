@@ -264,9 +264,9 @@ See ADR-0003 and ADR-0004.
   - `--max-mb` (default 400): budget for the **committed** size, checked just before COMMIT; over it the load rolls back (exit 2).
   - `--cap-mb` (default 512, must be > 0): storage cap for the reseed **peak**, checked **before TRUNCATE** on runs that would reseed (version, seed or scale change, or `--force`). Over it, or when the current size can't be read, the seeder refuses with exit 2 and changes nothing. An `--if-changed` skip never checks it. See §10.
   - Both `--max-mb` and `--cap-mb` (and the seeder's `MB` output: `SEED_PEAK_EST_MB`, `DB_SIZE_MB`) are MiB (1024² bytes); the peak estimate rounds up.
-- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled.
+- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled (before or after COMMIT; the message says which).
 - The prior business day is generated as the snapshot's second as-of date.
-- **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
+- **Cancellation (Ctrl+C or a CI timeout) before COMMIT rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130. A cancellation **after COMMIT** (during `ANALYZE` or the final size report) keeps the new data and its `app.seed_metadata` row, so the next `--if-changed` run skips; it prints `ERROR: cancelled after the seed was committed (version …, scale …); ANALYZE/size report skipped.` and also exits 130 (#285).
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
