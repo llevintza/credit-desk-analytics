@@ -501,6 +501,22 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
     }
 
+    [Fact]
+    public void Only_a_routed_export_endpoint_is_exempt_from_the_per_user_limiter()
+    {
+        var unrouted = new DefaultHttpContext();
+        unrouted.Request.Path = "/api/positions/export";
+        Assert.False(RateLimiting.IsExport(unrouted)); // no endpoint matched: the path alone exempts nothing
+
+        var other = new DefaultHttpContext();
+        other.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(), "other"));
+        Assert.False(RateLimiting.IsExport(other));
+
+        var export = new DefaultHttpContext();
+        export.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(ExportEndpoint.Instance), "export"));
+        Assert.True(RateLimiting.IsExport(export));
+    }
+
     private static HttpRequestMessage Export(string xsrf, params string[] columns)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns }) };
