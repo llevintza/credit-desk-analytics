@@ -27,7 +27,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Node major upgrades are a deliberate coordinated [workflows] PR (Dockerfile, every setup-node step, README §3/§12/§13.2, ADR). See closed #98.
+      # Lift after Node 26 LTS (2026-10-28), via a deliberate coordinated [workflows] PR (Dockerfile, every setup-node step, README §3/§12/§13.2, ADR). See closed #98.
       - dependency-name: node
         update-types: ["version-update:semver-major"]
   - package-ecosystem: docker-compose
