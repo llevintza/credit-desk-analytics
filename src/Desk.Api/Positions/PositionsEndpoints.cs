@@ -15,7 +15,6 @@ namespace Desk.Api.Positions;
 public static class PositionsEndpoints
 {
     public const int MaxExportRows = 25_000;
-    public const string ExportPath = "/api/positions/export";
 
     public static RouteGroupBuilder MapPositionsEndpoints(this RouteGroupBuilder api)
     {
@@ -30,6 +29,7 @@ public static class PositionsEndpoints
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         positions.MapPost("/export", ExportAsync)
+            .WithMetadata(ExportEndpoint.Instance)
             .WithName("ExportPositions")
             .WithSummary($"Streams the filtered positions as CSV (displayed columns, at most {MaxExportRows:N0} rows; one export at a time per user, a few in total, under an overall deadline).")
             .Produces(StatusCodes.Status200OK, contentType: "text/csv")

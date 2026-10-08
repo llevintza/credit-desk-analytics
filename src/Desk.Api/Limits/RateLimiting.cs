@@ -78,7 +78,8 @@ public static class RateLimiting
 
     private static bool IsApi(HttpContext http) => http.Request.Path.StartsWithSegments("/api");
 
-    private static bool IsExport(HttpContext http) => http.Request.Path.Equals(Positions.PositionsEndpoints.ExportPath, StringComparison.OrdinalIgnoreCase);
+    // UseRouting runs before the limiter, so the matched endpoint is known here.
+    private static bool IsExport(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<ExportEndpoint>() is not null;
 
     /// <summary>Signed-in users get their own bucket; anonymous callers get one per client IP.</summary>
     internal static string PartitionKey(HttpContext http, ClientAddress clients) =>

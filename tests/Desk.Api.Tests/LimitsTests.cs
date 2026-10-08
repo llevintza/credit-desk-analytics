@@ -403,6 +403,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
             export.Headers.Add("X-XSRF-TOKEN", xsrf);
             Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(export, Ct)).StatusCode);
         }
+        // However routing lets the path be spelled.
+        using (var export = new HttpRequestMessage(HttpMethod.Post, "/API/Positions/Export/") { Content = JsonContent.Create(new { columns = new[] { "deal_name" } }) })
+        {
+            export.Headers.Add("X-XSRF-TOKEN", xsrf);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(export, Ct)).StatusCode);
+        }
 
         gate.Release.TrySetResult();
         Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);

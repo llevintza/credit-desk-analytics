@@ -36,3 +36,14 @@ public sealed class ExportGate(LimitsOptions limits)
 
     public bool IsRunning(string user) => _users.ContainsKey(user);
 }
+
+/// <summary>
+/// Marks an endpoint as an export: <see cref="ExportGate"/> caps it, so the per-user concurrency limiter skips it.
+/// Matched on the routed endpoint, not the path string, so every spelling routing accepts is treated alike.
+/// </summary>
+public sealed class ExportEndpoint
+{
+    public static readonly ExportEndpoint Instance = new();
+
+    private ExportEndpoint() { }
+}
