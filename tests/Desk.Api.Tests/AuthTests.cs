@@ -129,16 +129,19 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         var user = await api.CreateUserAsync();
         var client = api.NewClient();
+        var before = DateTimeOffset.UtcNow;
         for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
             Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!, "wrong-password-123456")).StatusCode);
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+        var after = DateTimeOffset.UtcNow;
 
         await using var db = api.NewContext();
         var stored = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct);
         Assert.NotNull(stored.LockoutEnd);
-        // Identity stamps the lockout from its own clock; either way it lasts 15 minutes.
-        Assert.True(stored.LockoutEnd > DateTimeOffset.UtcNow.AddMinutes(14) || stored.LockoutEnd > api.Time.GetUtcNow().AddMinutes(14));
+        // Identity's UserManager stamps the lockout from the wall clock, not the injected TimeProvider (#226 follow-up),
+        // so bracket it: exactly 15 minutes from the moment of the fifth failure.
+        Assert.InRange(stored.LockoutEnd!.Value, before + IdentityPolicy.LockoutDuration, after + IdentityPolicy.LockoutDuration);
     }
 
     [Fact]
