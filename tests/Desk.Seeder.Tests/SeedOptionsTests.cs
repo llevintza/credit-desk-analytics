@@ -104,6 +104,10 @@ public sealed class SeedOptionsTests
     }
 
     [Fact]
+    public void Parse_cap_mb_overflow_is_an_overflow_exception() =>
+        Assert.Throws<OverflowException>(() => Parse(["--force", "--cap-mb", "99999999999999999999"]));
+
+    [Fact]
     public void Parse_cap_mb_needs_a_number() =>
         Assert.Throws<FormatException>(() => Parse(["--force", "--cap-mb", "lots"]));
 
