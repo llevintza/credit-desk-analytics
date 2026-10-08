@@ -10,6 +10,7 @@
 // (the 'whole book' check expects ~20k rows). HIT repeats one request. Local stack only.
 import http from 'k6/http';
 import { check } from 'k6';
+import { Trend } from 'k6/metrics';
 
 const base = __ENV.BASE_URL || 'http://localhost:5181';
 const risk = [
@@ -25,11 +26,13 @@ export const options = {
   scenarios: {
     miss: { executor: 'constant-vus', vus: 1, duration: '30s', exec: 'miss' },
     hit: { executor: 'constant-vus', vus: 1, duration: '30s', exec: 'hit', startTime: '31s' },
+    all: { executor: 'constant-vus', vus: 1, duration: '30s', exec: 'all', startTime: '62s' },
   },
   thresholds: {
     checks: ['rate==1.0'], // a failing request must fail the run, not look fast
     'http_req_duration{scenario:miss}': ['p(95)<150'],
     'http_req_duration{scenario:hit}': ['p(95)<15'],
+    all_miss: ['p(95)<150'], // the same MISS budget for the All preset (#135)
   },
   summaryTrendStats: ['p(50)', 'p(95)', 'max'],
 };
@@ -74,4 +77,29 @@ export function miss(data) {
 export function hit(data) {
   const res = post(data, { columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }] });
   check(res, { 'HIT': (r) => r.headers['X-Cache'] === 'HIT' }); // a request that misses fails checks: rate==1.0
+}
+
+// The All preset's whole-book first view, uncached (#135): the widest P1 request (~200 columns). Its own trend, so
+// the one-off preset lookup below stays out of the number.
+const allMiss = new Trend('all_miss', true);
+const allRun = Date.now(); // per VU and per run, so a rerun against the same API still misses
+let allColumns;
+let allCounter = 0;
+export function all(data) {
+  if (!allColumns) {
+    const res = http.get(`${base}/api/presets/positions`, { headers: { Cookie: data.cookie } });
+    allColumns = res.json().find((p) => p.name === 'All').state.columns;
+  }
+  allCounter += 1;
+  // A fractional threshold below every spread: the whole book, never asked for before (miss() uses whole numbers).
+  const threshold = -1e13 - allRun - allCounter - 0.5;
+  const res = post(data, {
+    columns: allColumns, sortModel: [{ colId: 'market_value', sort: 'desc' }],
+    filterModel: { spread_bp: { filterType: 'number', type: 'greaterThan', filter: threshold } },
+  });
+  allMiss.add(res.timings.duration);
+  check(res, {
+    'All MISS': (r) => r.headers['X-Cache'] === 'MISS',
+    'All whole book': (r) => r.json('rowCount') >= 19000,
+  });
 }
