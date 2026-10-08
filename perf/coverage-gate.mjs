@@ -5,34 +5,35 @@
  *      (same for branches).
  *   2. Overall line/branch % per project never drops vs the baseline at BASE_SHA.
  *   3. Once BASE has this script, the committed baseline must match measured
- *      numbers and must not sit below the BASE_SHA floor. During bootstrap the
- *      match is a Note (floor is 0/0 from BASE; HEAD JSON cannot relax overall/diff).
+ *      numbers and must not sit below the BASE_SHA floor. During a first
+ *      introduction the match is a Note (floor is 0/0 from BASE; HEAD JSON
+ *      cannot relax overall/diff).
  *
  * CI runs THIS FILE from the BASE_SHA checkout (`_base/perf/coverage-gate.mjs`)
- * when that file exists, otherwise (bootstrap only) from HEAD. Thresholds
- * and the floor are loaded with `git show $BASE_SHA:…` (never from the commit
- * under test). `--base-dir` / `--default-dir` cannot override git. On push,
- * `_default` is pinned to `github.sha`; floor still comes from `_base`.
+ * when that file exists, otherwise (first introduction only) from HEAD.
+ * Thresholds and the floor are loaded with `git show $BASE_SHA:…` (never from
+ * the commit under test). `--base-dir` / `--default-dir` cannot override git.
+ * On push, `_default` is pinned to `github.sha`; floor still comes from `_base`.
  *
- * Bootstrap is an explicit `{allowOnce:true}` signal: HEAD must contain
- * `perf/coverage-bootstrap.json` AND BASE_SHA must not yet have this script.
- * "Script missing" on a base that already has the gate is a hard failure,
- * not a second bootstrap.
+ * Introducing the gate is allowed ONLY when history never contained this
+ * script: `git log $BASE_SHA -- perf/coverage-gate.mjs` and
+ * `git log --all --not HEAD -- perf/coverage-gate.mjs` are both empty.
+ * Shallow or unknown history fails closed. After #5, that path is unreachable
+ * on this repository. Deleting the gate and restoring it, or force-pushing
+ * back to a pre-gate commit and re-introducing it, fails closed.
  *
  * After the default branch has the gate, a missing or renamed gate script,
  * thresholds file, or baseline on the default branch, the PR base, or HEAD
  * fails closed. PRs whose base is not the default branch fail closed.
  *
- * Push to main: BASE_SHA is `github.event.before`. Empty `--base-ref` is empty
- * (not "true"). The retarget check runs only on `pull_request`. Floor,
- * thresholds, and the gate script come from `_base` at BASE_SHA so a push
- * cannot rewrite the rules it is judged by. The introducing push of this PR
- * (before has no gate, HEAD has the gate and `{allowOnce:true}`) bootstraps.
- * That path is not available to pull_request events (R3-M2).
+ * Push to main: BASE_SHA is `github.event.before`. Empty / zero / unknown
+ * `before` fails closed. Empty `--base-ref` is empty (not "true"). The
+ * retarget check runs only on `pull_request`. Floor, thresholds, and the gate
+ * script come from `_base` at BASE_SHA so a push cannot rewrite the rules it
+ * is judged by.
  *
  * `perf/coverage-override.json` is applied only when the file differs from
- * BASE_SHA. After #5 merges, delete `perf/coverage-bootstrap.json` and
- * `perf/coverage-override.json` so they are not left on main.
+ * BASE_SHA (documented measurement-scope change).
  *
  * Fail closed: missing/empty/non-numeric/NaN schema, unresolvable BASE_SHA or
  * merge-base, or a git show/diff error. Comparisons use `!(actual >= floor)` so
@@ -55,7 +56,6 @@ export const ZERO_FLOOR = Object.freeze({
   web: Object.freeze({ line: 0, branch: 0 }),
 });
 
-export const BOOTSTRAP_FILE = "perf/coverage-bootstrap.json";
 export const OVERRIDE_FILE = "perf/coverage-override.json";
 export const TESTCONFIG_FILE = "tests/testconfig.json";
 
@@ -162,20 +162,6 @@ export function validateOverride(obj, label = "override") {
   return obj;
 }
 
-export function validateBootstrap(obj, label = "bootstrap") {
-  if (obj == null || typeof obj !== "object" || Array.isArray(obj)) {
-    throw new GateFailure(`${label} must be a JSON object.`);
-  }
-  const keys = Object.keys(obj).sort();
-  if (keys.join(",") !== "allowOnce") {
-    throw new GateFailure(`${label} must have exactly {allowOnce}, got keys [${keys.join(", ")}].`);
-  }
-  if (obj.allowOnce !== true) {
-    throw new GateFailure(`${label}.allowOnce must be true.`);
-  }
-  return obj;
-}
-
 export function baselinePairEq(a, b) {
   return round1(a.line) === round1(b.line) && round1(a.branch) === round1(b.branch);
 }
@@ -272,7 +258,6 @@ export function runGate(options = {}) {
     const headHasGate = existsSync(join(repoRoot, gatePath));
     const headHasThresholds = existsSync(join(repoRoot, thresholdsPath));
     const headHasBaseline = existsSync(join(repoRoot, baselinePath));
-    const bootstrapAllow = readBootstrapAllow(repoRoot, failHard);
 
     let bootstrapped;
     if (gateOnDefault) {
@@ -288,7 +273,7 @@ export function runGate(options = {}) {
       }
       if (!headHasThresholds) failHard(`head is missing ${thresholdsPath}; refusing to run without thresholds.`);
       if (!headHasBaseline) failHard(`head is missing ${baselinePath}; refusing to run without a baseline.`);
-    } else if (bootstrapAllow) {
+    } else {
       if (gateOnBase) {
         decisionPath = "fail/bootstrap-unreachable";
         failHard(
@@ -296,20 +281,17 @@ export function runGate(options = {}) {
             `The introducing path is only for a base that never had the gate.`,
         );
       }
+      assertHistoryAllowsIntroduction(repoRoot, baseSha, gatePath, defaultDir || baseDir, failHard, (p) => {
+        decisionPath = p;
+      });
       bootstrapped = true;
       decisionPath = isPush ? "push/bootstrap" : "pr/bootstrap";
       if (!headHasGate) {
         decisionPath = "fail/missing-head-gate";
-        failHard(`bootstrap requires head ${gatePath}.`);
+        failHard(`head is missing ${gatePath}; deleting or renaming the gate fails closed.`);
       }
-      if (!headHasThresholds) failHard(`bootstrap requires head ${thresholdsPath}.`);
-      if (!headHasBaseline) failHard(`bootstrap requires head ${baselinePath}.`);
-    } else {
-      decisionPath = "fail/no-bootstrap-signal";
-      failHard(
-        `default branch '${defaultBranch}' has no ${gatePath} and head has no ${BOOTSTRAP_FILE} ` +
-          `{allowOnce:true}. Bootstrap is an explicit one-time signal, not 'script missing'.`,
-      );
+      if (!headHasThresholds) failHard(`head is missing ${thresholdsPath}; refusing to run without thresholds.`);
+      if (!headHasBaseline) failHard(`head is missing ${baselinePath}; refusing to run without a baseline.`);
     }
 
     const floorSourceSha = bootstrapped ? null : defaultSha || baseSha;
@@ -401,20 +383,17 @@ export function runGate(options = {}) {
     if (bootstrapped) {
       const who = isPush ? "This push" : "This PR";
       say(
-        `**Bootstrap:** BASE_SHA has no \`perf/coverage-gate.mjs\`. ${who} may establish the gate ` +
-          "because HEAD contains `perf/coverage-bootstrap.json` `{allowOnce:true}` (explicit signal, " +
-          "not 'script missing'). Hardcoded bootstrap thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
-          "tolerance 0.5. After BASE has the gate, CI runs `_base/perf/coverage-gate.mjs` and a " +
+        `**Bootstrap:** ${who} may establish the gate because \`git log $BASE_SHA -- ${gatePath}\` ` +
+          "and `git log --all --not HEAD` are empty (the file never existed in history). " +
+          "Hardcoded first-introduction thresholds are diff ≥ 80/80, `overallMustNotDrop: true`, " +
+          "tolerance 0.5. After history has the gate, CI runs `_base/perf/coverage-gate.mjs` and a " +
           "missing or renamed gate, thresholds, or baseline on base or head **fails closed**. " +
-          "A PR whose base is not the default branch **fails closed**. The introducing push " +
-          "(event.before has no gate) bootstraps with `{allowOnce:true}`. This path is unreachable " +
-          "once BASE_SHA has the gate. " +
-          "Lowering the floor after bootstrap requires a dedicated `[workflows]` PR with " +
+          "Shallow or unknown history **fails closed**. A PR whose base is not the default branch " +
+          "**fails closed**. This path is unreachable once the gate exists in history. " +
+          "Lowering the floor after introduction requires a dedicated `[workflows]` PR with " +
           "`perf/coverage-override.json` `{from, to, reason}` matching the BASE_SHA floor and " +
           "measured numbers, plus sign-off from Code Reviewer, Tech Coordinator and Helms. " +
-          "A PR may raise the committed baseline to match measured coverage. After merge, delete " +
-          "`perf/coverage-bootstrap.json` and `perf/coverage-override.json`. The override is applied " +
-          "only when that file differs from BASE_SHA.",
+          "The override is applied only when that file differs from BASE_SHA.",
       );
       say("");
     }
@@ -695,21 +674,64 @@ function resolveDefaultSha(root, defaultBranch, defaultDir, failHard) {
   );
 }
 
-function readBootstrapAllow(root, failHard) {
-  const full = join(root, BOOTSTRAP_FILE);
-  if (!existsSync(full)) return false;
-  let raw;
+function repoIsShallow(root) {
   try {
-    raw = JSON.parse(readFileSync(full, "utf8"));
-  } catch (e) {
-    failHard(`cannot parse head ${BOOTSTRAP_FILE}: ${e.message}`);
+    const out = execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (out === "true") return true;
+    if (out === "false") return false;
+    return null;
+  } catch {
+    return null;
   }
+}
+
+function gitLogHasPath(root, extraArgs, path, failHard) {
+  let out;
   try {
-    validateBootstrap(raw);
-    return true;
+    out = execFileSync("git", ["log", "--pretty=%H", ...extraArgs, "--", path], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (e) {
-    if (e instanceof GateFailure) failHard(e.message);
-    throw e;
+    const err = String(e.stderr || e.message || e).trim();
+    failHard(`cannot read git log ${extraArgs.join(" ")} -- ${path} (unknown history): ${err}`);
+  }
+  return Boolean(out && out.trim());
+}
+
+function assertHistoryAllowsIntroduction(root, baseSha, gatePath, extraGitDir, failHard, setPath) {
+  setPath("fail/shallow-history");
+  const roots = [root];
+  if (extraGitDir && extraGitDir !== root && gitOk(extraGitDir, ["rev-parse", "--git-dir"])) {
+    roots.push(extraGitDir);
+  }
+  for (const dir of roots) {
+    const shallow = repoIsShallow(dir);
+    if (shallow === null) {
+      setPath("fail/unknown-history");
+      failHard(`cannot determine whether history is shallow at '${dir}'. Failing closed.`);
+    }
+    if (shallow) {
+      failHard(
+        `repository is shallow; refusing to introduce ${gatePath}. Fetch full history (fetch-depth: 0).`,
+      );
+    }
+  }
+  setPath("fail/unknown-history");
+  const onBase = gitLogHasPath(root, [baseSha], gatePath, failHard);
+  const elsewhere = gitLogHasPath(root, ["--all", "--not", "HEAD"], gatePath, failHard);
+  if (onBase || elsewhere) {
+    setPath("fail/bootstrap-unreachable");
+    failHard(
+      `Bootstrap is unreachable: ${gatePath} already exists in history ` +
+        `(git log $BASE_SHA / git log --all --not HEAD). ` +
+        `Deleting or rewriting the gate and re-introducing it fails closed.`,
+    );
   }
 }
 

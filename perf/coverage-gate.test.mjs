@@ -1,12 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  BOOTSTRAP_FILE,
   BOOTSTRAP_THRESHOLDS,
   GateFailure,
   canonicalCobertura,
@@ -18,7 +17,6 @@ import {
   runGate,
   summarizeDotnet,
   validateBaseline,
-  validateBootstrap,
   validateOverride,
   validateThresholds,
 } from "./coverage-gate.mjs";
@@ -96,7 +94,6 @@ function lcov(sf, lines, branches = []) {
 function headJson(dir, measured = { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } }) {
   write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
   write(dir, "perf/coverage-baseline.json", JSON.stringify(measured));
-  write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
 }
 
 function gateArgs(base, extra = []) {
@@ -213,7 +210,6 @@ test("schema: valid objects pass", () => {
   validateThresholds(VALID_THRESHOLDS);
   validateBaseline(VALID_BASELINE);
   validateThresholds(BOOTSTRAP_THRESHOLDS);
-  validateBootstrap({ allowOnce: true });
   validateOverride({
     from: VALID_BASELINE,
     to: VALID_BASELINE,
@@ -278,7 +274,11 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.match(yml, /--default-dir _base/);
   assert.ok(yml.includes('--default-sha "$BASE_SHA"'));
   assert.match(yml, /deleting or renaming the gate fails closed/);
-  assert.equal((yml.match(/echo "Bootstrap:/g) || []).length, 1);
+  assert.equal((yml.match(/echo "Bootstrap:/g) || []).length, 0);
+  assert.doesNotMatch(yml, /coverage-bootstrap/);
+  assert.match(yml, /path: _base[\s\S]*fetch-depth: 0/);
+  assert.equal(existsSync(join(repoRoot, "perf/coverage-bootstrap.json")), false);
+  assert.equal(existsSync(join(repoRoot, "perf/coverage-override.json")), false);
   assert.match(yml, /types: \[opened, synchronize, reopened, edited\]/);
   assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
   assert.ok(yml.includes("GITHUB_EVENT_NAME: ${{ github.event_name }}"));
@@ -1291,21 +1291,97 @@ test("override with from not equal to the default-branch floor fails", () => {
   }
 });
 
-test("missing bootstrap allowOnce is not treated as script-missing bootstrap", () => {
-  const { dir, base } = setupPassRepo();
+test("R5-F1 (c): deleting the gate then restoring it with allowOnce fails", () => {
+  const dir = initRepo();
   try {
-    rmSync(join(dir, BOOTSTRAP_FILE));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    commit(dir, "main has the gate");
+    rmSync(join(dir, "perf/coverage-gate.mjs"));
+    const deleted = commit(dir, "delete gate");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "perf/coverage-bootstrap.json", JSON.stringify({ allowOnce: true }));
+    commit(dir, "restore with allowOnce");
+    writePassCoverage(dir);
     const r = runGate({
       root: dir,
-      argv: gateArgs(base),
+      argv: pushArgs(deleted),
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assertGatePath(r.output, "fail/no-bootstrap-signal");
-    assert.match(r.output, /explicit one-time signal/);
+    assertGatePath(r.output, "fail/bootstrap-unreachable");
+    assert.match(r.output, /already exists in history|Bootstrap is unreachable/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R5-F1 (d): force-push back to a pre-gate commit then re-introduce fails", () => {
+  const dir = initRepo();
+  try {
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    const pre = commit(dir, "pre-gate");
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    commit(dir, "had the gate");
+    git(dir, ["tag", "before-rewrite"]);
+    git(dir, ["reset", "--hard", pre]);
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    commit(dir, "re-introduce gate");
+    writePassCoverage(dir);
+    const r = runGate({
+      root: dir,
+      argv: pushArgs(pre),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/bootstrap-unreachable");
+    assert.match(r.output, /already exists in history|Bootstrap is unreachable/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R5-F1 (e): shallow history fails closed", () => {
+  const src = initRepo();
+  const dest = mkdtempSync(join(tmpdir(), "gate-shallow-"));
+  try {
+    write(src, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(src, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(src, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    commit(src, "pre-gate");
+    execFileSync("git", ["clone", "--depth", "1", `file://${src}`, dest], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    git(dest, ["config", "user.email", "gate@test.invalid"]);
+    git(dest, ["config", "user.name", "Gate Test"]);
+    git(dest, ["config", "commit.gpgsign", "false"]);
+    write(dest, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dest, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    writePassCoverage(dest);
+    const base = git(dest, ["rev-parse", "HEAD"]);
+    const r = runGate({
+      root: dest,
+      argv: pushArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assertGatePath(r.output, "fail/shallow-history");
+    assert.match(r.output, /shallow/);
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
   }
 });
 
@@ -1466,7 +1542,6 @@ test("R5-M1 (a): override PR push passes when from equals the BASE_SHA floor", (
     const to = { dotnet: { line: 50, branch: 0 }, web: { line: 0, branch: 0 } };
     write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
     write(dir, "perf/coverage-baseline.json", JSON.stringify(from));
-    write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
     const before = commit(dir, "main floor 99");
     write(dir, "perf/coverage-baseline.json", JSON.stringify(to));
@@ -1550,7 +1625,6 @@ test("bootstrap is unreachable once BASE_SHA already has the gate", () => {
       dotnet: { line: 100, branch: 100 },
       web: { line: 100, branch: 100 },
     }));
-    write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
     const noGate = commit(dir, "pre-gate default");
     write(dir, "perf/coverage-gate.mjs", THIS_GATE);
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
@@ -1646,7 +1720,6 @@ test("override to must equal measured coverage (say FAIL)", () => {
     const floor = { dotnet: { line: 90, branch: 90 }, web: { line: 90, branch: 90 } };
     write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
     write(dir, "perf/coverage-baseline.json", JSON.stringify(floor));
-    write(dir, BOOTSTRAP_FILE, JSON.stringify({ allowOnce: true }));
     write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
     const before = commit(dir, "floor 90");
     write(

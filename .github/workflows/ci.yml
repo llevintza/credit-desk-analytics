@@ -179,6 +179,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           path: _base
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -217,13 +218,8 @@ jobs:
           GATE=perf/coverage-gate.mjs
           if [ -f _base/perf/coverage-gate.mjs ]; then
             GATE=_base/perf/coverage-gate.mjs
-          elif [ -f perf/coverage-gate.mjs ] && [ -f perf/coverage-bootstrap.json ]; then
-            echo "Bootstrap: explicit allowOnce on head; base has no gate yet."
           elif [ ! -f perf/coverage-gate.mjs ]; then
             echo "::error::head is missing perf/coverage-gate.mjs; deleting or renaming the gate fails closed."
-            exit 1
-          else
-            echo "::error::Base has no coverage gate and head has no perf/coverage-bootstrap.json. Failing closed."
             exit 1
           fi
           node "$GATE" \
