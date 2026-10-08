@@ -7,9 +7,10 @@ namespace Desk.Data.Grid;
 /// <summary>
 /// Whitelists a <see cref="GridRequest"/> against the column catalog (README §6 P1 server rules, AGENTS.md SQL safety).
 /// Unknown or malformed parts are dropped, never echoed into SQL and never an error: a bad sort id, an injection
-/// attempt in a filter key or a filter whose value doesn't parse simply has no effect. The one exception is a
-/// filter that is valid but too large to apply (<see cref="GridRequestException"/>, a 400): dropping it would
-/// widen the result.
+/// attempt in a filter key or a filter whose value doesn't parse simply has no effect. The exception is a filter
+/// that is well-formed but can't be applied as asked (<see cref="GridRequestException"/>, a 400): too many filters,
+/// conditions or set values, text over <see cref="MaxTextLength"/>, a money value beyond <c>decimal</c>'s range, or
+/// a combined filter with a part that can't be applied. Dropping any of those would widen the result.
 /// </summary>
 public sealed class GridQueryNormalizer
 {
@@ -82,6 +83,9 @@ public sealed class GridQueryNormalizer
         foreach (var (key, spec) in (model ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             if (spec is null || !_byName.TryGetValue(key, out var col)) continue;
+            // Refuse before doing the work of filter 51: cutting the list would widen the result (#130 N7).
+            if (filters.Count == MaxFilters && Applies(col, spec))
+                throw new GridRequestException($"More than {MaxFilters} filters; at most {MaxFilters}.");
 
             if (spec.Conditions is { Length: > 0 } parts)
             {
@@ -98,11 +102,12 @@ public sealed class GridQueryNormalizer
                 filters.Add(new GridFilter(col, false, [condition]));
             }
         }
-        // Cutting the list would widen the result: refuse instead (#130 N7).
-        if (filters.Count > MaxFilters)
-            throw new GridRequestException($"{filters.Count} filters; at most {MaxFilters}.");
         return filters;
     }
+
+    /// <summary>Whether a filter on a known column would be kept (its conditions are checked, not built).</summary>
+    private static bool Applies(ColumnDef col, FilterSpec spec) =>
+        spec.Conditions is { Length: > 0 } || Condition(col, spec, spec.FilterType) is not null;
 
     private static GridCondition? Condition(ColumnDef col, FilterSpec spec, string? parentType)
     {
@@ -150,14 +155,20 @@ public sealed class GridQueryNormalizer
     /// stays exact and on the column's own type; <c>double</c> for the <c>double precision</c> and integer columns.
     /// </summary>
     private static object? Number(ColumnDef col, JsonElement? e) =>
-        col.Kind == ColumnKind.Money ? Money(e) : Number(e);
+        col.Kind == ColumnKind.Money ? Money(col, e) : Number(e);
 
-    private static decimal? Money(JsonElement? e)
+    private static decimal? Money(ColumnDef col, JsonElement? e)
     {
-        if (e is { ValueKind: JsonValueKind.Number } n) return n.TryGetDecimal(out var d) ? d : null;
-        return e is { ValueKind: JsonValueKind.String } s && decimal.TryParse(s.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : null;
+        string? text;
+        if (e is { ValueKind: JsonValueKind.Number } n) text = n.GetRawText();
+        else if (e is { ValueKind: JsonValueKind.String } s) text = s.GetString();
+        else return null;
+        if (decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+            return d / 1.000000000000000000000000000000000m; // drops trailing zeros: 1000, 1000.0 and 1e3 share a cache key
+        // A real number decimal can't hold is a filter we can't apply; dropping it would widen the result.
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            throw new GridRequestException($"Filter value on {col.Name} is outside the supported range.");
+        return null;
     }
 
     private static double? Number(JsonElement? e)

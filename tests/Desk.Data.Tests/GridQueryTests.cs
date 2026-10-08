@@ -317,6 +317,14 @@ public sealed class GridQueryTests
         var over = Model(GridQueryNormalizer.MaxFilters + 1);
         over["no_such_column"] = new FilterSpec("number", "notBlank");
         Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: over)));
+        // Filters that would be dropped anyway don't count toward the cap.
+        var dropped = Model(GridQueryNormalizer.MaxFilters);
+        foreach (var c in numeric.Skip(GridQueryNormalizer.MaxFilters))
+            dropped[c.Name] = new FilterSpec("number", "nope");
+        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: dropped)).Filters.Count);
+        // A combined filter as filter 51 is refused too.
+        dropped[numeric[^1].Name] = new FilterSpec("number", Operator: "AND", Conditions: [new(Type: "notBlank"), new(Type: "blank")]);
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: dropped)));
     }
 
     [Fact]
@@ -332,9 +340,12 @@ public sealed class GridQueryTests
         Assert.Equal(1000000.10m, Assert.IsType<decimal>(money.Value));
         Assert.Equal(2000000.20m, Assert.IsType<decimal>(money.ValueTo));
         Assert.Equal(150.5, Assert.IsType<double>(q.Filters.Single(f => f.Column.Name == "spread_bp").Conditions[0].Value));
-        // Not a number (or beyond decimal's range): dropped, as for any other unusable number filter.
-        foreach (var bad in new[] { "\"lots\"", "1e40", "true" })
+        // Not a number: dropped, as for any other unusable number filter.
+        foreach (var bad in new[] { "\"lots\"", "true" })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals", Json(bad)) })).Filters);
+        // A real number beyond decimal's range can't be applied: dropping it would widen the result, so it's a 400.
+        foreach (var huge in new[] { "1e40", "\"-1e40\"", "1e400" })
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "greaterThan", Json(huge)) })));
         Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals") })).Filters); // no value
     }
 
@@ -370,6 +381,12 @@ public sealed class GridQueryTests
         Assert.Contains("1.5", dated.CanonicalKey);
         Assert.Contains("\"Or\":true", dated.CanonicalKey);
         Assert.NotEqual(dated.CanonicalKey, dated.SummaryKey);
+
+        // Money values keep no trailing-zero scale: 1000, 1000.0, 1e3 and "1000.00" are one cache entry.
+        var keys = new[] { "1000", "1000.0", "1e3", "\"1000.00\"" }
+            .Select(v => Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "greaterThan", Json(v)) })).CanonicalKey)
+            .Distinct();
+        Assert.Single(keys);
     }
 
     [Fact]
