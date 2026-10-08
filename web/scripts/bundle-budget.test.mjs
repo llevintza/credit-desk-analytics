@@ -93,3 +93,12 @@ test('refuses paths outside the dist dir', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /resolves outside/);
 });
+
+test('ignores non-js/css links such as manifest.json', () => {
+  const r = run({
+    'index.html': page('<link rel="manifest" href="manifest.json"><script src="main-A1.js" type="module"></script>'),
+    'manifest.json': '{}',
+    'main-A1.js': 'void 0;',
+  });
+  assert.equal(r.status, 0, r.stderr);
+});

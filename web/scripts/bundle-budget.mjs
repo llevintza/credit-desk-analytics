@@ -24,8 +24,9 @@ const read = (file) => {
 };
 
 const html = readFileSync(join(dir, 'index.html'), 'utf8');
-// Double-quoted, single-quoted and unquoted attributes all count.
-const initial = [...html.matchAll(/<(?:script[^>]+src|link[^>]+href)=["']?([^"'\s>]+\.(?:js|css))/g)].map((m) => m[1]);
+// Double-quoted, single-quoted and unquoted attributes all count. The extension must end the path (a query or
+// fragment may follow), so `manifest.json` is not read as `manifest.js`.
+const initial = [...html.matchAll(/<(?:script[^>]+src|link[^>]+href)=["']?([^"'\s>?#]+\.(?:js|css))(?=[?#"'\s>])/g)].map((m) => m[1]);
 const main = initial.find((f) => /^main-[^/]*\.js$/.test(f));
 if (initial.length === 0 || !main) fail('index.html lists no initial scripts or no main-*.js; refusing to pass the budget.');
 
