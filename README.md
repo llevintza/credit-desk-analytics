@@ -333,7 +333,8 @@ Accept: application/json            (or application/x-msgpack, see ADR-0007)
 - **Whitelist:** column ids, sort ids and filter ids are resolved through the column catalog. Unknown ids are **dropped**, never concatenated into SQL. Every value is a parameter.
 - `position_id` is always included (the row id) and always appended to `ORDER BY` as a **deterministic tie-breaker** (otherwise offset paging duplicates or skips rows).
 - Block size is clamped to ≤ 500 rows, and displayed columns to ≤ 250.
-- **One round trip:** the page query and the totals query (`COUNT(*)` + per-column aggregates from the catalog: SUM, or market-value-weighted average) are sent together (`QueryMultipleAsync` or a single batch).
+- **One round trip:** the page query and the totals query (`COUNT(*)` + per-column aggregates from the catalog: SUM, or |market value|-weighted average) are sent together (`QueryMultipleAsync` or a single batch).
+- **Weighting rule:** weights are `ABS(market_value)`; see §8 (#131).
 - **Paging:** `OFFSET … FETCH` by default. ADR-0008 evaluates keyset paging, which the Infinite Row Model's random-access jumps make harder, and records the measured trade-off at deep offsets.
 - **Caching:** the key is (as-of, canonicalized query JSON, user's portfolio entitlements). Entries live until the next as-of date. Support `If-None-Match` → **304**.
 - The `CancellationToken` flows to Npgsql, so scrolling past a block cancels its query. The command timeout is 10 s.
@@ -554,7 +555,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages are weighted by market value, with a documented rule for zero or NULL weights (returns `null`, never `NaN`).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
@@ -826,6 +827,18 @@ services:
 9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10).
 10. **e2e:** the compose stack (with `e2e/docker-compose.e2e.yml`: higher per-user limits for one automated user) migrated and seeded at scale 0.2, a throwaway viewer (generated, masked password), then Playwright: log in, the P1 acceptance flows, no console or CSP errors, and dark/light screenshots of every page. The report and screenshots are uploaded as artifacts.
 
+**Per-area runs (#169, [ADR-0023](docs/adr/0023-per-area-ci-jobs.md)):** on `pull_request`, a `changes` job runs `.github/scripts/ci-changes.mjs` **from the BASE_SHA checkout** over `git diff --name-only --no-renames BASE...HEAD` and sets one flag per area. Docs (`*.md` anywhere except under `src/` and `web/src/`, where only `AGENTS.md`/`CLAUDE.md` count; `docs/**`; `.claude/skills/**`) set none. Shared triggers (`.github/**` other than Markdown, `Directory.*.props`, `global.json`, `dotnet-tools.json`, `*.sln`/`*.slnx`, lockfiles, Docker/compose files, `perf/coverage-*`, `tests/testconfig.json`, `.gitleaks.toml`), any path that matches no area, and an empty diff set every flag.
+
+| Area | Paths | Jobs it runs |
+|---|---|---|
+| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, `perf/*/**` (the .NET benchmark projects in `CreditDesk.slnx`), `deploy/start.sh` (linked into `Desk.Api.Tests`) | `api`, `coverage` (.NET) |
+| `web` | `web/**` | `web`, `coverage` (web) |
+| `db` | `src/Desk.Data/**`, `src/Desk.Seeder/**`, `tests/Desk.Data.Tests/**`, `tests/Desk.Seeder.Tests/**` | `api` (all .NET suites, migrate, seed), `db-tools`, `coverage` (.NET) |
+| `app` | `deploy/**`, `e2e/**`, `render.yaml`, plus any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |
+| `perf` | `perf/**` | `budgets` |
+
+`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
+
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
 ### 14.2 CD: `.github/workflows/deploy.yml`, on push to `main` (after CI passes)
@@ -881,6 +894,8 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase.
 
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
 ---
@@ -921,6 +936,8 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+
 ---
 
 ## 16. Out of scope / later
@@ -938,11 +955,11 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review) |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |
