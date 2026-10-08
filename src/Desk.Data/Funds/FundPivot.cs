@@ -18,10 +18,11 @@ public static class FundPivot
             [.. months.Select(m => m.AsOfMonth.ToString("yyyy-MM-dd"))],
             [
                 new FundRow("Balance", "money0", [.. months.Select(m => (decimal?)m.Balance)]),
-                // IRR arrives as double precision; decimal keeps it exact on the wire (rounded only for display).
+                // IRR arrives as double precision. decimal serialises without binary-float artefacts (≈15 significant
+                // digits, as the double carried); rounded only for display.
                 new FundRow("IRR", "pct2", [.. months.Select(m => ToDecimal(m.IrrItd))]),
             ]);
-        Validate(result);
+        Validate(result); // can't fail while both rows come from `months`: a guard for when a measure gets its own source
         return result;
     }
 

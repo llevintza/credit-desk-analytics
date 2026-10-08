@@ -1,7 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using Desk.Api.Positions;
 using Desk.Data.Funds;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace Desk.Api.Tests;
@@ -42,7 +46,8 @@ public sealed class FundTests(PostgresApiFactory api)
         var p = await client.GetFromJsonAsync<FundPerformance>($"/api/funds/{fundId}/performance?range=ITD", Ct);
         await using var conn = new NpgsqlConnection(api.ConnectionString);
         await conn.OpenAsync(Ct);
-        await using var cmd = new NpgsqlCommand($"SELECT (date_trunc('month', inception_date) + interval '1 month - 1 day')::date FROM core.fund WHERE fund_id = {fundId}", conn);
+        await using var cmd = new NpgsqlCommand("SELECT (date_trunc('month', inception_date) + interval '1 month - 1 day')::date FROM core.fund WHERE fund_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", fundId);
         var firstMonthEnd = (DateOnly)(await cmd.ExecuteScalarAsync(Ct))!;
         Assert.Equal(firstMonthEnd.ToString("yyyy-MM-dd"), p!.Months[0]);
         Assert.Equal(p.Months.OrderBy(m => m, StringComparer.Ordinal), p.Months);
@@ -59,6 +64,20 @@ public sealed class FundTests(PostgresApiFactory api)
         Assert.Empty(none!.Months);
         Assert.All(none.Rows, r => Assert.Empty(r.Values));
         Assert.Null(none.From);
+    }
+
+    [Fact]
+    public async Task Custom_months_compare_and_cache_as_month_ends()
+    {
+        var (client, _, _) = await api.SignedInAsync();
+        // Both days are June 2025: one month, not a reversed range.
+        var june = await client.GetAsync("/api/funds/1/performance?range=CUSTOM&from=2025-06-15&to=2025-06-01", Ct);
+        Assert.Equal(HttpStatusCode.OK, june.StatusCode);
+        Assert.Equal(["2025-06-30"], (await june.Content.ReadFromJsonAsync<FundPerformance>(Ct))!.Months);
+        // Any day of the same months is the same entry and ETag.
+        var other = await client.GetAsync("/api/funds/1/performance?range=CUSTOM&from=2025-06-01&to=2025-06-30", Ct);
+        Assert.Equal(june.Headers.ETag, other.Headers.ETag);
+        Assert.Equal("HIT", other.Headers.GetValues("X-Cache").Single());
     }
 
     [Theory]
@@ -82,6 +101,48 @@ public sealed class FundTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
         Assert.Equal("No such fund", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
         Assert.Equal("YTD", (await client.GetFromJsonAsync<FundPerformance>("/api/funds/2/performance", Ct))!.Range);
+    }
+
+    /// <summary>Grants a fixed set of portfolios to everyone (README §8 entitlements, #123 stub-provider rule).</summary>
+    private sealed class StubEntitlements(params int[] portfolioIds) : IPortfolioEntitlements
+    {
+        public IReadOnlyCollection<int> For(ClaimsPrincipal user, MetaSnapshot meta) => portfolioIds;
+    }
+
+    private async Task<HttpClient> ClientWithAsync(StubEntitlements entitlements)
+    {
+        var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IPortfolioEntitlements>(entitlements)));
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+        return client;
+    }
+
+    [Fact]
+    public async Task A_fund_is_visible_only_with_every_one_of_its_portfolios()
+    {
+        var (full, _, _) = await api.SignedInAsync();
+        var unknown = await full.GetAsync("/api/funds/999/performance", Ct);
+        var visible = await full.GetAsync("/api/funds/1/performance?range=ITD", Ct);
+        var etag = visible.Headers.ETag!.ToString();
+
+        // Fund 2 in full (2, 6, 10) plus one of fund 1's three portfolios.
+        var partial = await ClientWithAsync(new StubEntitlements(2, 6, 10, 1));
+        Assert.Equal(HttpStatusCode.OK, (await partial.GetAsync("/api/funds/2/performance", Ct)).StatusCode);
+        var hidden = await partial.GetAsync("/api/funds/1/performance?range=ITD", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, hidden.StatusCode);
+        Assert.Null(hidden.Headers.ETag);
+        // Indistinguishable from a fund that doesn't exist.
+        var (u, h) = (await unknown.Content.ReadFromJsonAsync<ProblemDetails>(Ct), await hidden.Content.ReadFromJsonAsync<ProblemDetails>(Ct));
+        Assert.Equal((u!.Status, u.Title, u.Type, u.Detail!.Replace("999", "1")), (h!.Status, h.Title, h.Type, h.Detail));
+
+        // A cached response and a valid ETag never leak past the check: 404, not 304 or the cached body.
+        using var revalidate = new HttpRequestMessage(HttpMethod.Get, "/api/funds/1/performance?range=ITD");
+        revalidate.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        Assert.Equal(HttpStatusCode.NotFound, (await partial.SendAsync(revalidate, Ct)).StatusCode);
+
+        var none = await ClientWithAsync(new StubEntitlements());
+        foreach (var fund in new[] { 1, 2, 3, 4 })
+            Assert.Equal(HttpStatusCode.NotFound, (await none.GetAsync($"/api/funds/{fund}/performance", Ct)).StatusCode);
     }
 
     [Fact]
@@ -129,12 +190,13 @@ public sealed class FundTests(PostgresApiFactory api)
     public async Task Repeat_is_a_cache_hit_and_if_none_match_is_304_and_the_payload_is_small()
     {
         var (client, _, _) = await api.SignedInAsync();
-        var miss = await client.GetAsync("/api/funds/4/performance?range=ITD", Ct);
+        // Fund 1 ITD is the largest P2 payload (69 months).
+        var miss = await client.GetAsync("/api/funds/1/performance?range=ITD", Ct);
         Assert.True((await miss.Content.ReadAsByteArrayAsync(Ct)).Length < 5 * 1024, "README §6 P2: payload < 5 KB");
-        var hit = await client.GetAsync("/api/funds/4/performance?range=ITD", Ct);
+        var hit = await client.GetAsync("/api/funds/1/performance?range=ITD", Ct);
         Assert.Equal("HIT", hit.Headers.GetValues("X-Cache").Single());
 
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/funds/4/performance?range=ITD");
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/funds/1/performance?range=ITD");
         req.Headers.TryAddWithoutValidation("If-None-Match", miss.Headers.ETag!.ToString());
         Assert.Equal(HttpStatusCode.NotModified, (await client.SendAsync(req, Ct)).StatusCode);
     }

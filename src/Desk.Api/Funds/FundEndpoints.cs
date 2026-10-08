@@ -34,13 +34,23 @@ public static class FundEndpoints
         var kind = PerformanceRange.Parse(rangeText);
         if (kind is null)
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unknown range", detail: "Use QTD, YTD, 1Y, ITD or CUSTOM.");
-        if (kind == RangeKind.Custom && (from is not { } f || to is not { } t || f > t))
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid custom range", detail: "CUSTOM needs from <= to (yyyy-MM-dd).");
+        // CUSTOM compares and caches month-ends, the unit the range resolves to: 2025-06-15..2025-06-01 is June, and
+        // every day of a month shares one cache entry and ETag.
+        if (kind == RangeKind.Custom)
+        {
+            if (from is null || to is null)
+                return InvalidCustom();
+            (from, to) = (PerformanceRange.MonthEnd(from.Value), PerformanceRange.MonthEnd(to.Value));
+            if (from > to)
+                return InvalidCustom();
+        }
 
-        // A fund is visible when the user is entitled to one of its portfolios; otherwise it doesn't exist (404).
+        // Balance and IRR aggregate the whole fund, so it is visible only when the user is entitled to every one of
+        // its portfolios; otherwise it doesn't exist (404, no ETag), which is checked before any cache or 304 (ADR-0011).
         var meta = await metaCache.GetAsync(ct);
         var allowed = entitlements.For(http.User, meta);
-        if (!meta.Portfolios.Any(p => p.FundId == fundId && allowed.Contains(p.PortfolioId)))
+        var portfolios = meta.Portfolios.Where(p => p.FundId == fundId).ToList();
+        if (portfolios.Count == 0 || !portfolios.All(p => allowed.Contains(p.PortfolioId)))
             return NotFound(fundId);
 
         // The fund's span (first/last month-end) changes only with a reseed: cached, including "no data", so
@@ -71,6 +81,9 @@ public static class FundEndpoints
         return CachedResponse.Store(http, cache, etag, bytes, "application/json", meta.BatchEndsAt, dbMs,
             Stopwatch.GetElapsedTime(serStarted).TotalMilliseconds, started, months.Count);
     }
+
+    private static IResult InvalidCustom() =>
+        Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid custom range", detail: "CUSTOM needs from <= to (yyyy-MM-dd).");
 
     private static IResult NotFound(int fundId) =>
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "No such fund", detail: $"Fund {fundId} is not available.");
