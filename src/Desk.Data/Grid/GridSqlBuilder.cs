@@ -26,7 +26,7 @@ public static class GridSqlBuilder
     internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightExpression + " AS weight_f8 OFFSET 0) w";
 
     /// <summary>
-    /// Weighted averages weigh by the size of a position, <c>ABS(market_value)</c> (#131, README §8). A signed weight is
+    /// Weighted averages weigh by the size of a position, <c>ABS(market_value)</c> (#131, README §8 and §6 P1). A signed weight is
     /// right only while every position is long: a short (or any negative value) would cancel longs in the denominator
     /// and could flip its sign, giving a meaningless average instead of <c>null</c>. Zero weights still count for
     /// nothing, and no weight at all gives <c>null</c>.
@@ -84,7 +84,7 @@ public static class GridSqlBuilder
     }
 
     /// <summary>
-    /// SUM for additive measures; market-value-weighted average otherwise. Rows where the measure is NULL don't
+    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightExpression"/>). Rows where the measure is NULL don't
     /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
     internal static string Aggregate(ColumnDef c) => c.Aggregation switch

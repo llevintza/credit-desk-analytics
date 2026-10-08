@@ -5,7 +5,7 @@ using Npgsql;
 namespace Desk.Api.Tests;
 
 /// <summary>
-/// #131 / README §8: the summary's weighted average, evaluated by Postgres exactly as <see cref="GridSqlBuilder"/>
+/// #131 / README §8 (and §6 P1): the summary's weighted average, evaluated by Postgres exactly as <see cref="GridSqlBuilder"/>
 /// emits it, over hand-made rows with mixed-sign, zero and NULL weights.
 /// </summary>
 [Collection(ApiCollection.Name)]
