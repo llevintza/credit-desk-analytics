@@ -1,6 +1,6 @@
 ---
 name: ef-migration-safety
-description: Add or review an EF Core migration in src/Desk.Data: expand, deploy, contract; nullable or defaulted columns; no rename or drop in one release; no seed data; migrate twice.
+description: "Add or review an EF Core migration in src/Desk.Data: expand, deploy, contract; nullable or defaulted columns; no rename or drop in one release; no seed data; migrate twice."
 paths:
   - "src/Desk.Data/**"
 ---

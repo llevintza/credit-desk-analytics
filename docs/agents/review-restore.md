@@ -76,7 +76,7 @@ if [ -e ./scripts ]; then links=$(find ./scripts -type l -print -quit); test -z 
    - Known benign case (R2-N5, S12): with no base `scripts/agents`, a PR `scripts` that is a regular file survives (`rm -rf ./scripts/agents` exits 0). This is harmless: base `settings.json` then has no hooks, D18 binds `main`, and hooks are off anyway.
 
 3. **`claude_args`** (marker `# agents-drift:claude-args`):
-   - Add `--settings '{"disableAllHooks (planned; arrives with the harness build PR)": true}'`. Command-line settings take precedence over project settings, so this is the only control that survives the action's re-restore of `.claude/` from `origin/main` (CR M1). CR2 verified the pass-through at the pinned action.
+   - Add `--settings '{"disableAllHooks": true}'` (planned; arrives with the harness build PR). Command-line settings take precedence over project settings, so this is the only control that survives the action's re-restore of `.claude/` from `origin/main` (CR M1). CR2 verified the pass-through at the pinned action.
    - `--disallowedTools` becomes `"Read(./.git/**),Read(./.review-base/.git/**),Skill,Agent,Task"`.
      - The `Grep(…)`/`Glob(…)` `.git` entries are dropped: Glob/Grep path rules are never consulted, and `Read(./.git/**)` is the rule that applies to Grep/Glob (R-i).
      - The `.review-pr/.git/**` entries are dropped because `.review-pr` is flat and verified.
@@ -89,7 +89,7 @@ if [ -e ./scripts ]; then links=$(find ./scripts -type l -print -quit); test -z 
      ```
    - **Post-check step after the action** (`if: always()`):
      ```bash
-     if [ -e "$RUNNER_TEMP/agents-hooks-ran" ]; then echo "::error::disableAllHooks (planned; arrives with the harness build PR) not honoured: a repo hook ran in the review job"; exit 1; fi
+     if [ -e "$RUNNER_TEMP/agents-hooks-ran" ]; then echo "::error::disableAllHooks not honoured: a repo hook ran in the review job"; exit 1; fi  # disableAllHooks (planned; arrives with the harness build PR)
      ```
    - The `review` job stays advisory. A red canary is an alert about a regression in the action or SDK, and the CI no-op (`adapters.md`) has already kept PR code from running.
    - **U19** proves the flag in a real run.

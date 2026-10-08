@@ -27,7 +27,7 @@ Not allowed (D3, D5): `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, 
 
 ## Permissions and hooks: `.claude/settings.json`
 
-Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claude/settings.json`). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical--cursorclijson-gen) plus the **rev 10 lease deny**:
+Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claude/settings.json`). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical-cursorclijson-gen) plus the **rev 10 lease deny**:
 
 | Block | Entries | Enforces |
 |---|---|---|
@@ -48,7 +48,7 @@ Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claud
 ## claude-code-action (CI review)
 
 - Loads **base** copies only: `claude-review.yml` restores base `AGENTS.md`/`README.md`, deletes nested memory and `.claude` files case-insensitively, then restores base `scripts/agents/` (ADR §4, §7; [`review-restore.md`](review-restore.md)).
-- Hooks off (`--settings '{"disableAllHooks (planned; arrives with the harness build PR)": true}'`), Skill/Agent/Task denied, `Read(./.git/**)` denied, canary step fails the job if a hook ran (D12).
+- Hooks off (`--settings '{"disableAllHooks": true}'` (planned; arrives with the harness build PR)), Skill/Agent/Task denied, `Read(./.git/**)` denied, canary step fails the job if a hook ran (D12).
 - Nested base stubs load on demand under the action: UNVERIFIED (U11); fallback: strip.
 
 ## Gaps and unverified behaviour
@@ -56,9 +56,9 @@ Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claud
 | Item | Status | Effect |
 |---|---|---|
 | U11 nested stub loads under the action | UNVERIFIED | Fallback: strip nested files in CI |
-| U16 `--setting-sources user` keeps CLAUDE.md loading | UNVERIFIED | Keep `disableAllHooks (planned; arrives with the harness build PR)` only |
+| U16 `--setting-sources user` keeps CLAUDE.md loading | UNVERIFIED | Keep `disableAllHooks` (planned; arrives with the harness build PR) only |
 | U17 `!` carve-out in the installed version | UNVERIFIED (documented) | Fallback: bare `!.env.example`, else drop the `!` rules |
-| U19 `disableAllHooks (planned; arrives with the harness build PR)` honoured in a real run | UNVERIFIED (documented) | CI no-op hooks + canary |
+| U19 `disableAllHooks` (planned; arrives with the harness build PR) honoured in a real run | UNVERIFIED (documented) | CI no-op hooks + canary |
 | U22 MCP tool names, wildcards, `mcp__.*` matcher | UNVERIFIED | MCP denies not counted |
 | Hooks fail open on timeout | VERIFIED (M§2) | Guard is best-effort |
 | Read deny doesn't cover commands that read without naming the file (`grep -r KEY .`) | VERIFIED (U13) | Real control: no secrets in the tree (D19, gitleaks) |

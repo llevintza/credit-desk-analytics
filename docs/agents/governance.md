@@ -1,10 +1,10 @@
-# Agent governance: `agents-governance.yml (planned; arrives with the harness build PR)`, guards, bootstrap
+# Agent governance: `agents-governance.yml` (planned; arrives with the harness build PR), guards, bootstrap
 
 > Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/governance.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]** and listed in the drafts README.
 
 ## Helms's sign-off (H1), recorded for THESE TWO JOBS ONLY
 
-> Helms (CTO), 2026-10-07. This is the gate-3 sign-off for "no *unsafe* `pull_request_target`". It covers `agents-drift (base)` and `governance-paths (base)` in `.github/workflows/agents-governance.yml (planned; arrives with the harness build PR)` **only**, with `permissions: contents: read, pull-requests: read` and **no secrets**. Any other `_target` use needs its own review; D20 fails on it.
+> Helms (CTO), 2026-10-07. This is the gate-3 sign-off for "no *unsafe* `pull_request_target`". It covers `agents-drift (base)` and `governance-paths (base)` in `.github/workflows/agents-governance.yml` (planned; arrives with the harness build PR) **only**, with `permissions: contents: read, pull-requests: read` and **no secrets**. Any other `_target` use needs its own review; D20 fails on it.
 
 - **Rules (Helms):**
   - **Never check out PR head code.** No `actions/checkout` of the head ref or SHA; base checkout only.
@@ -184,7 +184,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
     - Base D20 fails if any **head** workflow defines a job or `name:` equal to a required base-run check name.
     - Spike (U18) that `_target` check runs report on the PR head as required statuses before relying on them. This was round-1 F4's open spike.
 15. **D20 (base-run, new):**
-    - `pull_request_target` appears **only** in `agents-governance.yml (planned; arrives with the harness build PR)`. Any other workflow using it fails, because Helms's sign-off covers these two jobs only.
+    - `pull_request_target` appears **only** in `agents-governance.yml` (planned; arrives with the harness build PR). Any other workflow using it fails, because Helms's sign-off covers these two jobs only.
     - That file satisfies items 1–4, 9, 12 and 13 by line-anchored checks: exact trigger types, exact `permissions`, no `secrets.`, no `environment:`, no `head.sha`/`head.ref`/`head_ref`/`refs/pull` in any `uses:` or `with:`, no `actions/cache`/`upload-artifact`, no `GITHUB_ENV`/`GITHUB_PATH`, no `${{ github.event.pull_request.(title|body|head.ref|head.label) }}` or `github.head_ref` inside a `run:` block.
 16. **Document in the ADR:** this is Helms's governance sign-off for gate-3 "no *unsafe* `pull_request_target`", scoped to these two jobs. Any other `_target` use needs its own review.
 17. **Alternatives (l.450):** replace the row with "plain `pull_request` for governance-paths: rejected (Helms): the PR's own YAML could remove it."
@@ -192,7 +192,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 ## Spoofing the required checks (R3-F3, U18; residual risk accepted by Helms, R4-F4)
 
 - D20 (base) closes the cheap routes. It fails if:
-  - any workflow other than `agents-governance.yml (planned; arrives with the harness build PR)` has a job-level `name:` containing `${{`, or a job id or job-level name containing `agents-drift` or `governance-paths` (case-insensitive, NFKC-normalized, zero-width characters stripped; comments ignored, so the D12 markers don't match; R4-N4);
+  - any workflow other than `agents-governance.yml` (planned; arrives with the harness build PR) has a job-level `name:` containing `${{`, or a job id or job-level name containing `agents-drift` or `governance-paths` (case-insensitive, NFKC-normalized, zero-width characters stripped; comments ignored, so the D12 markers don't match; R4-N4);
   - any workflow grants `statuses: write`, `checks: write` or `write-all`;
   - any workflow lacks a top-level `permissions:` block.
 - Checked on `main` @ `96df50c2`, `6570f304` (CR4) and `982d00d3` (CR5); re-checked at `741b19eb` (rev 8; #5 changed `ci.yml`, `deploy.yml`, `db-ops.yml` and added `gitleaks.yml`) and `27c1c35a` (rev 9; #104 changed only `ci.yml`'s `coverage` job steps); unchanged at the rev 10 baseline `c91c4b51`; re-checked at the rev 11 baseline `9b83f7ef` (#125 added `ci.yml`'s `budgets` job: job-level `permissions: contents: read`, SHA-pinned actions, no secrets): all five workflows (`ci`, `claude-review`, `deploy`, `db-ops`, `gitleaks`) have a top-level `permissions: contents: read`, none grants `statuses`/`checks` write, and none uses `pull_request_target`.
@@ -206,7 +206,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 
 ```
 /.github/ @llevintza
-/.github/workflows/agents-governance.yml (planned; arrives with the harness build PR) @llevintza
+/.github/workflows/agents-governance.yml @llevintza  # agents-governance.yml (planned; arrives with the harness build PR)
 /AGENTS.md @llevintza
 **/AGENTS.md @llevintza
 /CLAUDE.md @llevintza
@@ -241,9 +241,9 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 
 ## Interim manual Gate-3 checklist (from CR round 3)
 
-The `(base)` jobs can't bind the **bootstrap PR** (the PR that first puts `agents-governance.yml (planned; arrives with the harness build PR)` on `main`; ADR §8), because a `_target` workflow runs only from `main`. **Helms ruling (b), relayed by 6:21 PM ET:** the two-PR shape is confirmed; the bootstrap PR is governance-only, touches no app code, uses the arming rule, and gets Code Reviewer's full governance review as its human review. **Under Leo's hold (ADR §8 H18), the bootstrap PR and the build PR are each delivered as a GitHub issue that Claude Code implements; the preconditions and this review are unchanged.** Run the checklist on the bootstrap PR (item 3: "n/a, no restore block in this PR" if the block isn't in it) and again on the harness build work (Claude Code issue) as a second pair of eyes, even though the base checks bind that one. **Code Reviewer + TC** run this checklist and record the results in the PR body:
+The `(base)` jobs can't bind the **bootstrap PR** (the PR that first puts `agents-governance.yml` (planned; arrives with the harness build PR) on `main`; ADR §8), because a `_target` workflow runs only from `main`. **Helms ruling (b), relayed by 6:21 PM ET:** the two-PR shape is confirmed; the bootstrap PR is governance-only, touches no app code, uses the arming rule, and gets Code Reviewer's full governance review as its human review. **Under Leo's hold (ADR §8 H18), the bootstrap PR and the build PR are each delivered as a GitHub issue that Claude Code implements; the preconditions and this review are unchanged.** Run the checklist on the bootstrap PR (item 3: "n/a, no restore block in this PR" if the block isn't in it) and again on the harness build work (Claude Code issue) as a second pair of eyes, even though the base checks bind that one. **Code Reviewer + TC** run this checklist and record the results in the PR body:
 
-1. walk all 17 guards and D20 line by line against the real `agents-governance.yml (planned; arrives with the harness build PR)`, including `package-manager-cache: false` (R3-F2);
+1. walk all 17 guards and D20 line by line against the real `agents-governance.yml` (planned; arrives with the harness build PR), including `package-manager-cache: false` (R3-F2);
 2. run `actionlint` plus a pinned workflow security linter (e.g. `zizmor`) over every changed workflow;
 3. confirm `review-restore-matrix` is green on the real block with **41/41, 14/14 and 18/18**;
 4. review `pr-data.mjs`, `governance.mjs` and `check-drift.mjs` for any `import`/`require`/`eval`/`spawn`/`exec` reachable from PR data;

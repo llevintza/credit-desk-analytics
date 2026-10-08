@@ -1,6 +1,6 @@
 ---
 name: perf-budgets
-description: Measure README §10 budgets on a local stack: payload (Risk 60 KB), initial bundle < 500 KB br, k6 p95 MISS 150 ms / HIT 15 ms; write the before/after table.
+description: "Measure README §10 budgets on a local stack: payload (Risk 60 KB), initial bundle < 500 KB br, k6 p95 MISS 150 ms / HIT 15 ms; write the before/after table."
 paths:
   - "perf/**"
 ---

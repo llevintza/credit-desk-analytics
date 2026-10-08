@@ -1,6 +1,6 @@
 ---
 name: start-phase
-description: Start a README §15 phase: confirm Tech Coordinator kicked it off and the previous PR merged, branch phase-N/<slug> from fresh origin/main, list the phase's ADRs and DoD.
+description: "Start a README §15 phase: confirm Tech Coordinator kicked it off and the previous PR merged, branch phase-N/<slug> from fresh origin/main, list the phase's ADRs and DoD."
 disable-model-invocation: true
 ---
 # Start a phase

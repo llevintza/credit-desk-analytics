@@ -1,6 +1,6 @@
 ---
 name: add-endpoint
-description: Add or change an /api minimal-API endpoint: OpenAPI metadata, ProblemDetails, CancellationToken, IPortfolioEntitlements scoping, ETag/cache, tests and coverage.
+description: "Add or change an /api minimal-API endpoint: OpenAPI metadata, ProblemDetails, CancellationToken, IPortfolioEntitlements scoping, ETag/cache, tests and coverage."
 paths:
   - "src/Desk.Api/**"
 ---

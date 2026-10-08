@@ -1,6 +1,6 @@
 ---
 name: seeding
-description: Change the synthetic data seeder: --if-changed, bump SeedVersion when the generator or seeded schema changes, COPY bulk load, < 90 s and < 350 MB, synthetic names only.
+description: "Change the synthetic data seeder: --if-changed, bump SeedVersion when the generator or seeded schema changes, COPY bulk load, < 90 s and < 350 MB, synthetic names only."
 paths:
   - "src/Desk.Seeder/**"
 ---

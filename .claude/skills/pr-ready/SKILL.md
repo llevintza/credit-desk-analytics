@@ -1,6 +1,6 @@
 ---
 name: pr-ready
-description: Pre-PR self-check: build, tests, lint, coverage gate, gitleaks on the branch, budgets on a local stack, PR template and [workflows] title. Run before opening or updating a PR.
+description: "Pre-PR self-check: build, tests, lint, coverage gate, gitleaks on the branch, budgets on a local stack, PR template and [workflows] title. Run before opening or updating a PR."
 disable-model-invocation: true
 ---
 # Pre-PR self-check

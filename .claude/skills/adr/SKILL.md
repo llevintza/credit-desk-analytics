@@ -1,6 +1,6 @@
 ---
 name: adr
-description: Write an ADR: copy docs/adr/0000-template.md, take the next free number (check open PRs), add the index row, include measured numbers and the perf/ script that produced them.
+description: "Write an ADR: copy docs/adr/0000-template.md, take the next free number (check open PRs), add the index row, include measured numbers and the perf/ script that produced them."
 paths:
   - "docs/adr/**"
 ---

@@ -1,6 +1,6 @@
 ---
 name: fix-review-feedback
-description: Address Code Reviewer findings on your PR: one fix per finding on the same branch, re-run pr-ready, push, draft replies. Never resolve a thread you did not fix; never post verdicts.
+description: "Address Code Reviewer findings on your PR: one fix per finding on the same branch, re-run pr-ready, push, draft replies. Never resolve a thread you did not fix; never post verdicts."
 ---
 # Fix review feedback
 

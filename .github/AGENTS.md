@@ -12,10 +12,10 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 
 - Pin every `uses:` to a full 40-character commit SHA with a `# v…` comment.
 - Keep a top-level `permissions:` block with least privilege. Never grant `statuses: write` or `checks: write`.
-- `pull_request_target` is allowed only in `agents-governance.yml (planned; arrives with the harness build PR)`, under Helms's scoped sign-off. Nowhere else.
-- No job id or job `name:` outside `agents-governance.yml (planned; arrives with the harness build PR)` may contain `agents-drift (base)` or `governance-paths (base)`.
+- `pull_request_target` is allowed only in `agents-governance.yml` (planned; arrives with the harness build PR), under Helms's scoped sign-off. Nowhere else.
+- No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)` or `governance-paths (base)`.
 - Secrets live only in the `production` environment (sole exception: the capped Claude key in `claude-review`). gitleaks stays on. Nothing removed or loosened.
-- Keep the `# agents-drift:` markers, `disableAllHooks (planned; arrives with the harness build PR)`, the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
+- Keep the `# agents-drift:` markers, `disableAllHooks` (planned; arrives with the harness build PR), the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
 - Keep image tags in step with their pins elsewhere (e.g. the gitleaks image in `deploy/ci-images/gitleaks/Dockerfile` and the `docker run` lines in `ci.yml` and `gitleaks.yml`).
 
 ## What agents never do here

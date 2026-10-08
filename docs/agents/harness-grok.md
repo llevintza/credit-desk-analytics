@@ -8,6 +8,8 @@ It reads `.claude/skills/*` through Claude Code compatibility, and `.claude/agen
 
 It does **not** need `.agents/skills`. It reads `.cursor/rules/*.md`, and `.mdc` only if U5 holds.
 
+## Enablement steps
+
 Enablement needs its own settings source (residual 10: `Bash(git push)` is a prefix) and a `grok inspect` check. Until that source exists, Grok stays off.
 
 ## Gaps and unverified behaviour (kept from the TW draft)
