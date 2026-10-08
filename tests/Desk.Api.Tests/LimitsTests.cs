@@ -4,12 +4,17 @@ using System.Net.Http.Json;
 using Desk.Api.Limits;
 using Desk.Data;
 using Desk.Data.Auth;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Desk.Api.Tests;
 
@@ -31,6 +36,106 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.True(int.Parse(limited.Headers.GetValues("Retry-After").Single()) is > 0 and <= 60);
         Assert.Equal("Too many requests", (await limited.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+    }
+
+    /// <summary>TestServer has no socket: this sets the peer a request "arrived from" (X-Test-Peer).</summary>
+    private sealed class PeerFromHeader : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use((http, inner) =>
+            {
+                if (System.Net.IPAddress.TryParse(http.Request.Headers["X-Test-Peer"].ToString(), out var peer))
+                    http.Connection.RemoteIpAddress = peer;
+                return inner(http);
+            });
+            next(app);
+        };
+    }
+
+    /// <summary>A host as deployed on Render (behind Cloudflare), with the given limits.</summary>
+    private WebApplicationFactory<Program> BehindCloudflare(params (string Key, string Value)[] settings) =>
+        api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("FORWARDEDHEADERS_ENABLED", "true");
+            foreach (var (key, value) in settings) b.UseSetting(key, value);
+            b.ConfigureTestServices(s => s.AddTransient<IStartupFilter, PeerFromHeader>());
+        });
+
+    private const string RenderLb = "10.214.3.7";
+    private const string CfEdge = "162.158.90.14";
+
+    private static HttpRequestMessage Via(HttpRequestMessage req, string peer, string? xff = null, string? cf = null)
+    {
+        req.Headers.Add("X-Test-Peer", peer);
+        if (xff is not null) req.Headers.Add("X-Forwarded-For", xff);
+        if (cf is not null) req.Headers.Add("CF-Connecting-IP", cf);
+        return req;
+    }
+
+    private static HttpRequestMessage Login(string peer, string? xff = null, string? cf = null) =>
+        Via(new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = JsonContent.Create(new { email = "nobody@example.com", password = "wrong-password-123456" }) }, peer, xff, cf);
+
+    [Fact]
+    public async Task Two_clients_behind_one_cloudflare_edge_get_separate_login_windows()
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        // Client A: its own spoofed XFF prefix, then what Cloudflare and Render append.
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"198.51.100.{i}, 203.0.113.7, {CfEdge}", "203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"198.51.100.9, 203.0.113.7, {CfEdge}", "203.0.113.7"), Ct)).StatusCode);
+
+        // Client B through the same edge is not locked out by A.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.8, {CfEdge}", "203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Spoofed_client_headers_from_an_untrusted_source_share_one_window()
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        // Straight to the app (peer outside Render), and straight to Render (hop outside Cloudflare): a fresh
+        // CF-Connecting-IP / True-Client-IP / XFF each time must not buy a fresh window.
+        for (var i = 0; i < 5; i++)
+        {
+            var req = Login(i % 2 == 0 ? "192.0.2.50" : RenderLb, i % 2 == 0 ? $"198.51.100.{i}, {CfEdge}" : "192.0.2.50", $"198.51.100.{i}");
+            req.Headers.Add("True-Client-IP", $"198.51.100.{i + 100}");
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(req, Ct)).StatusCode);
+        }
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login("192.0.2.50", null, "198.51.100.200"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Through_cloudflare_without_cf_connecting_ip_rotating_other_headers_buys_nothing()
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 6; i++)
+        {
+            var req = Login(RenderLb, $"198.51.100.{i}, {CfEdge}");
+            req.Headers.Add("True-Client-IP", $"198.51.100.{i + 100}");
+            Assert.Equal(i < 5 ? HttpStatusCode.Unauthorized : HttpStatusCode.TooManyRequests, (await client.SendAsync(req, Ct)).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task Anonymous_callers_behind_one_edge_get_their_own_token_bucket()
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "2"));
+        var client = PostgresApiFactory.NewClient(host);
+        HttpRequestMessage Me(string ip) => Via(new HttpRequestMessage(HttpMethod.Get, "/api/me"), RenderLb, $"{ip}, {CfEdge}", ip);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me("203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me("203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Me("203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me("203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Behind_the_proxy_the_host_forwards_proto_but_not_the_client_address()
+    {
+        await using var host = BehindCloudflare();
+        Assert.Equal(ForwardedHeaders.XForwardedProto, host.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value.ForwardedHeaders);
     }
 
     [Fact]

@@ -7,15 +7,17 @@ namespace Desk.Api.Limits;
 
 /// <summary>
 /// Free-tier protection (README §7.2): a per-user token bucket and one shared concurrency limiter on all of
-/// <c>/api</c> (every endpoint there can reach the database), plus a per-IP window on login.
+/// <c>/api</c> (every endpoint there can reach the database), plus a per-IP window on login. "IP" is the client's
+/// address as <see cref="ClientAddress"/> resolves it behind Cloudflare and Render, never a proxy's.
 /// </summary>
 public static class RateLimiting
 {
     public const string LoginPolicy = "login";
 
-    public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits)
+    public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits, ClientAddress clients)
     {
         services.AddSingleton(limits);
+        services.AddSingleton(clients);
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -26,7 +28,7 @@ public static class RateLimiting
             var perUser = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
-                    : RateLimitPartition.GetTokenBucketLimiter(PartitionKey(http), _ => new TokenBucketRateLimiterOptions
+                    : RateLimitPartition.GetTokenBucketLimiter(PartitionKey(http, clients), _ => new TokenBucketRateLimiterOptions
                     {
                         TokenLimit = limits.PerUserBurst,
                         TokensPerPeriod = 1,
@@ -45,7 +47,7 @@ public static class RateLimiting
                     }));
             o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUser, database);
 
-            o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(ClientIp(http), _ => new FixedWindowRateLimiterOptions
+            o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = limits.LoginPerIpPerMinute,
                 Window = TimeSpan.FromMinutes(1),
@@ -57,12 +59,9 @@ public static class RateLimiting
 
     private static bool IsApi(HttpContext http) => http.Request.Path.StartsWithSegments("/api");
 
-    /// <summary>Signed-in users get their own bucket; anonymous callers share one per IP.</summary>
-    internal static string PartitionKey(HttpContext http) =>
-        http.User.IsSignedIn() ? $"u:{http.User.Identity!.Name}" : $"ip:{ClientIp(http)}";
-
-    /// <summary>Behind Render's proxy this is the forwarded client address (ASPNETCORE_FORWARDEDHEADERS_ENABLED).</summary>
-    internal static string ClientIp(HttpContext http) => http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    /// <summary>Signed-in users get their own bucket; anonymous callers get one per client IP.</summary>
+    internal static string PartitionKey(HttpContext http, ClientAddress clients) =>
+        http.User.IsSignedIn() ? $"u:{http.User.Identity!.Name}" : $"ip:{clients.For(http)}";
 
     internal static async ValueTask OnRejectedAsync(OnRejectedContext ctx, CancellationToken ct)
     {
