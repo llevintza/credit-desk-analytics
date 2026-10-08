@@ -35,7 +35,10 @@ test('tokens: every text token is at least 4.5:1 on every background, in every t
   // test.info().file rather than __dirname, which exists only while e2e compiles to CommonJS.
   const script = path.resolve(path.dirname(test.info().file), '../../web/scripts/contrast-check.mjs');
   const run = spawnSync(process.execPath, [script], { encoding: 'utf8' });
-  // Status first, so a crash fails with the script's stderr; no fixed pair count, so adding a token doesn't break it.
+  // Status first, so a crash fails with the script's stderr. A floor rather than a fixed pair count, so adding a token
+  // doesn't break it, while a summary of 0 (or a dropped theme or palette) does (#272).
   expect(run.status, run.stdout + run.stderr).toBe(0);
-  expect(run.stdout).toMatch(/\b\d+ pairs, 0 below 4\.5:1/);
+  const summary = /\b([1-9]\d*) pairs, 0 below 4\.5:1\b/.exec(run.stdout);
+  expect(summary, run.stdout).not.toBeNull();
+  expect(Number(summary?.[1])).toBeGreaterThanOrEqual(120);
 });
