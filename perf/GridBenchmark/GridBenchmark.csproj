@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ADR-0006 (Dapper vs EF access path), ADR-0007 (row JSON vs columnar JSON vs MessagePack), ADR-0008 (offset vs keyset). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <StartupObject>GridBenchmark.Bench</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Api/Desk.Api.csproj" />
+  </ItemGroup>
+</Project>
