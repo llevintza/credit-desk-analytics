@@ -1,6 +1,8 @@
 using Desk.Api.Audit;
 using Desk.Data.App;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Npgsql;
 
@@ -69,6 +71,38 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
             Assert.Equal(2, await retention.PurgeIfDueAsync(db, Ct));
 
         Assert.Equal([now - window, now - window + TimeSpan.FromSeconds(1), now], await RemainingAsync(marker, cs));
+    }
+
+    [Fact]
+    public async Task A_backlog_is_deleted_in_batches_oldest_first()
+    {
+        var cs = await IsolatedDatabaseAsync();
+        var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        var retention = new AuditRetention(new ConfigurationBuilder().Build(), new FakeTimeProvider(now), NullLogger<AuditRetention>.Instance) { BatchSize = 2 };
+        var marker = await InsertAsync(cs, [.. Enumerable.Range(91, 5).Select(d => now - TimeSpan.FromDays(d)), now]);
+
+        await using (var db = Context(cs))
+            Assert.Equal(5, await retention.PurgeIfDueAsync(db, Ct)); // 2 + 2 + 1, within the budget
+
+        Assert.Equal([now], await RemainingAsync(marker, cs));
+    }
+
+    [Fact]
+    public async Task Out_of_budget_the_next_write_carries_on_with_the_backlog()
+    {
+        var cs = await IsolatedDatabaseAsync();
+        var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        // Every clock read moves 6 s, so the 5 s budget runs out after each first batch.
+        var time = new FakeTimeProvider(now) { AutoAdvanceAmount = TimeSpan.FromSeconds(6) };
+        var retention = new AuditRetention(new ConfigurationBuilder().Build(), time, NullLogger<AuditRetention>.Instance) { BatchSize = 2 };
+        var marker = await InsertAsync(cs, [.. Enumerable.Range(91, 5).Select(d => now - TimeSpan.FromDays(d))]);
+
+        await using var db = Context(cs);
+        Assert.Equal(2, await retention.PurgeIfDueAsync(db, Ct)); // out of budget: slot released
+        Assert.Equal(2, await retention.PurgeIfDueAsync(db, Ct)); // right away, not 24 h later
+        Assert.Equal(1, await retention.PurgeIfDueAsync(db, Ct)); // short batch: done, slot kept
+        Assert.Null(await retention.PurgeIfDueAsync(db, Ct));
+        Assert.Empty(await RemainingAsync(marker, cs));
     }
 
     [Fact]

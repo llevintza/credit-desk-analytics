@@ -16,6 +16,10 @@ public sealed class AuditRetention
     public const int DefaultDays = 90;
     public const int MaxDays = 36_500;
     public static readonly TimeSpan PurgeInterval = TimeSpan.FromHours(24);
+    /// <summary>Rows per DELETE: each batch commits on its own and stays far under the 10 s command timeout cold.</summary>
+    public const int DefaultBatchSize = 50_000;
+    /// <summary>Batches stop after this long; the rest is picked up by the next audit write, not 24 h later.</summary>
+    public static readonly TimeSpan PurgeBudget = TimeSpan.FromSeconds(5);
 
     private readonly TimeProvider _time;
     private long _lastAttemptTicks = DateTimeOffset.MinValue.UtcTicks;
@@ -39,23 +43,39 @@ public sealed class AuditRetention
     /// <summary>Rows with <c>at</c> older than now minus this window are purged.</summary>
     public TimeSpan Window { get; }
 
+    internal int BatchSize { get; init; } = DefaultBatchSize;
+
     /// <summary>
     /// When a purge is due (the first call after start, then once per <see cref="PurgeInterval"/>), deletes rows
     /// older than the window and returns how many; otherwise returns <c>null</c> without touching the database.
-    /// The slot is claimed before the delete, so a failing purge is retried next interval, not on every write.
+    /// Deletes run in batches of <see cref="BatchSize"/> (oldest first, each its own statement and commit) until
+    /// one comes back short or <see cref="PurgeBudget"/> runs out. Out of budget, the slot is released, so the
+    /// next audit write carries on with the backlog. The slot is claimed before the first delete, so a failing
+    /// purge is retried next interval, not on every write; batches that committed before a failure stay deleted.
     /// </summary>
     public async Task<int?> PurgeIfDueAsync(AppDbContext db, CancellationToken ct)
     {
-        if (!TryClaim(out var now)) return null;
+        if (!TryClaim(out var now, out var previous)) return null;
         var cutoff = now - Window;
-        return await db.Audit.Where(a => a.At < cutoff).ExecuteDeleteAsync(ct);
+        var total = 0;
+        int deleted;
+        do
+        {
+            deleted = await db.Audit.Where(a => a.At < cutoff).OrderBy(a => a.At).Take(BatchSize).ExecuteDeleteAsync(ct);
+            total += deleted;
+        }
+        while (deleted == BatchSize && _time.GetUtcNow() - now < PurgeBudget);
+
+        if (deleted == BatchSize) // out of budget with rows left: let the next write continue
+            Interlocked.CompareExchange(ref _lastAttemptTicks, previous, now.UtcTicks);
+        return total;
     }
 
-    private bool TryClaim(out DateTimeOffset now)
+    private bool TryClaim(out DateTimeOffset now, out long previous)
     {
         now = _time.GetUtcNow();
-        var last = Interlocked.Read(ref _lastAttemptTicks);
-        return now.UtcTicks - last >= PurgeInterval.Ticks
-            && Interlocked.CompareExchange(ref _lastAttemptTicks, now.UtcTicks, last) == last;
+        previous = Interlocked.Read(ref _lastAttemptTicks);
+        return now.UtcTicks - previous >= PurgeInterval.Ticks
+            && Interlocked.CompareExchange(ref _lastAttemptTicks, now.UtcTicks, previous) == previous;
     }
 }
