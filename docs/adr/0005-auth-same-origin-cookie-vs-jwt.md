@@ -74,7 +74,11 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - it is JSON-only, so a cross-site form can't produce it without CORS, which we never enable;
   - it is limited to 5/min per IP;
   - there is no session to ride.
-- The antiforgery cookie (`desk-af`) is `SameAsRequest`, because the framework refuses to issue a Secure cookie on plain HTTP (local compose, the dev proxy).
+- The antiforgery cookie depends on where the app runs (#118 N1):
+  - **Behind Render's TLS proxy, outside Development** (`ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`, so production): `__Host-desk-af`, `SecurePolicy=Always`. The `__Host-` prefix means no other subdomain or plain-HTTP response can plant or overwrite it. Every request there is HTTPS: Render redirects plain HTTP, and the app reads `X-Forwarded-Proto`.
+  - **Everywhere else** (local compose and the CI e2e and budgets stacks, which run Production over plain `http://localhost:8080`, and the dev proxy): `desk-af`, `SameAsRequest`. The framework refuses to issue an always-Secure antiforgery cookie on a plain-HTTP request; making it `Always` everywhere was a login 500 on compose. A `__Host-` cookie without `Secure` is rejected by the browser, so the prefix goes with `Always`.
+  - Consequence: a plain-HTTP request that reaches the app behind the proxy without `X-Forwarded-Proto: https` gets a 500 on login, logout and the antiforgery refresh. Render never forwards one.
+  - `AuthTests` proves both: a forwarded-https login gets `__Host-desk-af` (Secure, no Domain) and its token validates; a plain-HTTP login off the proxy gets `desk-af` and its token validates.
 
 **Keys**
 - Data-protection keys live in `auth.data_protection_keys`, so sessions survive restarts.
@@ -84,7 +88,7 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
 - Every `/api` request passes a chained limiter: the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
-- Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
+- Every failed login runs exactly one PBKDF2 verification, so response time doesn't reveal which emails exist or what state an account is in (corrected in #118, R105-F2): an unknown email, a wrong, empty or missing password, a locked, disabled or expired account, an account with no stored password, and the attempt that triggers lockout (which used to hash twice). `DeskSignInManager.CheckPasswordSignInAsync` checks the account once, then verifies either the stored hash or `TimingGuard`'s decoy, never both. The decoy is a v3 hash with the configured iteration count, verified through the app's own `IPasswordHasher`, so it costs the same as a real check. `LoginTimingTests` counts the verifications per path.
 
 **Behind Cloudflare and Render's TLS proxy** (corrected in #116)
 - A request travels client → Cloudflare edge → Render's balancer (10.0.0.0/8) → app.

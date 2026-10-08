@@ -27,8 +27,14 @@ public sealed class DemoAccounts
     /// <summary>
     /// The account for <paramref name="email"/>, creating it first when it's a configured demo account that doesn't
     /// exist yet. One lookup for the common case; null when there is no such account.
+    /// The entry applies only when the account is first created: a later change to its password, role or expiry in
+    /// <c>DEMO_ACCOUNTS_JSON</c> doesn't touch the existing account (manage that one with the UserAdmin CLI).
     /// </summary>
-    public async Task<DeskUser?> FindOrCreateAsync(string email, UserManager<DeskUser> users, CancellationToken ct)
+    /// <param name="email">The login email.</param>
+    /// <param name="users">The request's user manager.</param>
+    /// <param name="db">The request's context, the one <paramref name="users"/> saves through.</param>
+    /// <param name="ct">Request cancellation.</param>
+    public async Task<DeskUser?> FindOrCreateAsync(string email, UserManager<DeskUser> users, DbContext db, CancellationToken ct)
     {
         var existing = await users.FindByEmailAsync(email);
         if (existing is not null || !_byEmail.TryGetValue(email, out var demo))
@@ -43,22 +49,33 @@ public sealed class DemoAccounts
         }
         catch (DbUpdateException)
         {
-            // Lost the race at the unique index: treated like Identity's own duplicate check below.
+            // Lost the race at the unique index: treated like Identity's own duplicate check below. The failed insert
+            // leaves this entity tracked as Added, and the request's next save (a failed-attempt count, a lockout)
+            // would retry the insert and fail again: stop tracking it.
+            db.Entry(user).State = EntityState.Detached;
             created = IdentityResult.Failed(new IdentityError { Code = "DuplicateUserName" });
         }
         if (created.Succeeded)
         {
-            await users.AddToRoleAsync(user, demo.Role);
-            return user;
+            var role = await users.AddToRoleAsync(user, demo.Role);
+            if (role.Succeeded)
+                return user;
+
+            // An account without its role must not sign in: remove it, so the next login tries again.
+            _logger.LogWarning("Demo account {Email} could not be given its role: {Errors}. It was removed.", demo.Email, Codes(role));
+            await users.DeleteAsync(user);
+            return null;
         }
 
         // A concurrent first login may have created it a moment ago (Identity's duplicate check or the unique
         // index): use that one. Otherwise the entry is unusable; log the codes, never the password.
         var raced = await users.FindByEmailAsync(email);
         if (raced is null)
-            _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, string.Join(", ", created.Errors.Select(e => e.Code)));
+            _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, Codes(created));
         return raced;
     }
+
+    private static string Codes(IdentityResult result) => string.Join(", ", result.Errors.Select(e => e.Code));
 
     internal static Dictionary<string, DemoAccount> Parse(string? json, ILogger logger)
     {

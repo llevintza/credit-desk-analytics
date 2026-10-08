@@ -1,7 +1,14 @@
+using System.Data.Common;
 using System.Net;
 using Desk.Api.Auth;
+using Desk.Data.App;
 using Desk.Data.Auth;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Desk.Api.Tests;
@@ -54,6 +61,62 @@ public sealed class DemoAccountsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Losing_the_insert_race_leaves_nothing_stale_for_the_request_s_next_save()
+    {
+        // The account is created by "another request" just as this one inserts it, so the insert hits the unique
+        // index. A wrong password then saves a failed-attempt count in the same request: that save must not retry
+        // the stale insert (it did: a 500).
+        var email = $"demo-{Guid.NewGuid():N}@example.com";
+        var json = $$"""[{"email":"{{email}}","password":"{{PostgresApiFactory.Password}}","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""";
+        var race = new UserInsertRace(api, email);
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting(DemoAccounts.ConfigKey, json);
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(race));
+        });
+
+        var res = await PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), email, "wrong-password-123456");
+
+        Assert.True(race.Raced);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        await using var db = api.NewContext();
+        var winner = Assert.Single(db.Users.AsNoTracking().Where(u => u.Email == email));
+        Assert.Equal(1, winner.AccessFailedCount);
+    }
+
+    /// <summary>Just before EF inserts the user, creates the same account through another host's user manager.</summary>
+    private sealed class UserInsertRace(PostgresApiFactory api, string email) : DbCommandInterceptor
+    {
+        public bool Raced { get; private set; }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken ct = default)
+        {
+            await RaceAsync(command);
+            return result;
+        }
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
+        {
+            await RaceAsync(command);
+            return result;
+        }
+
+        private async Task RaceAsync(DbCommand command)
+        {
+            if (Raced || !command.CommandText.Contains("INSERT INTO auth.users", StringComparison.Ordinal))
+                return;
+            Raced = true;
+            await using var scope = api.Services.CreateAsyncScope();
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
+            var winner = new DeskUser { UserName = email, Email = email, EmailConfirmed = true, ExpiresAt = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero) };
+            Assert.True((await users.CreateAsync(winner, PostgresApiFactory.Password)).Succeeded);
+            Assert.True((await users.AddToRoleAsync(winner, Roles.Viewer)).Succeeded);
+        }
+    }
+
+    [Fact]
     public async Task Without_the_setting_there_are_no_demo_accounts()
     {
         var res = await PostgresApiFactory.PostLoginAsync(api.NewClient(), "demo-viewer@example.com");
@@ -99,11 +162,14 @@ public sealed class DemoAccountRaceTests
             .Build(),
         NullLogger<DemoAccounts>.Instance);
 
+    /// <summary>A context that is never opened: the stubs don't touch the database.</summary>
+    private static AppDbContext Db() => new(new DbContextOptionsBuilder<AppDbContext>().UseNpgsql().Options);
+
     [Fact]
     public async Task Losing_the_unique_index_race_returns_the_winner()
     {
         var users = new StubUsers(create: () => throw new Microsoft.EntityFrameworkCore.DbUpdateException("duplicate key"));
-        var user = await Demo().FindOrCreateAsync(Email, users, TestContext.Current.CancellationToken);
+        var user = await Demo().FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken);
         Assert.Same(users.Winner, user);
     }
 
@@ -111,19 +177,54 @@ public sealed class DemoAccountRaceTests
     public async Task Losing_identity_s_duplicate_check_returns_the_winner()
     {
         var users = new StubUsers(create: () => Microsoft.AspNetCore.Identity.IdentityResult.Failed(new Microsoft.AspNetCore.Identity.IdentityError { Code = "DuplicateUserName" }));
-        var user = await Demo().FindOrCreateAsync(Email, users, TestContext.Current.CancellationToken);
+        var user = await Demo().FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken);
         Assert.Same(users.Winner, user);
     }
 
+    [Fact]
+    public async Task An_account_that_cannot_get_its_role_is_removed_and_refused()
+    {
+        var users = new StubUsers(
+            create: () => IdentityResult.Success,
+            addToRole: () => IdentityResult.Failed(new IdentityError { Code = "ConcurrencyFailure" }));
+        var user = await Demo().FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken);
+        Assert.Null(user);
+        Assert.Equal(Email, Assert.Single(users.Deleted).Email);
+    }
+
+    [Fact]
+    public async Task A_new_account_gets_its_role()
+    {
+        var users = new StubUsers(create: () => IdentityResult.Success);
+        var user = await Demo().FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken);
+        Assert.Equal(Email, user!.Email);
+        Assert.Equal([Roles.Viewer], users.RolesAdded);
+        Assert.Empty(users.Deleted);
+    }
+
     /// <summary>First lookup misses (the account doesn't exist yet); the create loses; the re-lookup finds the winner's row.</summary>
-    private sealed class StubUsers(Func<Microsoft.AspNetCore.Identity.IdentityResult> create)
-        : Microsoft.AspNetCore.Identity.UserManager<DeskUser>(new NoStore(), null!, null!, [], [], null!, null!, null!, NullLogger<Microsoft.AspNetCore.Identity.UserManager<DeskUser>>.Instance)
+    private sealed class StubUsers(Func<IdentityResult> create, Func<IdentityResult>? addToRole = null)
+        : UserManager<DeskUser>(new NoStore(), null!, null!, [], [], null!, null!, null!, NullLogger<UserManager<DeskUser>>.Instance)
     {
         private int _lookups;
         public DeskUser Winner { get; } = new() { Email = Email };
+        public List<string> RolesAdded { get; } = [];
+        public List<DeskUser> Deleted { get; } = [];
 
         public override Task<DeskUser?> FindByEmailAsync(string email) => Task.FromResult(_lookups++ == 0 ? null : Winner);
-        public override Task<Microsoft.AspNetCore.Identity.IdentityResult> CreateAsync(DeskUser user, string password) => Task.FromResult(create());
+        public override Task<IdentityResult> CreateAsync(DeskUser user, string password) => Task.FromResult(create());
+
+        public override Task<IdentityResult> AddToRoleAsync(DeskUser user, string role)
+        {
+            RolesAdded.Add(role);
+            return Task.FromResult(addToRole is null ? IdentityResult.Success : addToRole());
+        }
+
+        public override Task<IdentityResult> DeleteAsync(DeskUser user)
+        {
+            Deleted.Add(user);
+            return Task.FromResult(IdentityResult.Success);
+        }
     }
 
     private sealed class NoStore : Microsoft.AspNetCore.Identity.IUserStore<DeskUser>
