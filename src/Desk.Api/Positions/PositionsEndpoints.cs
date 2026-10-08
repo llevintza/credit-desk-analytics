@@ -81,12 +81,9 @@ public static class PositionsEndpoints
         var summaryKey = $"sum:{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{Hash(query.SummaryKey)}";
         cache.Cache.TryGetValue(summaryKey, out GridSummary? summary);
         var block = await grid.ReadBlockAsync(query, meta.Catalog, ct, summary);
-        // MemoryCache keeps its own system clock, so an absolute time from the app's TimeProvider would be compared
-        // on another clock: give it the time left until the batch instead (at least a tick, which the API requires).
-        var untilBatch = TimeSpan.FromTicks(Math.Max(1, (meta.BatchEndsAt - time.GetUtcNow()).Ticks));
         if (summary is null)
             cache.Cache.Set(summaryKey, new GridSummary(block.RowCount, block.Summary),
-                new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpirationRelativeToNow = untilBatch });
+                new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpiration = meta.BatchEndsAt });
         var serializeStarted = Stopwatch.GetTimestamp();
         var generatedAt = time.GetUtcNow();
         var bytes = msgpack
@@ -94,7 +91,7 @@ public static class PositionsEndpoints
             : ColumnarSerializer.ToJson(block, query.AsOf, generatedAt);
         var serializeMs = Stopwatch.GetElapsedTime(serializeStarted).TotalMilliseconds;
 
-        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpirationRelativeToNow = untilBatch });
+        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = meta.BatchEndsAt });
         SetTiming(http, "MISS", block.DbMs, serializeMs, started);
         if (audit is not null)
         {
