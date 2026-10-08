@@ -11,9 +11,12 @@ public sealed record SeedOptions(int Seed, decimal Scale, bool IfChanged, bool F
     /// <summary>The planning cap until the Neon project's real cap is confirmed (#109).</summary>
     public const long DefaultCapMegabytes = 512;
 
-    public static SeedOptions Parse(string[] args)
+    public static SeedOptions Parse(string[] args) => Parse(args, TimeProvider.System);
+
+    /// <summary>Parses the command line; the default <c>--as-of</c> comes from <paramref name="time"/>, so tests pin the date.</summary>
+    public static SeedOptions Parse(string[] args, TimeProvider time)
     {
-        var o = new SeedOptions(Seed: 42, Scale: 1.0m, IfChanged: false, Force: false, SizeReportOnly: false, MaxMegabytes: 400, AsOf: DefaultAsOf());
+        var o = new SeedOptions(Seed: 42, Scale: 1.0m, IfChanged: false, Force: false, SizeReportOnly: false, MaxMegabytes: 400, AsOf: DefaultAsOf(time));
         for (var i = 0; i < args.Length; i++)
         {
             string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]} needs a value");
@@ -46,5 +49,5 @@ public sealed record SeedOptions(int Seed, decimal Scale, bool IfChanged, bool F
     }
 
     /// <summary>The last completed business day: the overnight batch's as-of date.</summary>
-    public static DateOnly DefaultAsOf() => Generation.Tables.PreviousBusinessDay(DateOnly.FromDateTime(DateTime.UtcNow));
+    public static DateOnly DefaultAsOf(TimeProvider time) => Generation.Tables.PreviousBusinessDay(DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime));
 }

@@ -47,7 +47,26 @@ function initRepo() {
   git(dir, ["config", "user.email", "gate@test.invalid"]);
   git(dir, ["config", "user.name", "Gate Test"]);
   git(dir, ["config", "commit.gpgsign", "false"]);
+  // `git commit` otherwise forks a detached `git maintenance run --auto`
+  // that can still be touching .git/objects when the test removes the repo
+  // (ENOTEMPTY in rmdir, #249).
+  git(dir, ["config", "maintenance.auto", "false"]);
+  git(dir, ["config", "gc.auto", "0"]);
   return dir;
+}
+
+// Cleanup only, so a straggling writer can't fail a test (#249). Each attempt
+// walks the tree again: rmSync's own maxRetries only retries the rmdir and
+// never removes a file that appeared after it read the directory.
+function removeRepo(dir) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+      return;
+    } catch (err) {
+      if (attempt >= 5 || (err.code !== "ENOTEMPTY" && err.code !== "EBUSY")) throw err;
+    }
+  }
 }
 
 function write(dir, rel, contents) {
@@ -291,7 +310,8 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.equal(existsSync(join(repoRoot, "perf/coverage-bootstrap.json")), false);
   assert.equal(existsSync(join(repoRoot, "perf/coverage-override.json")), false);
   assert.match(yml, /types: \[opened, synchronize, reopened, edited\]/);
-  assert.match(yml, /github\.ref != 'refs\/heads\/main'/);
+  // Main push runs are never cancelled (#207; full wiring in .github/scripts/concurrency-wiring.test.mjs).
+  assert.match(yml, /^  cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}$/m);
   assert.ok(yml.includes("GITHUB_EVENT_NAME: ${{ github.event_name }}"));
   assert.ok(yml.includes('--event "${GITHUB_EVENT_NAME:-}"'));
   assert.match(yml, /permissions:\s*\n\s*contents: read/);
@@ -354,7 +374,7 @@ test("BASE_SHA without the gate fails closed (no head fallback)", () => {
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -378,7 +398,7 @@ test("once base has the script, missing thresholds FAIL (no silent bootstrap)", 
     assert.equal(r.failed, true);
     assert.match(r.output, /missing .*thresholds|missing .*baseline|failing closed|refusing to bootstrap/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -398,7 +418,7 @@ test("head always-pass script is ignored: evaluation uses imported (base) logic"
     assert.equal(r.failed, true);
     assert.match(r.output, /0%/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -441,7 +461,7 @@ test("uncovered changed src file counts as 0% and can fail the 80% diff gate", (
     assert.match(r.output, /counted as \*\*0%\*\*/);
     assert.match(r.output, /diff line/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -484,7 +504,7 @@ test("overall drop vs a base with the script fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /below BASE_SHA|behind measured|lowers the committed/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -522,7 +542,7 @@ test("overall line/branch drop vs BASE floor is reported when committed floor is
     assert.equal(r.failed, true);
     assert.match(r.output, /overall line .* dropped below BASE_SHA/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -546,7 +566,7 @@ test("once base has the script, missing baseline FAIL (no silent bootstrap)", ()
     assert.equal(r.failed, true);
     assert.match(r.output, /missing .*thresholds|missing .*baseline|failing closed|refusing to bootstrap/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -564,7 +584,7 @@ test("PR that turns off overallMustNotDrop or lowers a min fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /turns off overallMustNotDrop/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -582,7 +602,7 @@ test("PR that lowers diffLineMinPercent vs bootstrap defaults fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /lowers diffLineMinPercent/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -600,7 +620,7 @@ test("PR that lowers diffBranchMinPercent vs bootstrap defaults fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /lowers diffBranchMinPercent/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -642,7 +662,7 @@ test("committed baseline behind measured fails once BASE has the script", () => 
     assert.equal(r.failed, true);
     assert.match(r.output, /behind measured/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -672,7 +692,7 @@ test("committed baseline above measured fails once BASE has the gate", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /above measured|dropped below BASE_SHA/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -696,7 +716,7 @@ test("head-side baseline lowering vs BASE_SHA fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /below the BASE_SHA floor|lowers the committed baseline/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -739,7 +759,7 @@ test("once BASE has a floor, lowering the head JSON to match dropped coverage st
     assert.equal(r.failed, true);
     assert.match(r.output, /below the BASE_SHA floor|dropped below BASE_SHA|lowers the committed/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -788,7 +808,7 @@ test("poisoned --base-dir JSON cannot replace the BASE_SHA floor", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -832,7 +852,7 @@ test("empty --base-dir cannot force bootstrap once BASE_SHA has the script", () 
     assert.equal(r.failed, true);
     assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -851,7 +871,7 @@ test("nested lcov.info is discovered", () => {
     });
     assert.equal(r.failed, false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -868,7 +888,7 @@ test("unparseable head JSON fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot parse head/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -893,7 +913,7 @@ test("unparseable JSON at BASE_SHA fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot parse/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -965,7 +985,7 @@ test("diff branch below 80% fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /diff branch/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -983,7 +1003,7 @@ test("missing BASE_SHA fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /BASE_SHA is missing/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1001,7 +1021,7 @@ test("unresolvable base commit fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot resolve base commit/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1019,7 +1039,7 @@ test("widening tolerance vs bootstrap defaults fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /widens baselineMatchTolerancePercent/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1040,7 +1060,7 @@ test("unknown cobertura filename fails loudly", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot canonicalize/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1074,7 +1094,7 @@ test("after bootstrap, deleting the gate script on head fails closed", () => {
     assertGatePath(r.output, "fail/missing-head-gate");
     assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1109,7 +1129,7 @@ test("after bootstrap, renaming the gate script on head fails closed", () => {
     assertGatePath(r.output, "fail/missing-head-gate");
     assert.match(r.output, /head is missing perf\/coverage-gate\.mjs/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1126,7 +1146,7 @@ test("non-default PR base fails closed (retarget bypass)", () => {
     assertGatePath(r.output, "fail/retarget");
     assert.match(r.output, /not the default branch 'main'/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1147,7 +1167,7 @@ test("empty head baseline file fails closed and logs FAIL", () => {
     assert.match(stdout, /\*\*FAIL\*\* cannot parse head/);
     assert.match(r.output, /cannot parse head/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1172,7 +1192,7 @@ test("unknown baseline key on head fails closed and logs FAIL", () => {
     assert.match(stdout, /\*\*FAIL\*\*.*exactly \{dotnet, web\}/);
     assert.match(r.output, /exactly \{dotnet, web\}/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1197,7 +1217,7 @@ test("CLI output includes coverage table, scope, and measured JSON", () => {
     assert.match(stdout, /"dotnet"/);
     assert.ok(describeCoverageScope(dir).length >= 3);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1246,7 +1266,7 @@ test("valid scope-change override may lower the floor to measured; a real drop s
     assert.match(r.output, /Re-baseline override/);
     assert.match(r.output, /ONLY for a documented change in measurement scope/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1294,7 +1314,7 @@ test("override with from not equal to the BASE_SHA floor fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /ONLY for a documented change in measurement scope|from\/to must match/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1321,7 +1341,7 @@ test("R5-F1 (c) / c-hack: restoring a modified gate after a delete fails closed"
     assertMissingBaseGate(r);
     assert.equal(existsSync(join(dir, "_base/perf/coverage-gate.mjs")), false);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1349,7 +1369,7 @@ test("R5-F1 (d') / d': re-introducing the gate after a rewind fails closed (no t
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1409,7 +1429,7 @@ test("first push that introduces the gate fails closed (bootstrap closed after #
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1438,7 +1458,7 @@ test("docs-only push after merge uses the BASE_SHA floor and ignores leftover ov
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, merged);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1467,7 +1487,7 @@ test("docs-only PR after merge ignores leftover override whose from no longer ma
     assertGatePath(r.output, "pr/base");
     assertBaseSourceLabels(r.output, main);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1490,7 +1510,7 @@ test("PR cannot use the introducing-gate push path (R3-M2 models CI)", () => {
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1544,7 +1564,7 @@ test("R5-M1 (a): override PR push passes when from equals the BASE_SHA floor", (
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, before);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1573,7 +1593,7 @@ test("R5-M1 (b): direct push that lowers the baseline fails", () => {
     assertGatePath(r.output, "push/base");
     assert.match(r.output, /lowers the committed baseline|below BASE_SHA|documented change in measurement scope/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1599,7 +1619,7 @@ test("P4: PR retargeted to a branch without the gate, with a hacked gate, fails 
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1624,7 +1644,7 @@ test("P5: stale pre-gate BASE_SHA with a hacked gate fails closed", () => {
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1648,7 +1668,7 @@ test("P5'': PR bootstrap at 0/0 with no branch holding gate history fails closed
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1682,7 +1702,7 @@ test("R5-M1 (b): direct push that zeroes the thresholds fails", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /lowers diffLineMinPercent|lowers diffBranchMinPercent/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1715,7 +1735,7 @@ test("override to must equal committed head baseline (say FAIL)", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /`to` must equal the committed head baseline/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1750,7 +1770,7 @@ test("override to must equal measured coverage (say FAIL)", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /`to` must equal measured coverage/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1783,7 +1803,7 @@ test("override from must equal the BASE_SHA floor when not bootstrapping (say FA
     assert.equal(r.failed, true);
     assert.match(r.output, /`from` must equal the BASE_SHA floor/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1808,7 +1828,7 @@ test("push with empty --base-ref does not treat PR base as true", () => {
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, merged);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1832,7 +1852,7 @@ test("F2: committed baseline below the BASE_SHA floor is reported", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /below the BASE_SHA floor/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1861,7 +1881,7 @@ test("F2: cannot resolve default-branch tip fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot resolve default branch 'no-such-branch'/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1881,7 +1901,7 @@ test("F2: unrelated BASE_SHA has no merge-base and fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot resolve merge-base|git merge-base/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1899,7 +1919,7 @@ test("F2: unparseable head override fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot parse head perf\/coverage-override\.json/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1917,7 +1937,7 @@ test("F2: invalid override schema fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /exactly \{from, reason, to\}/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1930,7 +1950,7 @@ test("F2: unreadable testconfig is reported in coverage scope", () => {
     const missing = describeCoverageScope(join(dir, "no-such-root"));
     assert.match(missing.join("\n"), /not present/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1957,7 +1977,7 @@ test("F2: poisoned base-dir JSON that git does not have fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /cannot parse .* in base checkout|missing .*thresholds/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -1984,7 +2004,7 @@ test("hacked HEAD gate would pass if CI fell back; missing _base does not", () =
     });
     assertMissingBaseGate(r);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2012,7 +2032,7 @@ test("--suites with an unknown suite fails closed", () => {
     assertGatePath(r.output, "fail/suites");
     assert.match(r.output, /--suites must be/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2023,7 +2043,7 @@ test("--suites dotnet,web matches the default (both evaluated)", () => {
     assert.equal(r.failed, false, r.output);
     assert.doesNotMatch(r.output, /skipped/i);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2047,7 +2067,7 @@ test("web-only run skips the dotnet gates instead of failing on missing data", (
     assert.deepEqual(r.expected.dotnet, { line: 100, branch: 100 });
     assert.match(r.stdout, /Measured baseline JSON/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2060,7 +2080,7 @@ test("a skipped suite whose sources changed fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /the dotnet suite did not run, but its sources changed: `src\/Desk\.Api\/Hello\.cs`/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2072,7 +2092,7 @@ test("a suite that ran with no coverage data fails closed", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /the web suite ran but has no coverage data/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2085,7 +2105,7 @@ test("a skipped suite's committed baseline still may not drop below the floor", 
     assert.equal(r.failed, true);
     assert.match(r.output, /lowers the committed baseline/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2105,7 +2125,7 @@ test("a skipped suite's committed baseline may not move without measurement (R17
     assert.equal(raised.failed, true);
     assert.match(raised.output, /web did not run, but its committed baseline differs from the BASE_SHA floor/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -2118,7 +2138,7 @@ test("an override needs every suite measured", () => {
     assert.equal(r.failed, true);
     assert.match(r.output, /coverage-override\.json changed, but the dotnet suite did not run/);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 

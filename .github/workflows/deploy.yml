@@ -9,8 +9,9 @@ name: Deploy
 #   workflow_run: event == push, head_branch == main, head_repository == this repo, conclusion success
 #   workflow_dispatch: github.ref == refs/heads/main (case-sensitive bash; GitHub == is not)
 #   SHA being deployed == current tip of refs/heads/main (blocks re-runs of old CI/deploy)
-# A SHA that is no longer the tip is skipped (neutral), not failed, so a lagging CI run
-# does not paint the check red. Wrong-ref dispatch still fails.
+# A SHA that is no longer the tip is skipped, not failed, so a lagging CI run does not
+# paint the check red; the gate writes a warning and a "Deploy skipped" summary so the
+# green run is not mistaken for a release (#207). Wrong-ref dispatch still fails.
 on:
   workflow_run:
     workflows: [CI]
@@ -18,9 +19,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: production
-  cancel-in-progress: false
+# #207: the `production` concurrency group sits on the jobs that use the production
+# environment (preflight, release), not on the workflow. The gate job runs outside it,
+# so a Deploy for a sha that is no longer the tip ends at the gate and never enters the
+# group, where it would replace the tip's pending run. db-ops keeps the same group.
 
 permissions:
   contents: read
@@ -87,7 +89,12 @@ jobs:
             exit 1
           fi
           if [ "$SHA" != "$tip" ]; then
-            echo "::notice::Skipping deploy of $SHA; current tip of main is $tip. Re-runs of old CI/deploy runs are blocked."
+            # #207: a skip concludes success, so say so loudly; the tip's own Deploy releases.
+            echo "::warning::Nothing deployed: $SHA is not the tip of main ($tip). The tip's own CI run deploys it."
+            {
+              echo "### Deploy skipped: ${SHA:0:7} is not the tip of main"
+              echo "Nothing was migrated, seeded or released by this run. The current tip is \`${tip:0:7}\`; its own CI run triggers its Deploy."
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "allowed=false" >> "$GITHUB_OUTPUT"
           else
             echo "allowed=true" >> "$GITHUB_OUTPUT"
@@ -101,6 +108,9 @@ jobs:
     permissions:
       contents: read
     environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -130,6 +140,9 @@ jobs:
     permissions:
       contents: read
     environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
     steps:
       - name: Confirm SHA is still the tip of main
         id: tip
