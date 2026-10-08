@@ -363,6 +363,24 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     }
 
     [Fact]
+    public async Task Pre_commit_projection_uses_the_size_read_at_load_time()
+    {
+        // R217-09: the projection re-reads the size next to the seeded-relation snapshot instead of reusing the
+        // pre-flight read. Here the database "grows" past the budget between the two reads, so the load rolls back.
+        var before = await StateAsync();
+        var err = new StringWriter();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        var calls = 0;
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct) =>
+            ++calls == 1 ? await SeedRunner.DatabaseSizeAsync(conn, ct) : (roomy.MaxMegabytes + 100) * 1024 * 1024;
+        Assert.Equal(2, await SeedRunner.RunAsync(roomy, db.ConnectionString, new StringWriter(), err, Probe, TestContext.Current.CancellationToken));
+        Assert.Contains("projected database size is", err.ToString());
+        Assert.Contains("Rolled back", err.ToString());
+        Assert.Equal(2, calls);
+        Assert.Equal(before, await StateAsync());
+    }
+
+    [Fact]
     public async Task Copy_failure_mid_load_rolls_back()
     {
         var before = await db.ScalarAsync<long>("SELECT count(*) FROM core.fund");

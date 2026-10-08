@@ -90,6 +90,9 @@ public static class SeedRunner
                 output.WriteLine($"Generating as of {options.AsOf:yyyy-MM-dd} (prior business day {tables.PriorBusinessDay:yyyy-MM-dd}): " +
                                   $"{universe.Deals.Count} deals, {universe.Bonds.Count} bonds, {tables.Positions.Count} positions");
 
+                // dbBefore (read before generating) feeds the peak guard; the pre-commit projection needs a size read
+                // next to seededBefore, so both describe the same moment.
+                var dbAtLoad = await databaseSize(conn, ct);
                 var seededBefore = await SeededRelationBytesAsync(conn, ct);
 
                 // One transaction: a failed or over-budget reseed leaves the previous data in place (README §14.3).
@@ -103,7 +106,7 @@ public static class SeedRunner
                     foreach (var s in stats) output.WriteLine($"  {s.Table,-28} {s.Rows,10:N0} rows  {s.Elapsed.TotalSeconds,6:F1} s");
 
                     var seededAfter = await SeededRelationBytesAsync(conn, ct);
-                    var projected = dbBefore - seededBefore + seededAfter;
+                    var projected = dbAtLoad - seededBefore + seededAfter;
                     if (projected < 0) projected = seededAfter;
                     var projectedMb = projected / 1024 / 1024;
                     if (projectedMb > options.MaxMegabytes)
