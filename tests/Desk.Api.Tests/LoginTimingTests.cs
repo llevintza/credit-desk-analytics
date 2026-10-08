@@ -122,6 +122,39 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
         return email;
     }
 
+    [Theory]
+    [InlineData(true)]  // the failure-count reset after a correct password conflicts
+    [InlineData(false)] // the failure-count increment after a wrong password conflicts
+    public async Task A_concurrency_conflict_on_the_failure_count_fails_the_attempt(bool rightPassword)
+    {
+        // R218-01: as Identity's own check, a save that loses to a parallel attempt must not sign in, and must not
+        // read the lockout from unsaved state. Still exactly one verification.
+        var hasher = new CountingHasher();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<IPasswordHasher<DeskUser>>();
+            s.AddSingleton<IPasswordHasher<DeskUser>>(hasher);
+        }));
+        var user = await api.CreateUserAsync();
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.AccessFailedCount, IdentityPolicy.MaxFailedAttempts - 1), Ct);
+
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByIdAsync(user.Id.ToString());
+        // A parallel request saved the row after this one loaded it.
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.ConcurrencyStamp, Guid.NewGuid().ToString()), Ct);
+
+        hasher.Reset();
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, rightPassword ? PostgresApiFactory.Password : "wrong-password-123456", lockoutOnFailure: true);
+
+        Assert.Equal(SignInResult.Failed, result);
+        Assert.Equal(1, hasher.Verifications);
+        await using (var db = api.NewContext())
+            Assert.Equal(IdentityPolicy.MaxFailedAttempts - 1, (await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct)).AccessFailedCount);
+    }
+
     [Fact]
     public async Task Without_lockout_on_failure_a_wrong_password_is_not_counted()
     {

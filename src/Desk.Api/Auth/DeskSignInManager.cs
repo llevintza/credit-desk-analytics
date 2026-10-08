@@ -47,13 +47,18 @@ public sealed class DeskSignInManager(
         if (await UserManager.CheckPasswordAsync(user, password))
         {
             // No two-factor in this app, so a correct password always clears the failure count (as the base does).
-            await UserManager.ResetAccessFailedCountAsync(user);
-            return SignInResult.Success;
+            // As the base: a reset that fails (e.g. a concurrency conflict from parallel guesses) must not sign in.
+            var reset = await UserManager.ResetAccessFailedCountAsync(user);
+            return reset.Succeeded ? SignInResult.Success : SignInResult.Failed;
         }
 
         if (lockoutOnFailure)
         {
-            await UserManager.AccessFailedAsync(user);
+            // As the base: an increment that fails (a concurrency conflict) fails the attempt, rather than reading
+            // the lockout from unsaved in-memory state.
+            var counted = await UserManager.AccessFailedAsync(user);
+            if (!counted.Succeeded)
+                return SignInResult.Failed;
             if (await UserManager.IsLockedOutAsync(user))
                 return SignInResult.LockedOut;
         }
