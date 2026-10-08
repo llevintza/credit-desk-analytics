@@ -67,6 +67,7 @@ export class Shell {
   /**
    * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in.
    * The server session may survive until it expires; see the follow-up issue.
+   * Teardown unsubscribes the logout request on purpose: Shell only goes away on navigation to /login.
    */
   protected logout(): void {
     this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
