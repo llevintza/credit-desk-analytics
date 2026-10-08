@@ -508,7 +508,8 @@ The **website is public** (anyone can reach the login page). The **data is not**
   It generates a strong random password, **prints it once** to stdout, stores only the hash, and **never logs it**. Against production it runs locally with `ConnectionStrings__App` pointed at Neon. Credentials are shared out of band and are **never** committed or put in issues or PRs.
 - **Optional seeded demo accounts:** read from the `DEMO_ACCOUNTS_JSON` env var (secret, set in the Render dashboard). Absent means none.
   - An entry is applied **only when its account is first created**, on that email's first login attempt. Changing an entry's password, role or expiry later does not touch the existing account; manage that account with the UserAdmin CLI (`reset` for a new password, `disable` to stop it).
-  - An account that can't be given its role is removed again and the login is refused, so the next attempt retries the creation.
+  - An account that can't be given its role is removed again and the login is refused, so the next attempt retries the creation. If the removal fails too, the error codes (never the password) are logged as an error; disable that account with the UserAdmin CLI.
+  - When two first logins race, the one that loses is refused until the winner's account has its role; its retry signs in.
 
 ### 7.2 Protecting the free tiers (Render instance hours, Neon compute and storage)
 

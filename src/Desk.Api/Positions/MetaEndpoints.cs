@@ -34,7 +34,9 @@ public static class MetaEndpoints
             .WithName("GetPortfolios").WithSummary("The portfolios the current user is entitled to.")
             .Produces<PortfolioResponse[]>();
 
-        var presets = api.MapGroup("/presets").WithTags("Presets");
+        // Server-Timing on every data endpoint (#44, #130 N9-timing): presets aren't cached, so the handler's time is the
+        // database time.
+        var presets = api.MapGroup("/presets").WithTags("Presets").AddEndpointFilter(TimedAsync);
         presets.MapGet("/{page}", ListPresetsAsync)
             .WithName("ListPresets").WithSummary("Built-in presets plus the current user's saved presets for a page.")
             .Produces<PresetResponse[]>().ProducesProblem(StatusCodes.Status404NotFound);
@@ -112,6 +114,15 @@ public static class MetaEndpoints
         Pages.Contains(page) && name is not null && await presets.DeleteAsync(UserId(http.User), page, name, ct)
             ? Results.NoContent()
             : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "No such preset");
+
+    private static async ValueTask<object?> TimedAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var result = await next(ctx);
+        // Presets aren't cached: every response is a MISS, and the handler's time is all database time.
+        PositionsEndpoints.SetTiming(ctx.HttpContext, "MISS", Stopwatch.GetElapsedTime(started).TotalMilliseconds, 0, started);
+        return result;
+    }
 
     /// <summary>The built-in presets never change at runtime: build their responses once.</summary>
     private static readonly PresetResponse[] BuiltIns = BuiltInPresets.ByName

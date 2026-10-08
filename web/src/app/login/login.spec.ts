@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { HealthService } from '../core/health.service';
 import { Login } from './login';
 
@@ -33,6 +34,29 @@ describe('Login', () => {
     expect(q('waking')).toBeNull();
     expect((fixture.componentInstance as unknown as { progress: () => number }).progress()).toBe(100);
     expect(q('maintenance')).toBeNull();
+  });
+
+  it('shows no unconfirmed sign-out banner on a plain visit', async () => {
+    const { q } = await render();
+    expect(q('signout-unconfirmed')).toBeNull();
+  });
+
+  it.each([
+    ['/login?signout=unconfirmed', true],
+    ['/login?signout=other', false],
+    ['/login', false],
+  ])('on %s, warns that sign-out could not be confirmed: %s', async (url, shown) => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'login', component: Login }])] });
+    const harness = await RouterTestingHarness.create();
+    await harness.navigateByUrl(url, Login);
+    const banner = harness.routeNativeElement!.querySelector('[data-testid=signout-unconfirmed]');
+    if (!shown) {
+      expect(banner).toBeNull();
+      return;
+    }
+    expect(banner?.getAttribute('role')).toBe('alert');
+    expect(banner?.textContent).toContain("Sign-out couldn't be confirmed with the server");
+    expect(banner?.textContent).toContain('close the browser, or sign in and sign out again');
   });
 
   it('shows the maintenance banner', async () => {
