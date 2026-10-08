@@ -18,13 +18,16 @@ public static class RateLimiting
     {
         services.AddSingleton(limits);
         services.AddSingleton(clients);
+        services.AddSingleton<ExportGate>();
         services.AddRateLimiter(o =>
         {
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             o.OnRejected = OnRejectedAsync;
 
-            // Every /api request passes both: the caller's token bucket, then one shared concurrency limiter sized to
-            // the DB connection budget. Applying it to the whole group means no endpoint can forget to opt in.
+            // Every /api request passes all three: the caller's token bucket, the caller's concurrency (one in flight,
+            // a small queue), then one shared concurrency limiter sized to the DB connection budget. Applying them to
+            // the whole group means no endpoint can forget to opt in. A request waiting for its caller's turn holds no
+            // database permit, so one busy user can't fill the shared ones.
             var perUser = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
@@ -36,6 +39,17 @@ public static class RateLimiting
                         QueueLimit = 0,
                         AutoReplenishment = true,
                     }));
+            // Exports are capped by ExportGate instead (one per user, a few in total): counted here, a running export
+            // would block its owner's grid for up to the export deadline.
+            var perUserConcurrency = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+                !IsApi(http) || IsExport(http)
+                    ? RateLimitPartition.GetNoLimiter("unscoped")
+                    : RateLimitPartition.GetConcurrencyLimiter(PartitionKey(http, clients), _ => new ConcurrencyLimiterOptions
+                    {
+                        PermitLimit = limits.PerUserConcurrency,
+                        QueueLimit = limits.PerUserQueue,
+                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    }));
             var database = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
@@ -45,7 +59,7 @@ public static class RateLimiting
                         QueueLimit = limits.GlobalQueue,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     }));
-            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUser, database);
+            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUser, perUserConcurrency, database);
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
             {
@@ -58,6 +72,8 @@ public static class RateLimiting
     }
 
     private static bool IsApi(HttpContext http) => http.Request.Path.StartsWithSegments("/api");
+
+    private static bool IsExport(HttpContext http) => http.Request.Path.Equals(Positions.PositionsEndpoints.ExportPath, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Signed-in users get their own bucket; anonymous callers get one per client IP.</summary>
     internal static string PartitionKey(HttpContext http, ClientAddress clients) =>

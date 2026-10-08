@@ -362,7 +362,8 @@ public sealed class PositionsTests(PostgresApiFactory api)
     public async Task One_export_at_a_time_per_user()
     {
         var (client, xsrf, user) = await api.SignedInAsync();
-        Assert.True(PositionsEndpoints.TryBeginExport(user.Email!));
+        var gate = api.Services.GetRequiredService<Desk.Api.Limits.ExportGate>();
+        Assert.Equal(Desk.Api.Limits.ExportGate.Result.Started, gate.TryBegin(user.Email!));
         try
         {
             var res = await client.SendAsync(Query(xsrf, new { columns = new[] { "deal_name" } }, path: "/api/positions/export"), Ct);
@@ -371,7 +372,7 @@ public sealed class PositionsTests(PostgresApiFactory api)
         }
         finally
         {
-            PositionsEndpoints.EndExport(user.Email!);
+            gate.End(user.Email!);
         }
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Query(xsrf, new { columns = new[] { "deal_name" } }, path: "/api/positions/export"), Ct)).StatusCode);
     }

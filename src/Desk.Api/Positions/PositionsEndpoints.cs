@@ -1,9 +1,9 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Desk.Api.Audit;
+using Desk.Api.Limits;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Microsoft.Extensions.Caching.Memory;
@@ -15,7 +15,7 @@ namespace Desk.Api.Positions;
 public static class PositionsEndpoints
 {
     public const int MaxExportRows = 25_000;
-    private static readonly ConcurrentDictionary<string, byte> ActiveExports = new(StringComparer.Ordinal);
+    public const string ExportPath = "/api/positions/export";
 
     public static RouteGroupBuilder MapPositionsEndpoints(this RouteGroupBuilder api)
     {
@@ -31,9 +31,10 @@ public static class PositionsEndpoints
 
         positions.MapPost("/export", ExportAsync)
             .WithName("ExportPositions")
-            .WithSummary($"Streams the filtered positions as CSV (displayed columns, at most {MaxExportRows:N0} rows, one export at a time per user).")
+            .WithSummary($"Streams the filtered positions as CSV (displayed columns, at most {MaxExportRows:N0} rows; one export at a time per user, a few in total, under an overall deadline).")
             .Produces(StatusCodes.Status200OK, contentType: "text/csv")
-            .ProducesProblem(StatusCodes.Status429TooManyRequests);
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return api;
     }
@@ -102,7 +103,7 @@ public static class PositionsEndpoints
 
     internal static async Task<IResult> ExportAsync(
         GridRequest request, HttpContext http, MetaCache metaCache, IPortfolioEntitlements entitlements,
-        GridRepository grid, CancellationToken ct)
+        GridRepository grid, ExportGate gate, LimitsOptions limits, ILoggerFactory loggers, CancellationToken ct)
     {
         var meta = await metaCache.GetAsync(ct);
         if (Resolve(request, meta, entitlements, http) is not { } resolved)
@@ -111,49 +112,74 @@ public static class PositionsEndpoints
             return resolved.Error;
         var query = resolved.Query!;
 
-        // One export at a time per user (README §7.2): exports hold a database connection for a while.
+        // One export at a time per user, and a few in total (README §7.2, #127): an export holds a database permit
+        // and a connection for the whole stream.
         var user = http.User.Identity!.Name!;
-        if (!TryBeginExport(user))
+        switch (gate.TryBegin(user))
         {
-            http.Response.Headers.RetryAfter = "5";
-            return Results.Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Export already running",
-                detail: "Wait for your current export to finish.");
+            case ExportGate.Result.UserBusy:
+                http.Response.Headers.RetryAfter = "5";
+                return Results.Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Export already running",
+                    detail: "Wait for your current export to finish.");
+            case ExportGate.Result.Full:
+                http.Response.Headers.RetryAfter = "10";
+                return Results.Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Too many exports",
+                    detail: "Other exports are running. Try again shortly.");
         }
 
+        // The overall deadline: a slow or stalled reader can't hold the permit and the connection for longer.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(limits.ExportTimeout);
         try
         {
-            var export = query with { Offset = 0, Limit = MaxExportRows };
-            http.Response.ContentType = "text/csv; charset=utf-8";
-            http.Response.Headers.ContentDisposition = $"attachment; filename=\"positions-{query.AsOf:yyyy-MM-dd}.csv\"";
-            await using var writer = new StreamWriter(http.Response.Body, new UTF8Encoding(false), bufferSize: 64 * 1024);
-            await writer.WriteLineAsync(string.Join(',', export.Columns.Select(c => Csv.Escape(c.Header))));
-
-            var rows = 0;
-            var line = new StringBuilder(1024);
-            await foreach (var reader in grid.StreamAsync(export, meta.Catalog, ct))
-            {
-                line.Clear();
-                for (var i = 0; i < export.Columns.Count; i++)
-                {
-                    if (i > 0) line.Append(',');
-                    Csv.Append(line, export.Columns[i], reader, i);
-                }
-                await writer.WriteLineAsync(line, ct);
-                rows++;
-            }
-            await writer.FlushAsync(ct);
+            var rows = await WriteCsvAsync(http, grid, query, meta, deadline.Token);
             if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = rows;
+            return Results.Empty;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            loggers.CreateLogger(typeof(PositionsEndpoints)).LogWarning(
+                "Export for {User} stopped at its {Seconds} s deadline", user, limits.ExportTimeout.TotalSeconds);
+            if (!http.Response.HasStarted)
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Export timed out",
+                    detail: "Narrow the filter or the columns and try again.");
+            // Part of the file is already sent: break the connection so the download fails instead of ending as a
+            // CSV that looks complete.
+            http.Abort();
             return Results.Empty;
         }
         finally
         {
-            EndExport(user);
+            // Also on client cancel: the stream's connection is disposed by the time the exception gets here.
+            gate.End(user);
         }
     }
 
-    internal static bool TryBeginExport(string user) => ActiveExports.TryAdd(user, 0);
+    private static async Task<int> WriteCsvAsync(HttpContext http, GridRepository grid, GridQuery query, MetaSnapshot meta, CancellationToken ct)
+    {
+        var export = query with { Offset = 0, Limit = MaxExportRows };
+        http.Response.ContentType = "text/csv; charset=utf-8";
+        http.Response.Headers.ContentDisposition = $"attachment; filename=\"positions-{query.AsOf:yyyy-MM-dd}.csv\"";
+        // Not `await using`: disposing flushes, and a flush must not run after a deadline or a client abort.
+        var writer = new StreamWriter(http.Response.Body, new UTF8Encoding(false), bufferSize: 64 * 1024);
+        await writer.WriteLineAsync(string.Join(',', export.Columns.Select(c => Csv.Escape(c.Header))).AsMemory(), ct);
 
-    internal static void EndExport(string user) => ActiveExports.TryRemove(user, out _);
+        var rows = 0;
+        var line = new StringBuilder(1024);
+        await foreach (var reader in grid.StreamAsync(export, meta.Catalog, ct))
+        {
+            line.Clear();
+            for (var i = 0; i < export.Columns.Count; i++)
+            {
+                if (i > 0) line.Append(',');
+                Csv.Append(line, export.Columns[i], reader, i);
+            }
+            await writer.WriteLineAsync(line, ct);
+            rows++;
+        }
+        await writer.FlushAsync(ct);
+        return rows;
+    }
 
     private sealed record Resolved(GridQuery? Query, IResult? Error);
 

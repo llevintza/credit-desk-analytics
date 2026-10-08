@@ -168,6 +168,13 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await otherClient.GetAsync("/api/me", Ct)).StatusCode);
     }
 
+    private async Task<HttpClient> SignedInOnAsync(WebApplicationFactory<Program> host, string role = Roles.Viewer)
+    {
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync(role)).Email!);
+        return client;
+    }
+
     [Fact]
     public async Task Login_also_waits_for_the_shared_database_limit()
     {
@@ -181,10 +188,13 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
+        // Signed in before the only permit is taken: login itself needs one.
+        var other = await SignedInOnAsync(host);
 
         var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var queued = client.GetAsync("/api/me", Ct);           // fills the queue
+        // Another user fills the shared queue (the same user would wait in their own per-user queue instead).
+        var queued = other.GetAsync("/api/me", Ct);
         await Task.Delay(100, Ct);
         var login = await PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), admin.Email!);
         Assert.Equal(HttpStatusCode.TooManyRequests, login.StatusCode);
@@ -217,11 +227,15 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
+        // Three different users: the shared limit is across users (one user's own requests queue per user first).
+        // They sign in before the only permit is taken: login itself needs one.
+        var second = await SignedInOnAsync(host, Roles.Admin);
+        var third = await SignedInOnAsync(host, Roles.Admin);
         var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var queued = client.GetAsync("/api/health/db", Ct);    // waits in the queue
+        var queued = second.GetAsync("/api/health/db", Ct);    // waits in the queue
         await Task.Delay(100, Ct);
-        var rejected = await client.GetAsync("/api/health/db", Ct);
+        var rejected = await third.GetAsync("/api/health/db", Ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.Equal("1", rejected.Headers.GetValues("Retry-After").Single());
@@ -315,8 +329,37 @@ public sealed class LimitsTests(PostgresApiFactory api)
             ["RATE_LIMIT_GLOBAL_CONCURRENCY"] = "lots",
             ["RATE_LIMIT_GLOBAL_QUEUE"] = "-3",
             ["RATE_LIMIT_PER_USER_BURST"] = "40",
+            ["RATE_LIMIT_PER_USER_CONCURRENCY"] = "0",
+            ["RATE_LIMIT_PER_USER_QUEUE"] = "3",
+            ["EXPORT_GLOBAL_SLOTS"] = "x",
+            ["EXPORT_TIMEOUT_SECONDS"] = "-1",
         }).Build();
-        Assert.Equal(new LimitsOptions(60, 40, 5, 8, 32), LimitsOptions.From(config));
+        Assert.Equal(new LimitsOptions(60, 40, 5, 8, 32, 1, 3, 2, TimeSpan.FromSeconds(60)), LimitsOptions.From(config));
+        foreach (var bad in new[] { "0", "NaN", "Infinity", "soon", "" })
+            Assert.Equal(TimeSpan.FromSeconds(60), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", bad))).ExportTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(0.5), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "0.5"))).ExportTimeout);
+    }
+
+    private static IConfiguration Config(params (string Key, string Value)[] pairs) =>
+        new ConfigurationBuilder().AddInMemoryCollection(pairs.Select(p => new KeyValuePair<string, string?>(p.Key, p.Value))).Build();
+
+    [Fact]
+    public void Export_gate_allows_one_per_user_and_a_few_in_total()
+    {
+        var gate = new ExportGate(LimitsOptions.From(Config(("EXPORT_GLOBAL_SLOTS", "2"))));
+        Assert.Equal(ExportGate.Result.Started, gate.TryBegin("a"));
+        Assert.Equal(ExportGate.Result.UserBusy, gate.TryBegin("a"));
+        Assert.Equal(ExportGate.Result.Started, gate.TryBegin("b"));
+        Assert.Equal(ExportGate.Result.Full, gate.TryBegin("c"));
+        Assert.False(gate.IsRunning("c")); // a refused start leaves nothing behind
+        Assert.Equal(2, gate.Running);
+        gate.End("c");                      // ending what never started frees nothing
+        Assert.Equal(2, gate.Running);
+        gate.End("a");
+        Assert.Equal(ExportGate.Result.Started, gate.TryBegin("c"));
+        gate.End("b");
+        gate.End("c");
+        Assert.Equal(0, gate.Running);
     }
 
     private async Task<string> SessionCookieAsync(string email)
@@ -326,6 +369,204 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
+    // ---- #127: per-user concurrency, export cap and deadline, cold meta load ----
+
+    [Fact]
+    public async Task One_request_per_user_in_flight_with_a_small_queue_and_other_users_unaffected()
+    {
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_PER_USER_QUEUE", "1");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var client = PostgresApiFactory.NewClient(host);
+        var xsrf = await PostgresApiFactory.LoginAsync(client, admin.Email!);
+
+        var running = client.GetAsync("/api/health/db", Ct);   // the user's one permit, held in the database
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var queued = client.GetAsync("/api/me", Ct);           // the user's one queue place
+        await Task.Delay(100, Ct);
+        var rejected = await client.GetAsync("/api/me", Ct);
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.False(queued.IsCompleted);
+
+        // Another user isn't behind this one.
+        var other = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(other, (await api.CreateUserAsync()).Email!);
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
+
+        // Nor is the same user's export: exports are capped by the export gate, not by this queue.
+        using (var export = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns = new[] { "deal_name" } }) })
+        {
+            export.Headers.Add("X-XSRF-TOKEN", xsrf);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(export, Ct)).StatusCode);
+        }
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await queued).StatusCode);
+    }
+
+    private static HttpRequestMessage Export(string xsrf, params string[] columns)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns }) };
+        req.Headers.Add("X-XSRF-TOKEN", xsrf);
+        return req;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> done)
+    {
+        for (var i = 0; i < 100 && !done(); i++)
+            await Task.Delay(50, Ct);
+        Assert.True(done(), "the export did not release its slots in time");
+    }
+
+    [Fact]
+    public async Task A_third_concurrent_export_from_another_user_is_429()
+    {
+        await using var host = api.WithSettings(("EXPORT_GLOBAL_SLOTS", "2"));
+        var gate = host.Services.GetRequiredService<ExportGate>();
+        Assert.Equal(ExportGate.Result.Started, gate.TryBegin("first@example.com"));
+        Assert.Equal(ExportGate.Result.Started, gate.TryBegin("second@example.com"));
+        try
+        {
+            var client = PostgresApiFactory.NewClient(host);
+            var xsrf = await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+            var res = await client.SendAsync(Export(xsrf, "deal_name"), Ct);
+            Assert.Equal(HttpStatusCode.TooManyRequests, res.StatusCode);
+            Assert.Equal("10", res.Headers.GetValues("Retry-After").Single());
+            Assert.Equal("Too many exports", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+            Assert.Equal(2, gate.Running); // the refused export took nothing
+        }
+        finally
+        {
+            gate.End("first@example.com");
+            gate.End("second@example.com");
+        }
+    }
+
+    [Fact]
+    public async Task An_export_past_its_deadline_before_any_output_is_503_and_releases_its_slots()
+    {
+        await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "0.001"));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+
+        var res = await client.SendAsync(Export(xsrf, "deal_name"), Ct);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
+        Assert.Equal("Export timed out", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+        var gate = host.Services.GetRequiredService<ExportGate>();
+        Assert.False(gate.IsRunning(user.Email!));
+        Assert.Equal(0, gate.Running);
+    }
+
+    /// <summary>Every catalog column: the CSV is far larger than TestServer's 64 KB response pipe.</summary>
+    private async Task<string[]> AllColumnsAsync(HttpClient client) =>
+        [.. (await client.GetFromJsonAsync<JsonElementList>("/api/meta/columns", Ct))!.Select(c => c.GetProperty("name").GetString()!).Where(n => n != "position_id")];
+
+    private sealed class JsonElementList : List<System.Text.Json.JsonElement>;
+
+    [Fact]
+    public async Task A_stalled_reader_hits_the_deadline_the_download_breaks_and_the_slots_are_released()
+    {
+        await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "1"));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        var gate = host.Services.GetRequiredService<ExportGate>();
+
+        // Headers arrive with the first flushed chunk; then nothing is read, so the server's writes block (backpressure)
+        // until the deadline fires.
+        using var res = await client.SendAsync(Export(xsrf, await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.True(gate.IsRunning(user.Email!));
+        await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
+
+        // The partial file never ends like a complete one: reading it to the end fails.
+        await Assert.ThrowsAnyAsync<Exception>(async () => await res.Content.ReadAsStringAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_client_that_goes_away_releases_the_export_slots()
+    {
+        await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "60"));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        var gate = host.Services.GetRequiredService<ExportGate>();
+
+        var res = await client.SendAsync(Export(xsrf, await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
+        Assert.True(gate.IsRunning(user.Email!));
+        res.Dispose(); // the browser tab closed: the request is aborted while the server is blocked writing
+        await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
+
+        // And the user can export again straight away.
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Export(xsrf, "deal_name"), Ct)).StatusCode);
+    }
+
+    /// <summary>Tracks how many database connections are open at once, EF (interceptor) and Dapper (registry) alike.</summary>
+    private sealed class OpenConnections : DbConnectionInterceptor
+    {
+        private int _open;
+        private int _max;
+        public int Max => Volatile.Read(ref _max);
+
+        public void Opened()
+        {
+            var now = Interlocked.Increment(ref _open);
+            int max;
+            while (now > (max = Volatile.Read(ref _max)) && Interlocked.CompareExchange(ref _max, now, max) != max) { }
+        }
+
+        public void Closed() => Interlocked.Decrement(ref _open);
+
+        public override Task ConnectionOpenedAsync(DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default)
+        {
+            Opened();
+            return Task.CompletedTask;
+        }
+
+        public override Task ConnectionClosedAsync(DbConnection connection, ConnectionEndEventData eventData)
+        {
+            Closed();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TrackedSources(Desk.Data.Sources.DataSourceRegistry inner, OpenConnections open) : Desk.Data.Sources.IDataSourceRegistry
+    {
+        public Npgsql.NpgsqlDataSource Get(string source) => inner.Get(source);
+
+        public async ValueTask<Npgsql.NpgsqlConnection> OpenAsync(string source, CancellationToken ct)
+        {
+            var conn = await inner.OpenAsync(source, ct);
+            open.Opened();
+            conn.StateChange += (_, e) => { if (e.CurrentState == System.Data.ConnectionState.Closed) open.Closed(); };
+            return conn;
+        }
+    }
+
+    [Fact]
+    public async Task A_cold_meta_load_holds_one_connection_at_a_time()
+    {
+        // The request that loads the meta snapshot holds one database permit, so it must not hold four connections.
+        var open = new OpenConnections();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.AddSingleton<IInterceptor>(open);
+            s.AddSingleton<Desk.Data.Sources.DataSourceRegistry>();
+            s.AddSingleton<Desk.Data.Sources.IDataSourceRegistry>(sp => new TrackedSources(sp.GetRequiredService<Desk.Data.Sources.DataSourceRegistry>(), open));
+        }));
+        var cache = new Desk.Api.Positions.MetaCache(host.Services.GetRequiredService<Desk.Data.Grid.MetaRepository>(), api.Time);
+        var (snapshot, loadMs) = await cache.GetWithStatusAsync(Ct);
+        Assert.NotNull(loadMs);
+        Assert.True(snapshot.HasData);
+        Assert.Equal(1, open.Max);
+    }
+
     private sealed class BlockingCommands : DbCommandInterceptor
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
