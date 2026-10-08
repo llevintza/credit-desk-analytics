@@ -46,8 +46,9 @@ const html = readFileSync(indexPath, 'utf8').replace(
 );
 const tagPattern = /<(script|link)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 const attrPattern = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+// HTML keeps the first of duplicate attributes (#266 N2), so the matches are reversed before the Map keeps the last.
 const attributes = (text) =>
-  new Map([...text.matchAll(attrPattern)].map(([, name, ...value]) => [name.toLowerCase(), value.find((v) => v !== undefined) ?? '']));
+  new Map([...text.matchAll(attrPattern)].reverse().map(([, name, ...value]) => [name.toLowerCase(), value.find((v) => v !== undefined) ?? '']));
 const tags = [...html.matchAll(tagPattern)];
 if (tags.length !== (html.match(/<(?:script|link)\b/gi) ?? []).length) fail('index.html has a <script> or <link> tag that cannot be parsed.');
 

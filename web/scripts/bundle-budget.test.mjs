@@ -273,3 +273,15 @@ for (const [label, decoy] of [
     assert.match(r.stderr, /over the 500 KB budget/);
   });
 }
+
+// #266 N2: HTML uses the first of duplicate attributes, so a later src or href is ignored.
+for (const [label, tag, files] of [
+  ['a script src', '<script src="chunk-BIG.js" src="main-A1.js"></script>', { 'chunk-BIG.js': big() }],
+  ['a stylesheet href', '<link rel="stylesheet" href="big-A1.css" href="tiny-A1.css">', { 'big-A1.css': big(), 'tiny-A1.css': 'p{}' }],
+]) {
+  test(`counts the first of duplicate attributes on ${label}`, () => {
+    const r = run({ 'index.html': page(`<script src="main-A1.js" type="module"></script>${tag}`), 'main-A1.js': 'void 0;', ...files });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
