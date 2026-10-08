@@ -114,6 +114,28 @@ BASE_URL=http://localhost:5184 DESK_EMAIL=… DESK_PASSWORD=… node perf/meta-c
 cold meta loads: 200  db p50 8.90 ms  p95 16.00 ms  max 84.70 ms     # after, round 1
 BASE_URL=http://localhost:518x DESK_EMAIL=… DESK_PASSWORD=… node perf/auth-overhead.mjs 1000
 ```
+
+**P1 first paint with one request in flight per user** (README §10: first rows painted < 1.0 s warm). The SPA's first paint (session, as-of and portfolios, columns and presets, the first blocks) now queues per user instead of running in parallel. Measured with the ADR-0009 Playwright perf spec (`positions:first-rows` mark, 5 warm navigations per round), 3 alternating rounds per image, on the same local database.
+
+| Local stack (Release images, seed 42 at scale 1.0, one throwaway viewer) | Before (`main` 7d1cafc) | After (this PR) |
+|---|---|---|
+| First rows painted, warm, p50 / p95 / max (15 navigations) | 208 / 308 / 308 ms | 186 / 251 / 251 ms |
+| Per-round medians | 202, 216, 208 ms | 220, 186, 176 ms |
+
+- No measurable cost: the difference is within run-to-run noise, and both are far under the 1.0 s budget. Most first-paint calls are cache hits of a few ms, so serialising them adds little. `RATE_LIMIT_PER_USER_CONCURRENCY` stays at 1.
+- Per-user rate limits were raised for both runs, as in the e2e override (the spec's client-side comparison fetches every block back to back); the per-user concurrency cap stayed at its default of 1.
+
+```
+# local stack only: the app image of each commit on a private docker network with a local, trust-auth Postgres
+# (migrated, seeded --scale 1.0); a viewer created locally with Desk.UserAdmin
+cd e2e && PERF=1 BASE_URL=http://localhost:58174 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test perf
+main  round 1  firstRowsPaintedMs median 202  all 215,188,185,202,247
+pr174 round 1  firstRowsPaintedMs median 220  all 210,231,251,220,194
+main  round 2  firstRowsPaintedMs median 216  all 238,216,197,194,244
+pr174 round 2  firstRowsPaintedMs median 186  all 199,186,187,179,169
+main  round 3  firstRowsPaintedMs median 208  all 229,203,208,308,184
+pr174 round 3  firstRowsPaintedMs median 176  all 181,172,176,173,176
+```
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
 - Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
 
