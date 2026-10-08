@@ -67,6 +67,8 @@ Balance and IRR aggregate every portfolio in the fund, so a fund is visible only
 
 The cached response is then the same for everyone who may see it, so the cache key stays per fund, data version and range. The per-user grants model being designed in #124 (ADR-0021) plugs in through `IPortfolioEntitlements` without changing this rule.
 
+**No partial aggregates.** The API never returns balance or IRR computed over only the portfolios a user holds. `core.fund_performance` and `core.fund_flow` are keyed by `fund_id` with no `portfolio_id`, so such figures can't be derived; a "my share" measure would need its own ADR. A fund that isn't visible gets the identical ProblemDetails as an unknown fund (404, "No such fund", "Fund {id} is not available."). That includes a fund with no portfolios, which is hidden from every caller.
+
 `CUSTOM` bounds are normalised to month-ends before they are compared or cached: any day of June is June, so `from=2025-06-15&to=2025-06-01` is one month, and the days of a month share one cache entry.
 
 ## Consequences
