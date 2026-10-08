@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace Desk.Api.Auth;
 
@@ -15,24 +16,43 @@ public sealed class DemoAccounts
     public const string ConfigKey = "DEMO_ACCOUNTS_JSON";
 
     private readonly Dictionary<string, DemoAccount> _byEmail;
+    private readonly ILogger<DemoAccounts> _logger;
 
     public DemoAccounts(IConfiguration config, ILogger<DemoAccounts> logger)
     {
+        _logger = logger;
         _byEmail = Parse(config[ConfigKey], logger);
     }
 
-    /// <summary>Creates the demo account for <paramref name="email"/> if one is configured and it doesn't exist yet.</summary>
-    public async Task EnsureAsync(string email, UserManager<DeskUser> users, CancellationToken ct)
+    /// <summary>
+    /// The account for <paramref name="email"/>, creating it first when it's a configured demo account that doesn't
+    /// exist yet. One lookup for the common case; null when there is no such account.
+    /// </summary>
+    public async Task<DeskUser?> FindOrCreateAsync(string email, UserManager<DeskUser> users, CancellationToken ct)
     {
-        if (!_byEmail.TryGetValue(email, out var demo) || await users.FindByEmailAsync(email) is not null)
-            return;
+        var existing = await users.FindByEmailAsync(email);
+        if (existing is not null || !_byEmail.TryGetValue(email, out var demo))
+            return existing;
 
         ct.ThrowIfCancellationRequested();
         var user = new DeskUser { UserName = demo.Email, Email = demo.Email, EmailConfirmed = true, ExpiresAt = demo.Expires };
-        var created = await users.CreateAsync(user, demo.Password);
-        // A concurrent first login may have created it already; either way the normal login path takes over.
-        if (created.Succeeded)
+        try
+        {
+            var created = await users.CreateAsync(user, demo.Password);
+            if (!created.Succeeded)
+            {
+                // Codes only (e.g. PasswordTooShort): never the password itself.
+                _logger.LogWarning("Demo account {Email} could not be created: {Errors}.", demo.Email, string.Join(", ", created.Errors.Select(e => e.Code)));
+                return null;
+            }
             await users.AddToRoleAsync(user, demo.Role);
+            return user;
+        }
+        catch (DbUpdateException)
+        {
+            // A concurrent first login created it a moment ago (unique index): use that one.
+            return await users.FindByEmailAsync(email);
+        }
     }
 
     internal static Dictionary<string, DemoAccount> Parse(string? json, ILogger logger)
@@ -55,12 +75,13 @@ public sealed class DemoAccounts
 
         foreach (var a in accounts ?? [])
         {
-            if (string.IsNullOrWhiteSpace(a.Email) || string.IsNullOrEmpty(a.Password) || !Roles.IsKnown(a.Role))
+            if (string.IsNullOrWhiteSpace(a.Email) || string.IsNullOrEmpty(a.Password) || !Roles.IsKnown(a.Role) || a.Expires == default)
             {
-                logger.LogWarning("Skipping a demo account entry: it needs email, password and a role of viewer or admin.");
+                logger.LogWarning("Skipping a demo account entry: it needs email, password, expires and a role of viewer or admin.");
                 continue;
             }
-            result[a.Email] = a;
+            // Postgres timestamptz takes UTC only (Npgsql rejects other offsets).
+            result[a.Email] = a with { Expires = a.Expires.ToUniversalTime() };
         }
         return result;
     }

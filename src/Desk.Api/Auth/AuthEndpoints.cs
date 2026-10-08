@@ -62,16 +62,18 @@ public static class AuthEndpoints
         var started = Stopwatch.GetTimestamp();
         var email = request.Email?.Trim() ?? "";
 
-        if (email.Length > 0)
-            await demo.EnsureAsync(email, signIn.UserManager, ct);
-
-        var user = email.Length == 0 ? null : await signIn.UserManager.FindByEmailAsync(email);
-        var result = user is null || string.IsNullOrEmpty(request.Password)
+        var password = request.Password ?? "";
+        var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, ct);
+        var result = user is null || password.Length == 0
             ? SignInResult.Failed
-            : await signIn.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
+            : await signIn.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
 
         if (!result.Succeeded)
         {
+            // Unknown, locked, disabled and expired accounts skip Identity's hash check. Hash anyway, so the response
+            // time doesn't tell an attacker which emails are real accounts.
+            if (user is null || result.IsLockedOut || result.IsNotAllowed)
+                TimingGuard.Verify(password);
             audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
             return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
         }

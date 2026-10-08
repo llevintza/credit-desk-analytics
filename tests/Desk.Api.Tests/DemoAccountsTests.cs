@@ -37,6 +37,22 @@ public sealed class DemoAccountsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Concurrent_first_logins_create_one_account_and_all_succeed()
+    {
+        var email = $"demo-{Guid.NewGuid():N}@example.com";
+        var json = $$"""[{"email":"{{email}}","password":"{{PostgresApiFactory.Password}}","role":"admin","expires":"2099-01-01T00:00:00+02:00"}]""";
+        await using var host = api.WithSettings((DemoAccounts.ConfigKey, json));
+
+        var logins = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), email)));
+        Assert.All(logins, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+
+        await using var db = api.NewContext();
+        var user = Assert.Single(db.Users.Where(u => u.Email == email));
+        // A non-UTC offset in the secret is stored as the same instant in UTC.
+        Assert.Equal(new DateTimeOffset(2098, 12, 31, 22, 0, 0, TimeSpan.Zero), user.ExpiresAt);
+    }
+
+    [Fact]
     public async Task Without_the_setting_there_are_no_demo_accounts()
     {
         var res = await PostgresApiFactory.PostLoginAsync(api.NewClient(), "demo-viewer@example.com");
@@ -52,6 +68,7 @@ public sealed class DemoAccountsTests(PostgresApiFactory api)
     [InlineData("""[{"email":"a@example.com","password":"p","role":"owner","expires":"2099-01-01T00:00:00Z"}]""", 0)]
     [InlineData("""[{"email":"","password":"p","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""", 0)]
     [InlineData("""[{"email":"a@example.com","password":"","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""", 0)]
+    [InlineData("""[{"email":"a@example.com","password":"p","role":"viewer"}]""", 0)]
     [InlineData("""[{"email":"a@example.com","password":"p","role":"admin","expires":"2099-01-01T00:00:00Z"},{"email":"b@example.com","password":"p","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""", 2)]
     public void Parse_keeps_only_complete_entries_and_never_throws(string? json, int expected)
     {

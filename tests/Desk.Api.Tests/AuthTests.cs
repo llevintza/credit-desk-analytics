@@ -98,6 +98,14 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Missing_password_is_the_same_401()
+    {
+        var user = await api.CreateUserAsync();
+        var res = await api.NewClient().PostAsJsonAsync("/api/auth/login", new LoginRequest(user.Email, null), Ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
     public async Task Expired_account_is_refused()
     {
         var user = await api.CreateUserAsync(expiresAt: api.Time.GetUtcNow().AddMinutes(-1));
