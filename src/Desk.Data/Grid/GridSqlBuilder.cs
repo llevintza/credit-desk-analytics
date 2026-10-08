@@ -23,7 +23,15 @@ public static class GridSqlBuilder
     /// a 2.43 s summary. The <c>OFFSET 0</c> keeps Postgres from flattening the LATERAL back into the expressions;
     /// with it the same summary takes 96 ms (ADR-0006).
     /// </summary>
-    internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightColumn + "::float8 AS weight_f8 OFFSET 0) w";
+    internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightExpression + " AS weight_f8 OFFSET 0) w";
+
+    /// <summary>
+    /// Weighted averages weigh by the size of a position, <c>ABS(market_value)</c> (#131, README §8 and §6 P1). A signed weight is
+    /// right only while every position is long: a short (or any negative value) would cancel longs in the denominator
+    /// and could flip its sign, giving a meaningless average instead of <c>null</c>. Zero weights still count for
+    /// nothing, and no weight at all gives <c>null</c>.
+    /// </summary>
+    internal const string WeightExpression = "abs(" + WeightColumn + ")::float8";
 
     /// <param name="includeSummary">
     /// False when the caller already holds this filter's totals (they don't depend on paging or sort): the batch is
@@ -76,7 +84,7 @@ public static class GridSqlBuilder
     }
 
     /// <summary>
-    /// SUM for additive measures; market-value-weighted average otherwise. Rows where the measure is NULL don't
+    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightExpression"/>). Rows where the measure is NULL don't
     /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
     internal static string Aggregate(ColumnDef c) => c.Aggregation switch
