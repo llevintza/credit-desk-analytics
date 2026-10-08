@@ -92,8 +92,8 @@ describe('DeskApi positions bytes (resource timing)', () => {
   let api: DeskApi;
   let http: HttpTestingController;
   const later = () => performance.now() + 1_000_000; // a start time after any request in the test began
-  const entry = (startTime: number, encodedBodySize: number, name = 'http://x/api/positions/query') =>
-    ({ name, startTime, encodedBodySize }) as PerformanceResourceTiming;
+  const entry = (startTime: number, encodedBodySize: number, name = 'http://x/api/positions/query', responseStatus?: number) =>
+    ({ name, startTime, encodedBodySize, responseStatus }) as PerformanceResourceTiming;
   const block = { columns: [], data: [], rowCount: 0, summary: {}, asOf: 'x', generatedAt: 'x' };
 
   function setUp(observer: unknown) {
@@ -146,6 +146,20 @@ describe('DeskApi positions bytes (resource timing)', () => {
     FakeObserver.last.queued.push(entry(later(), 0));
     http.expectOne('/api/positions/query').flush(block);
     expect((await empty).info).toMatchObject({ bytes: null });
+  });
+
+  it('never attributes a non-2xx response\'s entry (a 429 before its retry) to a block', async () => {
+    setUp(FakeObserver);
+    const older = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] })); // still in flight
+    const t = later();
+    FakeObserver.last.deliver(entry(t, 180, undefined, 429), entry(t + 1, 90, undefined, 199)); // a sibling's 429; an odd 1xx
+    http.expectOne('/api/positions/query').flush(block);
+    expect((await older).info.bytes).toBeNull();
+
+    const ok = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    FakeObserver.last.queued.push(entry(later(), 2048, undefined, 200));
+    http.expectOne('/api/positions/query').flush(block);
+    expect((await ok).info.bytes).toBe(2048);
   });
 
   it('disconnects the observer when the app is torn down', () => {

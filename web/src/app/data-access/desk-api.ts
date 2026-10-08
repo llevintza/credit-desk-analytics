@@ -104,7 +104,8 @@ export class DeskApi {
    */
   private claimBytes(mine: InFlight): Pick<RequestInfo, 'bytes' | 'bytesApprox'> {
     this.keep(this.observer?.takeRecords() ?? []);
-    // Entries older than the oldest request still in flight belong to none (a retried 429, an aborted block).
+    // Entries older than every live request are dropped; others may be claimed by an overlapping block, which is
+    // then marked approximate.
     const oldest = Math.min(...[...this.inFlight].map((r) => r.started));
     const live = this.timings.filter((e) => e.startTime >= oldest).sort((a, b) => a.startTime - b.startTime);
     const i = live.findIndex((e) => e.startTime >= mine.started);
@@ -116,7 +117,11 @@ export class DeskApi {
 
   private keep(entries: PerformanceEntryList): void {
     if (this.inFlight.size === 0) return; // no request could claim them (a late aborted block, a direct fetch)
-    for (const e of entries) if (e.name.endsWith(DeskApi.positionsUrl)) this.timings.push(e as PerformanceResourceTiming);
+    for (const e of entries as PerformanceResourceTiming[]) {
+      // A non-2xx response (a 429 before its retry) is no block's body, where the browser reports the status.
+      const status = e.responseStatus;
+      if (e.name.endsWith(DeskApi.positionsUrl) && !(status && (status < 200 || status >= 300))) this.timings.push(e);
+    }
   }
 
   private observeTimings(): PerformanceObserver | null {
