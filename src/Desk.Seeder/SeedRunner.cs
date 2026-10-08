@@ -169,9 +169,13 @@ public static class SeedRunner
         return 0;
     }
 
-    /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).</summary>
-    public static long PeakEstimateMegabytes(long currentBytes, decimal scale) =>
-        (currentBytes + (long)(MeasuredMegabytesAtScale1 * (double)scale * 1024 * 1024)) / 1024 / 1024;
+    /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).
+    /// In MiB (1024²), rounded up so the fail-closed guard never under-states the peak.</summary>
+    public static long PeakEstimateMegabytes(long currentBytes, decimal scale)
+    {
+        const long MiB = 1024 * 1024;
+        return (currentBytes + (long)Math.Ceiling(MeasuredMegabytesAtScale1 * (double)scale * MiB) + MiB - 1) / MiB;
+    }
 
     static long NewDataMegabytes(decimal scale) => (long)(MeasuredMegabytesAtScale1 * (double)scale);
 

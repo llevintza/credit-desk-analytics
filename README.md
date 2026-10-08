@@ -263,6 +263,7 @@ See ADR-0003 and ADR-0004.
     - `--size-report`
   - `--max-mb` (default 400): budget for the **committed** size, checked just before COMMIT; over it the load rolls back (exit 2).
   - `--cap-mb` (default 512, must be > 0): storage cap for the reseed **peak**, checked **before TRUNCATE** on runs that would reseed (version, seed or scale change, or `--force`). Over it, or when the current size can't be read, the seeder refuses with exit 2 and changes nothing. An `--if-changed` skip never checks it. See §10.
+  - Both `--max-mb` and `--cap-mb` (and the seeder's `MB` output: `SEED_PEAK_EST_MB`, `DB_SIZE_MB`) are MiB (1024² bytes); the peak estimate rounds up.
 - Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled.
 - The prior business day is generated as the snapshot's second as-of date.
 - **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
