@@ -62,6 +62,8 @@ Option 1: binary COPY for every seeded table (`Loader.Copy`), all inside **one t
 
 The seed transaction sets `lock_timeout = 15s` and `statement_timeout = 180s`. Later reseeds print `SEED_PEAK_EST_MB` because TRUNCATE in a transaction keeps old files until COMMIT (~2×). Confirm the Neon project cap before a production `--force`.
 
+**Note (#109):** the seeder now refuses a reseed before TRUNCATE (exit 2, nothing changed) when `SEED_PEAK_EST_MB` exceeds `--cap-mb` (default 512 MB) or the current size can't be read. At that default a scale-1.0 reseed of a full book (~542 MB estimated) is refused until the cap is confirmed; see README §10. Production can't pass `--cap-mb` yet, so a `SeedVersion` or `SEED_SCALE` bump needs a raised default or the `[workflows]` cap wiring first; otherwise the deploy's seed step exits 2 after migrations (runbook in README §10).
+
 ## Consequences
 
 - **Column lists and `NpgsqlDbType`s are kept beside each table load,** and a type mismatch fails loudly at load time. For the snapshot they are derived from the catalog.

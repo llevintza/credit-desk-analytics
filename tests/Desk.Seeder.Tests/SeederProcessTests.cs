@@ -15,6 +15,9 @@ public sealed class SeederProcessTests(SeededDatabase db) : IClassFixture<Seeded
     [InlineData("", 1)]                          // no mode: refused before touching the database
     [InlineData("--size-report --max-mb 1", 2)]  // over budget (size-report is allowed to fail)
     [InlineData("--if-changed --scale 0.1 --as-of 2026-10-06 --max-mb 1", 0)] // skip must not fail the deploy
+    [InlineData("--if-changed --scale 0.1 --as-of 2026-10-06 --cap-mb 1", 0)] // nor must the peak cap
+    [InlineData("--force --scale 0.1 --as-of 2026-10-06 --cap-mb 1", 2)]     // reseed peak over the cap: refused before TRUNCATE
+    [InlineData("--force --cap-mb 0", 1)]                                     // cap must be positive
     public async Task Exit_code_is_what_the_pipelines_expect(string args, int expected)
     {
         var (code, stdout, stderr) = await RunAsync(args, db.ConnectionString);

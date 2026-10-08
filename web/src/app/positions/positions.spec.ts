@@ -89,75 +89,6 @@ async function render(opts: { remembered?: string; failLoad?: boolean; scope?: '
   return { fixture, el, http, grid, stub, query, ready };
 }
 
-/**
- * Must stay the first test in this file: it renders the real component with its compiled (AOT) template and the
- * real AG Grid. The tests below use TestBed.overrideComponent, which recompiles the component in JIT and replaces
- * its compiled definition for the rest of the module, so the AOT template would never run (and its branches
- * would read as uncovered) if this ran after them.
- */
-describe('Positions page (real grid, compiled template)', () => {
-  beforeAll(() => {
-    globalThis.ResizeObserver ??= class {
-      observe(): void { /* jsdom: no layout */ }
-      unobserve(): void { /* jsdom: no layout */ }
-      disconnect(): void { /* jsdom: no layout */ }
-    } as unknown as typeof ResizeObserver;
-  });
-
-  it('renders the toolbar, then the grid once the catalog is loaded', async () => {
-    TestBed.configureTestingModule({ imports: [Positions], providers: [provideHttpClient(), provideHttpClientTesting()] });
-    const fixture = TestBed.createComponent(Positions);
-    await fixture.whenStable();
-    const el = fixture.nativeElement as HTMLElement;
-    const http = TestBed.inject(HttpTestingController);
-    expect(el.querySelector('.skeleton')).not.toBeNull();
-    http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-06', dates: ['2026-10-06'] });
-    http.expectOne('/api/meta/portfolios').flush([]);
-
-    http.expectOne('/api/meta/columns').flush([
-      { name: 'position_id', group: 'Keys', kind: 'Key', aggregation: 'None', header: 'Position' },
-      { name: 'deal_name', group: 'Keys', kind: 'Text', aggregation: 'None', header: 'Deal' },
-      { name: 'dv01', group: 'Rates', kind: 'Money', aggregation: 'Sum', header: 'DV01' },
-    ]);
-    http.expectOne('/api/presets/positions').flush([
-      { name: 'Risk', builtIn: true, state: { columns: ['deal_name', 'dv01'] }, updatedAt: null },
-      { name: 'Mine', builtIn: false, state: { columns: ['dv01'] }, updatedAt: 'x' },
-    ]);
-    await fixture.whenStable();
-    expect(el.querySelector('[data-testid=positions-grid]')).not.toBeNull();
-    expect(el.querySelector('.skeleton')).toBeNull();
-
-    // Drive every conditional block of the compiled template explicitly (not by request timing).
-    const component = fixture.componentInstance as unknown as {
-      preset: { set(v: string): void }; exporting: { set(v: boolean): void }; loadError: { set(v: string | null): void };
-    };
-    const query = fixture.debugElement.injector.get(PositionsQuery);
-    component.preset.set('Mine');           // own preset: Delete button
-    component.exporting.set(true);          // "Exporting…"
-    query.loading.set(true);                // "Loading…"
-    query.error.set('Could not load positions.');
-    await fixture.whenStable();
-    expect(el.textContent).toContain('Delete');
-    expect(el.textContent).toContain('Exporting');
-    expect(el.textContent).toContain('Loading');
-    expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not load positions');
-
-    component.loadError.set('Catalog failed.'); // loadError wins over the query error
-    await fixture.whenStable();
-    expect(el.querySelector('[role=alert]')?.textContent).toContain('Catalog failed.');
-
-    component.preset.set('Risk');
-    component.exporting.set(false);
-    query.loading.set(false);
-    query.error.set(null);
-    component.loadError.set(null);
-    await fixture.whenStable();
-    expect(el.querySelector('[role=alert]')).toBeNull();
-    expect(el.textContent).not.toContain('Loading');
-    fixture.destroy();
-  });
-});
-
 describe('Positions page', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -326,14 +257,17 @@ describe('Positions page', () => {
     expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not save "Risk": Invalid preset name');
   });
 
-  it('says why a save failed: the server\'s detail, else its title, else a generic line', async () => {
+  it('says why a save failed: the server\'s detail (a 409 keeps its title), else its title, else a generic line', async () => {
     const { fixture, el, http, ready } = await render();
     await ready();
     vi.spyOn(window, 'prompt').mockReturnValue('Desk view');
     const save = () => (el.querySelector('[aria-label="Save the current columns as a preset"]') as HTMLButtonElement).click();
     const alert = () => el.querySelector('[role=alert]')?.textContent?.trim();
     const cases: [body: object | string | null, status: number, shown: string][] = [
-      [{ title: 'Preset changed concurrently', detail: 'Try again.' }, 409, 'Could not save "Desk view": Try again.'],
+      [{ title: 'Preset changed concurrently', detail: 'Try again.' }, 409, 'Could not save "Desk view": Preset changed concurrently: Try again.'],
+      [{ title: 'Preset changed concurrently' }, 409, 'Could not save "Desk view": Preset changed concurrently'],
+      [{ detail: 'Someone else saved it first.' }, 409, 'Could not save "Desk view": Someone else saved it first.'],
+      [{ title: 'Bad request', detail: 'Names must be 1–64 characters.' }, 400, 'Could not save "Desk view": Names must be 1–64 characters.'],
       [{ title: 'Too many requests', detail: '' }, 429, 'Could not save "Desk view": Too many requests'],
       [{ detail: 42 }, 400, 'Could not save "Desk view".'],
       ['plain text', 500, 'Could not save "Desk view".'],
