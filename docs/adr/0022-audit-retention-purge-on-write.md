@@ -15,7 +15,7 @@ Phase 2 added `app.audit` (README §7.2): one row per authenticated `/api` reque
 
 Constraints:
 
-- **Neon free tier:** 0.5 GB of storage for the whole project (README §5.4), and compute that suspends when idle. Anything that runs SQL on a timer wakes the database and burns compute hours. The repo rule is no keep-awake pingers, and nothing touches the database unless a user does.
+- **Neon free tier:** 0.5 GB of storage for the whole project, and compute that suspends when idle. The tighter limit is the repo's own: the database MUST stay under 350 MB (README §10/§5.4). Anything that runs SQL on a timer wakes the database and burns compute hours. The repo rule is no keep-awake pingers, and nothing touches the database unless a user does.
 - **Render free tier:** the instance sleeps after about 15 minutes without traffic and restarts cold. A process-local timer with a 24 h period may never fire on an instance that rarely stays up that long.
 - **No DDL from the app.** The `IX_audit_at` index already exists (Phase 2 migration), so the purge needs no migration.
 - **Command timeout** is 10 s for every app query (`ServiceCollectionExtensions.CommandTimeoutSeconds`).
@@ -137,6 +137,6 @@ README §1 targets about 60 internal users, and every authenticated `/api` reque
 - No timer, no extra connection, and nothing wakes Neon. The purge piggybacks on an insert that was already happening.
 - Rows past the window can stay while the app is idle, until the next login. That's acceptable for a usage log. If audit retention ever becomes a compliance requirement with a hard deadline, revisit with option 3.
 - Shortening the window takes effect at the next purge after a restart. `DELETE` frees space for reuse inside the table, but the table doesn't shrink on disk without `VACUUM FULL`, which we don't run.
-- Each statement handles at most about 50,000 rows (more only on ties at the edge), so its cost doesn't grow with the backlog. A single batch would have to slow down by more than 30× over the cold numbers above to reach the 10 s timeout. If one ever does, the batches before it stay committed and the rest is retried the next day. If purges keep timing out, lower the batch size or delete in slices by hand through `db-ops`.
+- Each statement handles at most about 50,000 rows (more only on ties at the edge), so its cost doesn't grow with the backlog. A single batch would have to slow down by more than 30× over the cold numbers above to reach the 10 s timeout. If one ever does, the batches before it stay committed and the rest is retried the next day. If purges keep timing out, lower `AuditRetention.DefaultBatchSize` (a code change), or delete in slices by hand through `db-ops`.
 - If `pg_database_size` approaches 350 MB, lower `AUDIT_RETENTION_DAYS` first (the purge drains the resulting backlog in batches, above). Then take the 90-day default back to Helms in #114: at the busy rate, 90 days doesn't fit the §10 budget.
 - Revisit with partitioning (option 4) if the audit volume grows past a few million rows.
