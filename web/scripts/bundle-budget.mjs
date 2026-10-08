@@ -37,7 +37,9 @@ const normalize = (from, url) => {
 // #204: tags are matched case-insensitively, attributes in any order, quoted with " or ' or unquoted, with optional
 // whitespace around `=`, and a quoted value may contain `>`. Comments are dropped first. Any <script or <link this
 // can't parse fails rather than being skipped.
-const html = readFileSync(join(dir, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+const indexPath = join(dir, 'index.html');
+if (!existsSync(indexPath)) fail(`${indexPath} is missing; refusing to pass the budget.`);
+const html = readFileSync(indexPath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
 const tagPattern = /<(script|link)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 const attrPattern = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 const attributes = (text) =>

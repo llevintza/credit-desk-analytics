@@ -128,7 +128,9 @@ test('terminates on an import cycle and counts each chunk once', () => {
 });
 
 test('fails when index.html is missing', () => {
-  assert.notEqual(run({ 'main-A1.js': 'void 0;' }).status, 0);
+  const r = run({ 'main-A1.js': 'void 0;' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /index\.html is missing/);
 });
 
 // #204 F4: every relative static import is followed, resolved against its importer, whatever the file is called.
