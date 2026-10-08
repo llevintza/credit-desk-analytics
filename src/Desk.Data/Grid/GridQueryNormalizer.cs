@@ -7,7 +7,9 @@ namespace Desk.Data.Grid;
 /// <summary>
 /// Whitelists a <see cref="GridRequest"/> against the column catalog (README §6 P1 server rules, AGENTS.md SQL safety).
 /// Unknown or malformed parts are dropped, never echoed into SQL and never an error: a bad sort id, an injection
-/// attempt in a filter key or a filter whose value doesn't parse simply has no effect.
+/// attempt in a filter key or a filter whose value doesn't parse simply has no effect. The one exception is a
+/// filter that is valid but too large to apply (<see cref="GridRequestException"/>, a 400): dropping it would
+/// widen the result.
 /// </summary>
 public sealed class GridQueryNormalizer
 {
@@ -15,7 +17,9 @@ public sealed class GridQueryNormalizer
     public const int MaxColumns = 250;
     public const int MaxSortColumns = 5;
     public const int MaxFilters = 50;
-    public const int MaxSetValues = 1000;
+    /// <summary>A set filter can list every value of a column (one per position at most).</summary>
+    public const int MaxSetValues = 25_000;
+    public const int MaxConditions = 10;
     public const int MaxQuickTokens = 5;
     public const int MaxTextLength = 200;
     public const string RowIdColumn = "position_id";
@@ -82,8 +86,10 @@ public sealed class GridQueryNormalizer
 
             if (spec.Conditions is { Length: > 0 } parts)
             {
-                var conditions = parts.Take(2).Select(p => Condition(col, p, spec.FilterType)).OfType<GridCondition>().ToList();
-                if (conditions.Count == parts.Take(2).Count())
+                if (parts.Length > MaxConditions)
+                    throw new GridRequestException($"Filter on {col.Name} has {parts.Length} conditions; at most {MaxConditions}.");
+                var conditions = parts.Select(p => Condition(col, p, spec.FilterType)).OfType<GridCondition>().ToList();
+                if (conditions.Count == parts.Length)
                     filters.Add(new GridFilter(col, string.Equals(spec.Operator, "OR", StringComparison.OrdinalIgnoreCase), conditions));
             }
             else if (Condition(col, spec, spec.FilterType) is { } condition)
@@ -102,7 +108,7 @@ public sealed class GridQueryNormalizer
             "number" when IsNumeric(col.Kind) => NumberCondition(spec),
             "text" when col.Kind == ColumnKind.Text => TextCondition(spec),
             "date" when col.Kind == ColumnKind.Date => DateCondition(spec),
-            "set" => SetCondition(spec),
+            "set" => SetCondition(col, spec),
             _ => null,
         };
     }
@@ -194,11 +200,16 @@ public sealed class GridQueryNormalizer
             ? d
             : null;
 
-    private static GridCondition? SetCondition(FilterSpec spec)
+    /// <summary>
+    /// Every listed value is kept (they're parameters, whatever their length). A list too long to send is refused
+    /// rather than dropped: dropping a set filter would show rows the user unticked.
+    /// </summary>
+    private static GridCondition? SetCondition(ColumnDef col, FilterSpec spec)
     {
-        if (spec.Values is null || spec.Values.Length > MaxSetValues) return null;
-        var values = spec.Values.Where(v => v is null || v.Length <= MaxTextLength).Distinct().Order(StringComparer.Ordinal).ToArray();
-        return new GridCondition(FilterKind.Set, FilterOp.In, Values: values);
+        if (spec.Values is null) return null;
+        if (spec.Values.Length > MaxSetValues)
+            throw new GridRequestException($"Set filter on {col.Name} lists {spec.Values.Length} values; at most {MaxSetValues}.");
+        return new GridCondition(FilterKind.Set, FilterOp.In, Values: spec.Values.Distinct().Order(StringComparer.Ordinal).ToArray());
     }
 
     private static List<string> QuickTokens(string? quick) =>

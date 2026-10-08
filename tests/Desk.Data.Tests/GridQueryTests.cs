@@ -243,7 +243,10 @@ public sealed class GridQueryTests
         Assert.Contains("\"class\" IS NULL", Sql(new GridRequest(FilterModel: new() { ["class"] = new("set", Values: [null]) })).Sql);
         Assert.Contains(" AND FALSE", Sql(new GridRequest(FilterModel: new() { ["class"] = new("set", Values: []) })).Sql);
         Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["class"] = new("set") })).Filters);
-        Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["class"] = new("set", Values: new string?[GridQueryNormalizer.MaxSetValues + 1]) })).Filters);
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { ["class"] = new("set", Values: new string?[GridQueryNormalizer.MaxSetValues + 1]) })));
+        // Long values are kept, not silently removed: they're parameters.
+        var longValue = new string('x', 500);
+        Assert.Equal([longValue], Normalize(new GridRequest(FilterModel: new() { ["class"] = new("set", Values: [longValue]) })).Filters[0].Conditions[0].Values);
     }
 
     [Fact]
@@ -265,6 +268,17 @@ public sealed class GridQueryTests
         {
             ["dv01"] = new("number", Operator: "OR", Conditions: [new(Type: "lessThan", Filter: Json("1")), new(Type: "nope")]),
         })).Filters);
+
+        // More than two conditions apply in full (AG Grid's maxNumConditions); beyond the cap is a 400, not a cut.
+        var three = Sql(new GridRequest(FilterModel: new()
+        {
+            ["sector"] = new("text", Operator: "OR", Conditions: [new(Type: "equals", Filter: Json("\"A\"")), new(Type: "equals", Filter: Json("\"B\"")), new(Type: "equals", Filter: Json("\"C\""))]),
+        }));
+        Assert.Contains("(\"sector\" ILIKE @p4 OR \"sector\" ILIKE @p5 OR \"sector\" ILIKE @p6)", three.Sql);
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
+        {
+            ["dv01"] = new("number", Operator: "OR", Conditions: Enumerable.Repeat(new FilterSpec(Type: "blank"), GridQueryNormalizer.MaxConditions + 1).ToArray()),
+        })));
     }
 
     [Fact]
@@ -305,7 +319,24 @@ public sealed class GridQueryTests
         }));
         Assert.Contains("2026-11-01", dated.CanonicalKey);
         Assert.Contains("1.5", dated.CanonicalKey);
-        Assert.Contains("deal_name|or:Text.StartsWith(A,,)&Text.Blank(,,)", dated.CanonicalKey);
+        Assert.Contains("\"Or\":true", dated.CanonicalKey);
+        Assert.NotEqual(dated.CanonicalKey, dated.SummaryKey);
+    }
+
+    [Fact]
+    public void Delimiters_inside_filter_values_cannot_make_two_queries_share_a_key()
+    {
+        var crafted = Normalize(new GridRequest(FilterModel: new()
+        {
+            ["class"] = new("text", "contains", Json(JsonSerializer.Serialize("x,,);deal_name:Text.Contains(y"))),
+        }));
+        var real = Normalize(new GridRequest(FilterModel: new()
+        {
+            ["class"] = new("text", "contains", Json("\"x\"")),
+            ["deal_name"] = new("text", "contains", Json("\"y\"")),
+        }));
+        Assert.NotEqual(crafted.CanonicalKey, real.CanonicalKey);
+        Assert.NotEqual(crafted.SummaryKey, real.SummaryKey);
     }
 
     [Fact]
