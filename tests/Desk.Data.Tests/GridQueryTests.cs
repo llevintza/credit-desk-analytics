@@ -373,8 +373,8 @@ public sealed class GridQueryTests
             ["spread_bp"] = new("number", "inRange", Json("1"), FilterTo: Json("1e400")),
         })));
 
-        // "NaN" and "Infinity" aren't numbers the user typed: still dropped.
-        foreach (var word in new[] { "\"NaN\"", "\"Infinity\"", "\"-Infinity\"" })
+        // "NaN" and "Infinity" aren't numbers the user typed: still dropped, like any other non-number.
+        foreach (var word in new[] { "\"NaN\"", "\"Infinity\"", "\"-Infinity\"", "\"lots\"", "true" })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["spread_bp"] = new("number", "equals", Json(word)) })).Filters);
 
         // Normal values, including integers past int and long range, still bind as the same double.
