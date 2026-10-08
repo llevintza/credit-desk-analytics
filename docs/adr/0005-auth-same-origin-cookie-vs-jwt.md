@@ -80,6 +80,12 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - Data-protection keys live in `auth.data_protection_keys`, so sessions survive restarts.
 - The framework's start-up key-ring preload is removed, so boot and maintenance mode never open a connection. The ring loads on the first login or session check.
 
+**Database touches (free tier)**
+- The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
+- Every `/api` request passes a chained limiter: the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+- Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
+- Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
+
 **Behind Render's TLS proxy**
 - `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` (render.yaml) trusts one hop of `X-Forwarded-For/Proto`.
 - The app therefore sees https (HSTS, Secure cookies, antiforgery) and the real client IP (per-IP login limit).

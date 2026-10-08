@@ -7,10 +7,16 @@ namespace Desk.Api.Audit;
 /// Drains <see cref="AuditQueue"/> into <c>app.audit</c> in batches, on its own context from the pooled factory.
 /// A failed insert is logged and the batch dropped: audit data is best-effort and must never back up into requests.
 /// The factory is resolved on the first write, not at startup: the app must boot without a database.
+/// Writes are coalesced: after the first entry arrives the writer waits <c>AUDIT_FLUSH_SECONDS</c> (default 30) or
+/// until a full batch, so an active session costs one insert per interval, not one per request.
 /// </summary>
-public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, ILogger<AuditWriter> logger) : BackgroundService
+public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, IConfiguration config, ILogger<AuditWriter> logger) : BackgroundService
 {
     public const int MaxBatch = 500;
+    public const string FlushConfigKey = "AUDIT_FLUSH_SECONDS";
+
+    internal TimeSpan FlushInterval { get; } =
+        TimeSpan.FromSeconds(int.TryParse(config[FlushConfigKey], out var s) && s >= 0 ? s : 30);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -19,6 +25,8 @@ public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, ILo
         {
             while (await queue.Reader.WaitToReadAsync(stoppingToken))
             {
+                if (queue.Reader.Count < MaxBatch)
+                    await Task.Delay(FlushInterval, stoppingToken);
                 Drain(batch);
                 await WriteAsync(batch, stoppingToken);
             }

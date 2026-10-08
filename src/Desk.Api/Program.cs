@@ -44,8 +44,8 @@ builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = Compre
 
 var app = builder.Build();
 
-// Order matters: maintenance answers before anything that can reach the database; the audit middleware sees
-// the authenticated user; rate limiting partitions by that user; authorization runs last.
+// Order matters: maintenance answers before anything that can reach the database; rate limiting partitions by
+// the authenticated user; the audit middleware sees only admitted requests; authorization runs last.
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeaders>();
@@ -56,9 +56,15 @@ app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseRouting();
-app.UseAuthentication();
-app.UseMiddleware<AuditMiddleware>();
+// Only paths that need a session decrypt the cookie: /health and the SPA never load the key ring or run the
+// security-stamp query, so they can't wake the database (maintenance mode, platform probes).
+app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication());
+// UseAuthentication on a branch doesn't mark the app, and WebApplication would then add a global one at the very
+// start of the pipeline (before maintenance mode). Mark it so the path-scoped one above is the only one.
+((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
 app.UseRateLimiter();
+// After the limiter: rejected (429) requests are not written to the audit table.
+app.UseMiddleware<AuditMiddleware>();
 app.UseAuthorization();
 app.UseDeskSwagger();
 

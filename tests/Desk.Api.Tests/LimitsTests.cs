@@ -51,10 +51,42 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Equal("1", limited.Headers.GetValues("Retry-After").Single());
 
+        // Rejected requests never reach the audit table (no DB writes for a client hammering the limiter).
+        await api.WaitForAuditAsync(a => a.UserName == user.Email && a.Kind == Data.App.AuditKinds.Request, atLeast: 3);
+        await Task.Delay(300, Ct);
+        await using (var db = api.NewContext())
+            Assert.DoesNotContain(db.Audit.Where(a => a.UserName == user.Email).Select(a => a.Status).ToList(), s => s == 429);
+
         // Another user has their own bucket.
         var otherClient = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(otherClient, other.Email!);
         Assert.Equal(HttpStatusCode.OK, (await otherClient.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Login_also_waits_for_the_shared_database_limit()
+    {
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
+            b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, admin.Email!);
+
+        var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var queued = client.GetAsync("/api/me", Ct);           // fills the queue
+        await Task.Delay(100, Ct);
+        var login = await PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), admin.Email!);
+        Assert.Equal(HttpStatusCode.TooManyRequests, login.StatusCode);
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await queued).StatusCode);
     }
 
     [Fact]
@@ -110,6 +142,19 @@ public sealed class LimitsTests(PostgresApiFactory api)
             Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
             Assert.Equal("300", res.Headers.GetValues("Retry-After").Single());
             Assert.Equal(MaintenanceMode.Detail, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+        }
+
+        // A signed-in browser still sends its session cookie: /health, the SPA and Swagger must not decrypt it
+        // (key ring + security-stamp query would wake the database).
+        var user = await api.CreateUserAsync(Roles.Admin);
+        var cookie = (await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!)).Headers.GetValues("Set-Cookie")
+            .Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+        foreach (var path in new[] { "/health", "/positions", "/swagger/index.html", "/openapi/v1.json" })
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, path);
+            req.Headers.Add("Cookie", cookie);
+            var res = await client.SendAsync(req, Ct);
+            Assert.Equal(path.StartsWith("/health") || path == "/positions" ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, res.StatusCode);
         }
 
         var health = await client.GetFromJsonAsync<HealthResponse>("/health", Ct);

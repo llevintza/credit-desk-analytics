@@ -21,7 +21,6 @@ public static class HealthEndpoints
         // Under /api so maintenance mode, the rate limits and the admin policy all apply.
         api.MapGet("/health/db", CheckDatabaseAsync)
            .RequireAuthorization(AuthSetup.AdminPolicy)
-           .RequireRateLimiting(RateLimiting.DbPolicy)
            .WithName("HealthDb").WithTags("Health")
            .WithSummary("Admin-only database check: opens a connection and runs SELECT 1.")
            .Produces<DbHealthResponse>()

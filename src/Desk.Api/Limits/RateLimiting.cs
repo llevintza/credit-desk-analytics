@@ -6,13 +6,12 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace Desk.Api.Limits;
 
 /// <summary>
-/// Free-tier protection (README §7.2): a per-user token bucket on all of <c>/api</c>, a per-IP window on login,
-/// and one shared concurrency limiter in front of every endpoint that can reach the database.
+/// Free-tier protection (README §7.2): a per-user token bucket and one shared concurrency limiter on all of
+/// <c>/api</c> (every endpoint there can reach the database), plus a per-IP window on login.
 /// </summary>
 public static class RateLimiting
 {
     public const string LoginPolicy = "login";
-    public const string DbPolicy = "db";
 
     public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits)
     {
@@ -22,8 +21,10 @@ public static class RateLimiting
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             o.OnRejected = OnRejectedAsync;
 
-            o.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
-                !http.Request.Path.StartsWithSegments("/api")
+            // Every /api request passes both: the caller's token bucket, then one shared concurrency limiter sized to
+            // the DB connection budget. Applying it to the whole group means no endpoint can forget to opt in.
+            var perUser = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+                !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
                     : RateLimitPartition.GetTokenBucketLimiter(PartitionKey(http), _ => new TokenBucketRateLimiterOptions
                     {
@@ -33,6 +34,16 @@ public static class RateLimiting
                         QueueLimit = 0,
                         AutoReplenishment = true,
                     }));
+            var database = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+                !IsApi(http)
+                    ? RateLimitPartition.GetNoLimiter("static")
+                    : RateLimitPartition.GetConcurrencyLimiter("db", _ => new ConcurrencyLimiterOptions
+                    {
+                        PermitLimit = limits.GlobalConcurrency,
+                        QueueLimit = limits.GlobalQueue,
+                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    }));
+            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUser, database);
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(ClientIp(http), _ => new FixedWindowRateLimiterOptions
             {
@@ -40,17 +51,11 @@ public static class RateLimiting
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
-
-            // One partition: the limit is global across users and endpoints, sized to the DB connection budget.
-            o.AddConcurrencyLimiter(DbPolicy, c =>
-            {
-                c.PermitLimit = limits.GlobalConcurrency;
-                c.QueueLimit = limits.GlobalQueue;
-                c.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-            });
         });
         return services;
     }
+
+    private static bool IsApi(HttpContext http) => http.Request.Path.StartsWithSegments("/api");
 
     /// <summary>Signed-in users get their own bucket; anonymous callers share one per IP.</summary>
     internal static string PartitionKey(HttpContext http) =>

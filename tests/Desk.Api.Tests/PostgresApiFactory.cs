@@ -61,6 +61,7 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         builder.UseEnvironment("Production");
         builder.UseSetting("ConnectionStrings:App", ConnectionString);
         builder.UseSetting("SWAGGER_ENABLED", "true");
+        builder.UseSetting("AUDIT_FLUSH_SECONDS", "0"); // write audit rows right away so tests can see them
         builder.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "100000");
         builder.UseSetting("RATE_LIMIT_PER_USER_BURST", "100000");
         builder.UseSetting("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "100000");
