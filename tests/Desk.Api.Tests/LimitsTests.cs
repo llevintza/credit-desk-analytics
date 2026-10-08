@@ -335,9 +335,10 @@ public sealed class LimitsTests(PostgresApiFactory api)
             ["EXPORT_TIMEOUT_SECONDS"] = "-1",
         }).Build();
         Assert.Equal(new LimitsOptions(60, 40, 5, 8, 32, 1, 3, 2, TimeSpan.FromSeconds(60)), LimitsOptions.From(config));
-        foreach (var bad in new[] { "0", "NaN", "Infinity", "soon", "" })
+        foreach (var bad in new[] { "0", "NaN", "Infinity", "soon", "", "3600.5", "1e7", "1e300" })
             Assert.Equal(TimeSpan.FromSeconds(60), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", bad))).ExportTimeout);
         Assert.Equal(TimeSpan.FromSeconds(0.5), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "0.5"))).ExportTimeout);
+        Assert.Equal(TimeSpan.FromHours(1), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "3600"))).ExportTimeout);
     }
 
     private static IConfiguration Config(params (string Key, string Value)[] pairs) =>

@@ -22,13 +22,17 @@ public sealed record LimitsOptions(
         // behind one another instead of failing.
         PerUserQueue: Positive(config, "RATE_LIMIT_PER_USER_QUEUE", 8),
         ExportSlots: Positive(config, "EXPORT_GLOBAL_SLOTS", 2),
-        ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60)));
+        ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60, max: MaxExportTimeoutSeconds)));
+
+    /// <summary>An hour: far above any real export, and far below what a timer or a TimeSpan can hold.</summary>
+    public const double MaxExportTimeoutSeconds = 3600;
 
     // A typo or 0 must not disable a limit: anything that isn't a positive integer falls back to the default.
     private static int Positive(IConfiguration config, string key, int fallback) =>
         int.TryParse(config[key], out var v) && v > 0 ? v : fallback;
 
-    // Seconds may be fractional (tests use a short deadline); the same rule: not positive → the default.
-    private static double PositiveSeconds(IConfiguration config, string key, double fallback) =>
-        double.TryParse(config[key], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0 && double.IsFinite(v) ? v : fallback;
+    // Seconds may be fractional (tests use a short deadline); the same rule: not positive, or above the cap → the
+    // default. Unchecked, a huge value would stop start-up (TimeSpan overflow) or throw when the timer is armed.
+    private static double PositiveSeconds(IConfiguration config, string key, double fallback, double max) =>
+        double.TryParse(config[key], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0 && v <= max ? v : fallback;
 }

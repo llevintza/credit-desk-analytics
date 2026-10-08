@@ -112,6 +112,11 @@ public static class PositionsEndpoints
             return resolved.Error;
         var query = resolved.Query!;
 
+        // The overall deadline: a slow or stalled reader can't hold the permit and the connection for longer. Armed
+        // before a slot is taken, so nothing can throw between taking the slots and the finally that frees them.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(limits.ExportTimeout);
+
         // One export at a time per user, and a few in total (README §7.2, #127): an export holds a database permit
         // and a connection for the whole stream.
         var user = http.User.Identity!.Name!;
@@ -127,9 +132,6 @@ public static class PositionsEndpoints
                     detail: "Other exports are running. Try again shortly.");
         }
 
-        // The overall deadline: a slow or stalled reader can't hold the permit and the connection for longer.
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(limits.ExportTimeout);
         try
         {
             var rows = await WriteCsvAsync(http, grid, query, meta, deadline.Token);
