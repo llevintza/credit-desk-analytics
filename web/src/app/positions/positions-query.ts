@@ -2,7 +2,7 @@ import { DestroyRef, Injectable, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import type { IDatasource, IGetRowsParams } from 'ag-grid-community';
 import { HttpErrorResponse } from '@angular/common/http';
-import { BehaviorSubject, Subject, catchError, debounceTime, distinctUntilChanged, filter, mergeMap, of, retry, switchMap, tap, throwError, timer } from 'rxjs';
+import { BehaviorSubject, Subject, catchError, debounceTime, distinctUntilChanged, filter, finalize, mergeMap, of, retry, switchMap, tap, throwError, timer } from 'rxjs';
 import { GridBlock, GridRequest, RequestInfo, SortSpec } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
 import { toRows } from '../data-access/to-rows';
@@ -52,6 +52,8 @@ export class PositionsQuery {
   readonly error = signal<string | null>(null);
   /** Requests that completed (tests and the e2e "exactly one request" assertion read this). */
   readonly completed = signal(0);
+  /** Block requests in flight across views: "Loading…" shows until the last one returns or is aborted. */
+  private inFlight = 0;
 
   /** Set by the page: purge the grid's block cache so it asks again for the new view. */
   onViewChanged: () => void = () => undefined;
@@ -124,6 +126,7 @@ export class PositionsQuery {
   }
 
   private fetch({ view, params }: BlockRequest) {
+    this.inFlight++;
     this.loading.set(true);
     return this.api.positions(this.request(view, params.startRow, params.endRow)).pipe(
       retry({
@@ -134,7 +137,6 @@ export class PositionsQuery {
         },
       }),
       tap(({ block, info }) => {
-        this.loading.set(false);
         this.error.set(null);
         this.lastBlock.set(block);
         this.lastInfo.set(info);
@@ -143,11 +145,11 @@ export class PositionsQuery {
       }),
       catchError(() => {
         // One failed block shows an error tile; the rest of the page keeps working (README §9.4).
-        this.loading.set(false);
         this.error.set('Could not load positions. Scroll or change the view to retry.');
         params.failCallback();
         return of(null);
       }),
+      finalize(() => this.loading.set(--this.inFlight > 0)),
     );
   }
 }
