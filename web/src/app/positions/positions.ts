@@ -10,10 +10,10 @@ import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { Preset } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
-import { columnDefs, pinnedLeft } from './column-defs';
+import { columnDefs } from './column-defs';
 import { deskGridTheme, registerGridModules } from './grid-setup';
 import { PositionsQuery } from './positions-query';
-import { columnStateOf, initialPreset, nextPreset, page } from './presets';
+import { initialPreset, nextPreset, page, presetColumnState } from './presets';
 
 registerGridModules();
 
@@ -155,10 +155,7 @@ export class Positions {
     if (!preset || !this.grid) return;
     this.preset.set(name);
     Positions.remember(name);
-    const state = columnStateOf(preset.state);
-    // Identity columns stay visible and pinned whatever the preset says.
-    const pinned = pinnedLeft.map((colId) => ({ colId, hide: false, pinned: 'left' as const }));
-    this.grid.applyColumnState({ state: [...pinned, ...state.filter((s) => !pinnedLeft.includes(s.colId))], applyOrder: true, defaultState: { hide: true } });
+    this.grid.applyColumnState(presetColumnState(preset.state));
     this.grid.setFilterModel(preset.state.filterModel ?? null);
   }
 
