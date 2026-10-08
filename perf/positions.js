@@ -5,8 +5,9 @@
 //     grafana/k6:1.3.0 run - < perf/positions.js
 //
 // The API must run with the per-user limit raised for the run (RATE_LIMIT_PER_USER_PER_MIN/BURST): k6 is one user.
-// MISS requests use a filter value that has never been asked for, so neither the block nor the summary is cached
-// (the first block of a brand-new filtered view, the worst case). HIT repeats one request.
+// MISS requests are the whole book under a filter value that has never been asked for, so neither the block nor the
+// summary is cached: the first block of a brand-new view over every row, the worst case (#129). Run at scale 1.0
+// (the 'whole book' check expects ~20k rows). HIT repeats one request. Local stack only.
 import http from 'k6/http';
 import { check } from 'k6';
 
@@ -57,12 +58,17 @@ function post(data, body) {
 let counter = 0;
 export function miss(data) {
   counter += 1;
-  const threshold = 100 + __VU * 1000 + counter / 1000; // never repeated: a new view each time
+  // The worst case (#129): the whole book's first view, uncached. A threshold below every spread keeps every row,
+  // and is never repeated (per VU, per iteration), so neither the block nor the summary is cached.
+  const threshold = -1e6 * __VU - counter;
   const res = post(data, {
     columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }],
     filterModel: { spread_bp: { filterType: 'number', type: 'greaterThan', filter: threshold } },
   });
-  check(res, { 'MISS': (r) => r.headers['X-Cache'] === 'MISS' });
+  check(res, {
+    'MISS': (r) => r.headers['X-Cache'] === 'MISS',
+    'whole book': (r) => r.json('rowCount') >= 19000, // scale 1.0: ~20k positions per as-of
+  });
 }
 
 export function hit(data) {
