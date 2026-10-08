@@ -8,7 +8,8 @@
 // MISS requests are the whole book under a filter value that has never been asked for, so neither the block nor the
 // summary is cached: the first block of a brand-new view over every row, the worst case for the Risk preset (#129).
 // setup() counts the book once (unfiltered, which also warms the HIT key); every MISS must return exactly that many
-// rows, and the 'scale 1.0 book' check needs at least MIN_BOOK (default 19000) of them. HIT repeats that one request.
+// rows, and the 'book >= MIN_BOOK' check needs at least MIN_BOOK (a whole number, default 19000) of them. HIT repeats
+// that one request.
 // Cached blocks and summaries live until the next batch, so MISS filter values carry a per-run offset from setup():
 // back-to-back runs against the same API stay MISS without a restart or a cache clear. Local stack only.
 import http from 'k6/http';
@@ -24,6 +25,11 @@ const risk = [
   'credit_enhancement_pct', 'wal', 'coupon_current', 'pnl_carry', 'pnl_rates', 'pnl_spread', 'pnl_total_mtd',
   'worst_case_price', 'stress_loss_mv', 'watchlist_flag',
 ];
+
+// Fails closed: a blank or non-numeric MIN_BOOK stops the run instead of turning the guard off.
+const minBookRaw = (__ENV.MIN_BOOK || '19000').trim();
+if (!/^\d+$/.test(minBookRaw)) throw new Error(`MIN_BOOK must be a whole number, got '${__ENV.MIN_BOOK}'`);
+const MIN_BOOK = Number(minBookRaw);
 
 // The unfiltered view: setup() counts it (and so warms the HIT key); MISS adds a never-seen filter to it.
 const wholeBook = { columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }] };
@@ -54,7 +60,7 @@ export function setup() {
     run: Date.now() % 1e6, // a per-run offset, so no MISS key repeats one from an earlier run (#202)
   };
   data.book = post(data, wholeBook).json('rowCount');
-  check(data.book, { 'scale 1.0 book': (n) => n >= Number(__ENV.MIN_BOOK || 19000) });
+  check(data.book, { 'book >= MIN_BOOK': (n) => n >= MIN_BOOK });
   return data;
 }
 
