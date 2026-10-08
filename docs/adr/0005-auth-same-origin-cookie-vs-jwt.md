@@ -92,14 +92,15 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - **Correction:** the original text said this also gave the real client IP. It didn't. Trusting one hop of `X-Forwarded-For` yields the address that connected to Render, which is a **Cloudflare edge** shared by many clients. With the setting off, it yields Render's balancer. Either way, one client could exhaust the 5/min login window for everyone behind that address (R105-M1).
 - The client IP now comes from `ClientAddress` (`src/Desk.Api/Limits/ClientAddress.cs`), and the host no longer rewrites the remote address from `X-Forwarded-For`:
   - Headers are believed only if the socket peer is Render's network. Otherwise the peer is the client.
-  - The rightmost `X-Forwarded-For` entry is the hop Render saw. If it is in Cloudflare's published ranges, the client is `CF-Connecting-IP`, then `True-Client-IP`, then the entry Cloudflare appended to the left of its own.
+  - The rightmost `X-Forwarded-For` entry is the hop Render saw. If it is in Cloudflare's published ranges, the client is `CF-Connecting-IP`. Cloudflare always writes that header and overwrites any value a client sends.
+  - **Without `CF-Connecting-IP`, the key is the edge.** `True-Client-IP` and the entries left of the edge in `X-Forwarded-For` are not used: unless the zone enables them, a client can write them and Cloudflare passes them through. Believing them would let a caller rotate its key, or pin a victim's (R160-01). Keying on the edge fails closed: it brings back the shared window, but the caller can't choose its key.
   - If that hop is not Cloudflare, it is the client, and any `CF-*` header or `X-Forwarded-For` prefix it sent is ignored.
 - **Rejected: `ForwardedHeadersOptions` with `ForwardLimit = 2` and `KnownNetworks` set to Render plus Cloudflare.**
   - It gives the same answer when Cloudflare appends the client to `X-Forwarded-For`.
-  - It can't use `CF-Connecting-IP` / `True-Client-IP`, which are Cloudflare's own statement of the client.
+  - It can't use `CF-Connecting-IP`, which is Cloudflare's own statement of the client.
   - It hides the socket peer from the rest of the app.
   - The explicit resolver is a pure function, unit-tested chain by chain.
-- The Cloudflare ranges are a constant, checked against cloudflare.com/ips on 2026-10-08. If Cloudflare adds a range, clients behind it fall back to being keyed by their edge until the list is updated. That is the old behaviour, so it fails safe.
+- The Cloudflare ranges are a constant, checked against cloudflare.com/ips on 2026-10-08. If Cloudflare adds a range that isn't in the list, requests through it can't be spoofed, but they fall back to keying on the edge, which is the #116 shared window, until the list is updated. A scheduled check keeps the list current (#161).
 
 **Swagger UI and the CSP (#94)**
 - `/openapi/v1.json` and `/swagger` are admin-only.
