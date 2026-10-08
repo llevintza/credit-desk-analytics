@@ -7,7 +7,7 @@ Linked from [`tests/AGENTS.md`](../../../tests/AGENTS.md). Root item 6 and gate 
 - Floor, thresholds and the gate script come from the **base** sha (`_base`).
 - A missing `BASE_SHA` or missing gate fails closed.
 - Thresholds (`perf/coverage-thresholds.json`): diff line/branch ≥ 80, overall must not drop, tolerance 0.5.
-- A measured raise-only bump of `perf/coverage-baseline.json` may ride in the feature PR that earned it when the conditions in root item 6 hold. Any lowering or measurement-scope change needs its own `[workflows]` PR.
+- The raise-only `perf/coverage-baseline.json` exemption and the rules for lowering or measurement-scope changes are in root item 6; follow them there.
 
 ## Coverlet
 
