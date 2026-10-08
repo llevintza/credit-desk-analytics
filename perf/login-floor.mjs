@@ -19,10 +19,18 @@ const email = process.env.DESK_EMAIL;
 const password = process.env.DESK_PASSWORD;
 const samples = Number(process.env.SAMPLES ?? 60);
 const warmup = 5;
+// It sends repeated failed logins for DESK_EMAIL, enough to lock an account: refuse anything but a local stack.
+if (!['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)) {
+  console.error(`Refusing ${base.origin}: run this only against a local stack (localhost).`);
+  process.exit(2);
+}
 if (!email || !password) {
   console.error('Set DESK_EMAIL and DESK_PASSWORD (create the account with Desk.UserAdmin).');
   process.exit(2);
 }
+
+/** Never a real password: random per run. */
+const notThePassword = `not-${randomUUID()}`;
 
 const agent = base.protocol === 'https:' ? new https.Agent({ keepAlive: true }) : new http.Agent({ keepAlive: true });
 
@@ -59,8 +67,8 @@ await expect(200, email, password);
 const times = { unknown: [], wrong: [], success: [] };
 for (let i = 0; i < warmup + samples; i++) {
   const keep = i >= warmup;
-  const unknown = await expect(401, `nobody-${randomUUID()}@example.com`, 'wrong-password-123456');
-  const wrong = await expect(401, email, 'wrong-password-123456');
+  const unknown = await expect(401, `nobody-${randomUUID()}@example.com`, notThePassword);
+  const wrong = await expect(401, email, notThePassword);
   if (keep) times.unknown.push(unknown);
   if (keep) times.wrong.push(wrong);
   // Lockout is 5 failures: a correct login every 4th round clears the count, so every "wrong" sample is pre-lockout.
