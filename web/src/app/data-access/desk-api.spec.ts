@@ -55,38 +55,99 @@ describe('DeskApi', () => {
     expect(await file).toBeInstanceOf(Blob);
   });
 
-  it('reads cache status, server time and this request\'s compressed size from the response', () => {
-    const entry = (startTime: number, encodedBodySize: number, name = 'http://x/api/positions/query') =>
-      ({ name, startTime, encodedBodySize }) as PerformanceResourceTiming;
-    const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([
-      entry(5, 999),                                    // an earlier request
-      entry(30, 4096),                                  // a parallel block started later
-      entry(12, 2048),                                  // this one: first to start after `started`
-      entry(20, 1, 'http://x/api/meta/columns'),
-    ]);
+  it('reads cache status and server time from the response headers', () => {
     const res = new HttpResponse({ headers: new HttpHeaders({ 'X-Cache': 'HIT', 'Server-Timing': 'db;dur=0.0, ser;dur=0.0, total;dur=0.4' }) });
-    expect(DeskApi.info(res, 10)).toMatchObject({ cache: 'HIT', serverMs: 0.4, bytes: 2048 });
-
-    entries.mockReturnValue([]);
+    expect(DeskApi.info(res, 10)).toMatchObject({ cache: 'HIT', serverMs: 0.4 });
     expect(DeskApi.info(new HttpResponse({ headers: new HttpHeaders({ 'X-Cache': 'weird' }) }), 0))
       .toMatchObject({ cache: null, serverMs: null, bytes: null });
-    entries.mockReturnValue([entry(1, 0)]);
-    expect(DeskApi.info(new HttpResponse(), 0).bytes).toBeNull();
+  });
+});
 
-    // Near the browser's 250-entry limit the buffer is cleared so later requests are still recorded.
+/** Stands in for the browser's PerformanceObserver: entries are delivered by `deliver` or picked up by `takeRecords`. */
+class FakeObserver {
+  static last: FakeObserver;
+  queued: PerformanceEntry[] = [];
+  observed: PerformanceObserverInit | undefined;
+  constructor(private readonly callback: (list: { getEntries(): PerformanceEntry[] }) => void) {
+    FakeObserver.last = this;
+  }
+  observe(init: PerformanceObserverInit): void {
+    this.observed = init;
+  }
+  takeRecords(): PerformanceEntry[] {
+    const taken = this.queued;
+    this.queued = [];
+    return taken;
+  }
+  deliver(...entries: PerformanceEntry[]): void {
+    this.callback({ getEntries: () => entries });
+  }
+}
+
+describe('DeskApi positions bytes (resource timing)', () => {
+  let api: DeskApi;
+  let http: HttpTestingController;
+  const later = () => performance.now() + 1_000_000; // a start time after any request in the test began
+  const entry = (startTime: number, encodedBodySize: number, name = 'http://x/api/positions/query') =>
+    ({ name, startTime, encodedBodySize }) as PerformanceResourceTiming;
+  const block = { columns: [], data: [], rowCount: 0, summary: {}, asOf: 'x', generatedAt: 'x' };
+
+  function setUp(observer: unknown) {
+    vi.stubGlobal('PerformanceObserver', observer);
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    api = TestBed.inject(DeskApi);
+    http = TestBed.inject(HttpTestingController);
+  }
+
+  afterEach(() => {
+    http.verify();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('attributes this request\'s entry, exactly, and never clears the page-wide timing buffer', async () => {
+    setUp(FakeObserver);
     const clear = vi.spyOn(performance, 'clearResourceTimings');
-    entries.mockReturnValue(Array.from({ length: 201 }, (_, i) => entry(i, 10)));
-    DeskApi.info(new HttpResponse(), 0);
-    expect(clear).toHaveBeenCalled();
-    entries.mockRestore();
-    clear.mockRestore();
+    expect(FakeObserver.last.observed).toEqual({ entryTypes: ['resource'] });
+    FakeObserver.last.deliver(entry(0, 999), entry(later(), 1, 'http://x/api/meta/columns')); // stale; another URL
+    const result = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    FakeObserver.last.queued.push(entry(later(), 2048)); // recorded, not yet delivered
+    http.expectOne('/api/positions/query').flush(block);
+    const { info } = await result;
+    expect(info.bytes).toBe(2048);
+    expect(info).not.toHaveProperty('bytesApprox');
+    expect(clear).not.toHaveBeenCalled();
 
-    const original = performance.getEntriesByType;
-    Object.defineProperty(performance, 'getEntriesByType', { value: undefined, configurable: true });
-    try {
-      expect(DeskApi.info(new HttpResponse(), 0).bytes).toBeNull();
-    } finally {
-      Object.defineProperty(performance, 'getEntriesByType', { value: original, configurable: true });
-    }
+    // A request with no entry of its own reports no bytes (the stale entry is never attributed).
+    const next = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    http.expectOne('/api/positions/query').flush(block);
+    expect((await next).info.bytes).toBeNull();
+  });
+
+  it('marks the bytes approximate when parallel blocks overlap, and reports no bytes for an empty body', async () => {
+    setUp(FakeObserver);
+    const a = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    const b = firstValueFrom(api.positions({ startRow: 200, endRow: 400, columns: [] }));
+    const [reqA, reqB] = http.match('/api/positions/query');
+    const t = later();
+    FakeObserver.last.deliver(entry(t + 2, 4096), entry(t + 1, 2048));
+    reqB.flush(block);
+    reqA.flush(block);
+    const [infoA, infoB] = [(await a).info, (await b).info];
+    expect([infoA.bytesApprox, infoB.bytesApprox]).toEqual([true, true]);
+    expect([infoA.bytes, infoB.bytes].sort()).toEqual([2048, 4096]); // each entry is claimed once
+
+    const empty = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    FakeObserver.last.queued.push(entry(later(), 0));
+    http.expectOne('/api/positions/query').flush(block);
+    expect((await empty).info).toMatchObject({ bytes: null });
+  });
+
+  it('reports no bytes where the browser has no PerformanceObserver', async () => {
+    setUp(undefined);
+    expect((api as unknown as { observer: unknown }).observer).toBeNull();
+    const result = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
+    http.expectOne('/api/positions/query').flush(block);
+    expect((await result).info.bytes).toBeNull();
   });
 });
