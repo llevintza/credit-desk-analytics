@@ -115,9 +115,9 @@ export class PositionsQuery {
     };
   }
 
-  /** The current view without paging: what the CSV export streams. */
-  exportRequest(): Omit<GridRequest, 'startRow' | 'endRow'> {
-    const request: Partial<GridRequest> = this.request(this.view, 0, 0);
+  /** The current view without paging: what the CSV export streams, in the given (on-screen) column order. */
+  exportRequest(columns: string[] = this.view.columns): Omit<GridRequest, 'startRow' | 'endRow'> {
+    const request: Partial<GridRequest> = this.request({ ...this.view, columns }, 0, 0);
     delete request.startRow;
     delete request.endRow;
     return request as Omit<GridRequest, 'startRow' | 'endRow'>;

@@ -55,19 +55,31 @@ describe('DeskApi', () => {
     expect(await file).toBeInstanceOf(Blob);
   });
 
-  it('reads cache status, server time and compressed size from the response', () => {
+  it('reads cache status, server time and this request\'s compressed size from the response', () => {
+    const entry = (startTime: number, encodedBodySize: number, name = 'http://x/api/positions/query') =>
+      ({ name, startTime, encodedBodySize }) as PerformanceResourceTiming;
     const entries = vi.spyOn(performance, 'getEntriesByType').mockReturnValue([
-      { name: 'http://x/api/positions/query', encodedBodySize: 2048 } as PerformanceResourceTiming,
+      entry(5, 999),                                    // an earlier request
+      entry(30, 4096),                                  // a parallel block started later
+      entry(12, 2048),                                  // this one: first to start after `started`
+      entry(20, 1, 'http://x/api/meta/columns'),
     ]);
     const res = new HttpResponse({ headers: new HttpHeaders({ 'X-Cache': 'HIT', 'Server-Timing': 'db;dur=0.0, ser;dur=0.0, total;dur=0.4' }) });
-    expect(DeskApi.info(res, performance.now())).toMatchObject({ cache: 'HIT', serverMs: 0.4, bytes: 2048 });
+    expect(DeskApi.info(res, 10)).toMatchObject({ cache: 'HIT', serverMs: 0.4, bytes: 2048 });
 
     entries.mockReturnValue([]);
     expect(DeskApi.info(new HttpResponse({ headers: new HttpHeaders({ 'X-Cache': 'weird' }) }), 0))
       .toMatchObject({ cache: null, serverMs: null, bytes: null });
-    entries.mockReturnValue([{ name: 'http://x/api/positions/query', encodedBodySize: 0 } as PerformanceResourceTiming]);
+    entries.mockReturnValue([entry(1, 0)]);
     expect(DeskApi.info(new HttpResponse(), 0).bytes).toBeNull();
+
+    // Near the browser's 250-entry limit the buffer is cleared so later requests are still recorded.
+    const clear = vi.spyOn(performance, 'clearResourceTimings');
+    entries.mockReturnValue(Array.from({ length: 201 }, (_, i) => entry(i, 10)));
+    DeskApi.info(new HttpResponse(), 0);
+    expect(clear).toHaveBeenCalled();
     entries.mockRestore();
+    clear.mockRestore();
 
     const original = performance.getEntriesByType;
     Object.defineProperty(performance, 'getEntriesByType', { value: undefined, configurable: true });

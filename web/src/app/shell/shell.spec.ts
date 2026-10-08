@@ -144,9 +144,9 @@ describe('Shell', () => {
 
     expect(key({ key: '/' }).defaultPrevented).toBe(true);
     expect(actions.focusQuickFilter).toHaveBeenCalled();
-    key({ key: '2', altKey: true });
+    key({ key: '™', code: 'Digit2', altKey: true }); // macOS Option+2 types "™"; the physical key is what counts
     expect(navigate).toHaveBeenCalledWith(['/', 'funds']);
-    key({ key: '6', altKey: true });
+    key({ key: '6', code: 'Digit6', altKey: true });
     expect(navigate).toHaveBeenCalledWith(['/', 'usage']);
     key({ key: 'E', ctrlKey: true, shiftKey: true });
     expect(actions.exportCsv).toHaveBeenCalled();
@@ -168,7 +168,8 @@ describe('Shell', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     TestBed.inject(KeyboardService).register({});
     expect(key({ key: '/' }).defaultPrevented).toBe(false);
-    expect(key({ key: '6', altKey: true }).defaultPrevented).toBe(false); // Usage is admin-only
+    expect(key({ key: '6', code: 'Digit6', altKey: true }).defaultPrevented).toBe(false); // Usage is admin-only
+    expect(key({ key: '7', code: 'Digit7', altKey: true }).defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
     expect(key({ key: 'e', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false);
     expect(key({ key: 'p', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false);

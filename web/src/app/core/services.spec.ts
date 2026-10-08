@@ -55,10 +55,16 @@ describe('AuthService and guards', () => {
     req.flush(me);
     await login;
     expect(auth.me()).toEqual(me);
+    const scope = TestBed.inject(ScopeService);
+    scope.selected.set([7]);
+    scope.portfolios.set([{ portfolioId: 7, name: 'P7', fundId: 1, fundName: 'F' }]);
     const logout = firstValueFrom(auth.logout(), { defaultValue: undefined });
     http.expectOne('/api/auth/logout').flush(null);
     await logout;
     expect(auth.me()).toBeNull();
+    // The next account must not inherit this one's entitlement-scoped portfolios or selection.
+    expect(scope.selected()).toEqual([]);
+    expect(scope.portfolios()).toEqual([]);
   });
 
   it('authGuard lets a session through and sends everyone else to /login', async () => {
@@ -70,6 +76,12 @@ describe('AuthService and guards', () => {
 
     TestBed.inject(AuthService).me.set(me);
     expect(await firstValueFrom(run())).toBe(true);
+
+    // A cold-starting server (502) also goes to /login, whose "Waking the server…" state waits for it.
+    TestBed.inject(AuthService).me.set(undefined);
+    const cold = firstValueFrom(run());
+    http.expectOne('/api/me').flush('starting', { status: 502, statusText: 'Bad Gateway' });
+    expect(TestBed.inject(Router).serializeUrl((await cold) as UrlTree)).toBe('/login');
   });
 
   it('adminGuard keeps viewers out', () => {
@@ -96,10 +108,13 @@ describe('ScopeService', () => {
     const http = setup();
     const scope = TestBed.inject(ScopeService);
     expect(scope.isLatest()).toBe(false);
+    expect(scope.ready()).toBe(false);
     scope.load();
+    scope.load(); // the shell and the page both ask: one request
     http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-06', dates: ['2026-10-06', '2026-10-05'] });
     http.expectOne('/api/meta/portfolios').flush(portfolios);
     expect(scope.asOf()).toBe('2026-10-06');
+    expect(scope.ready()).toBe(true);
     expect(scope.isLatest()).toBe(true);
     expect(scope.funds().map((f) => [f.fundName, f.portfolios.length])).toEqual([['Fund A', 2], ['Fund B', 1]]);
     scope.load(); // already loaded
@@ -114,6 +129,12 @@ describe('ScopeService', () => {
     http.expectOne('/api/meta/as-of').flush('boom', { status: 500, statusText: 'x' });
     http.match('/api/meta/portfolios'); // cancelled by forkJoin once as-of fails; just take it off the queue
     expect(scope.error()).toBe(true);
+    expect(scope.ready()).toBe(true); // pages can still start (without an as-of: the API uses the latest)
+    scope.reset();
+    expect([scope.error(), scope.ready()]).toEqual([false, false]);
+    scope.load(); // a reset allows a new load
+    http.expectOne('/api/meta/as-of').flush({ latest: 'x', dates: ['x'] });
+    http.expectOne('/api/meta/portfolios').flush([]);
   });
 
   it('toggles portfolios and whole funds', () => {
@@ -133,6 +154,7 @@ describe('ScopeService', () => {
 });
 
 describe('ThemeService', () => {
+  beforeEach(() => localStorage.clear()); // other specs may have saved a theme
   afterEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();

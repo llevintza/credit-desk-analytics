@@ -72,19 +72,24 @@ export class DeskApi {
 
   static readonly positionsUrl = '/api/positions/query';
 
-  /** Request time, cache status, server time and compressed bytes (from the browser's resource timing). */
+  /**
+   * Request time, cache status, server time and compressed bytes. The bytes come from the browser's resource
+   * timing: this request's entry is the first one for the URL that started at or after `started` (parallel blocks
+   * start later). The buffer is cleared before it fills (browsers stop recording at 250 entries).
+   */
   static info(res: HttpResponse<unknown>, started: number): RequestInfo {
     const cache = res.headers.get('X-Cache');
     const timing = /total;dur=([\d.]+)/.exec(res.headers.get('Server-Timing') ?? '');
-    const entries = typeof performance.getEntriesByType === 'function'
-      ? (performance.getEntriesByType('resource') as PerformanceResourceTiming[]).filter((e) => e.name.endsWith(DeskApi.positionsUrl))
-      : [];
-    const last = entries.at(-1);
+    const all = typeof performance.getEntriesByType === 'function' ? (performance.getEntriesByType('resource') as PerformanceResourceTiming[]) : [];
+    const mine = all
+      .filter((e) => e.name.endsWith(DeskApi.positionsUrl) && e.startTime >= started)
+      .sort((a, b) => a.startTime - b.startTime)[0];
+    if (all.length > 200) performance.clearResourceTimings();
     return {
       ms: Math.round(performance.now() - started),
       cache: cache === 'HIT' || cache === 'MISS' ? cache : null,
       serverMs: timing ? Number(timing[1]) : null,
-      bytes: last && last.encodedBodySize > 0 ? last.encodedBodySize : null,
+      bytes: mine && mine.encodedBodySize > 0 ? mine.encodedBodySize : null,
     };
   }
 }

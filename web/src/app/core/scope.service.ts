@@ -24,17 +24,36 @@ export class ScopeService {
     return [...byFund.values()];
   });
   readonly error = signal(false);
+  /** True once dates are known or loading failed: pages can start their first request. */
+  readonly ready = computed(() => this.asOf() !== null || this.error());
+  private loading = false;
 
+  /** Idempotent: the shell and the first page may both ask; one request goes out. */
   load(): void {
-    if (this.dates().length) return;
+    if (this.loading || this.dates().length) return;
+    this.loading = true;
     forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() }).subscribe({
       next: ({ asOf, portfolios }) => {
+        this.loading = false;
         this.dates.set(asOf.dates);
         this.asOf.set(asOf.latest);
         this.portfolios.set(portfolios);
       },
-      error: () => this.error.set(true),
+      error: () => {
+        this.loading = false;
+        this.error.set(true);
+      },
     });
+  }
+
+  /** Forget everything (sign-out / a new account): the next load reads this user's entitlements. */
+  reset(): void {
+    this.loading = false;
+    this.dates.set([]);
+    this.asOf.set(null);
+    this.portfolios.set([]);
+    this.selected.set([]);
+    this.error.set(false);
   }
 
   toggle(portfolioId: number): void {

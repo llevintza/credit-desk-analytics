@@ -23,6 +23,8 @@ describe('Positions page with the real grid', () => {
     const el = fixture.nativeElement as HTMLElement;
     const http = TestBed.inject(HttpTestingController);
     expect(el.querySelector('.skeleton')).not.toBeNull();
+    http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-06', dates: ['2026-10-06'] });
+    http.expectOne('/api/meta/portfolios').flush([]);
 
     http.expectOne('/api/meta/columns').flush([
       { name: 'position_id', group: 'Keys', kind: 'Key', aggregation: 'None', header: 'Position' },

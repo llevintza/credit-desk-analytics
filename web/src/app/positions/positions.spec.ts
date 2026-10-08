@@ -51,7 +51,7 @@ function fakeGrid() {
   };
 }
 
-async function render(opts: { remembered?: string; failLoad?: boolean } = {}) {
+async function render(opts: { remembered?: string; failLoad?: boolean; scope?: 'loaded' | 'pending' | 'failed' } = {}) {
   localStorage.clear();
   if (opts.remembered) localStorage.setItem('desk.positions.preset', opts.remembered);
   TestBed.configureTestingModule({ imports: [Positions], providers: [provideHttpClient(), provideHttpClientTesting()] });
@@ -61,6 +61,14 @@ async function render(opts: { remembered?: string; failLoad?: boolean } = {}) {
   const http = TestBed.inject(HttpTestingController);
   const el = fixture.nativeElement as HTMLElement;
   expect(el.querySelector('.skeleton')).not.toBeNull(); // skeleton while the catalog loads
+  const scope = opts.scope ?? 'loaded';
+  if (scope === 'loaded') {
+    http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-06', dates: ['2026-10-06', '2026-10-05'] });
+    http.expectOne('/api/meta/portfolios').flush([]);
+  } else if (scope === 'failed') {
+    http.expectOne('/api/meta/as-of').flush('boom', { status: 500, statusText: 'x' });
+    http.match('/api/meta/portfolios');
+  }
   if (opts.failLoad) {
     http.expectOne('/api/meta/columns').flush('boom', { status: 500, statusText: 'x' });
     http.match('/api/presets/positions');
@@ -72,7 +80,11 @@ async function render(opts: { remembered?: string; failLoad?: boolean } = {}) {
   const grid = fakeGrid();
   const stub = fixture.debugElement.children.find((d) => d.componentInstance instanceof StubGrid)?.componentInstance as StubGrid | undefined;
   const query = fixture.debugElement.injector.get(PositionsQuery);
-  return { fixture, el, http, grid, stub, query, ready: () => stub!.gridReady.emit({ api: grid }) };
+  const ready = async () => {
+    stub!.gridReady.emit({ api: grid });
+    await fixture.whenStable();
+  };
+  return { fixture, el, http, grid, stub, query, ready };
 }
 
 describe('Positions page', () => {
@@ -81,12 +93,37 @@ describe('Positions page', () => {
     localStorage.clear();
   });
 
+  it('waits for the as-of date before the first request, so the first view loads once', async () => {
+    const { fixture, http, grid, query, ready } = await render({ scope: 'pending' });
+    await ready();
+    expect(grid.setGridOption).not.toHaveBeenCalledWith('datasource', expect.anything());
+    http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-06', dates: ['2026-10-06'] });
+    http.expectOne('/api/meta/portfolios').flush([]);
+    await fixture.whenStable();
+    expect(query.view.asOf).toBe('2026-10-06');
+    expect(grid.setGridOption).toHaveBeenCalledWith('datasource', query.datasource);
+    expect(grid.setGridOption.mock.calls.filter((c) => c[0] === 'datasource').length).toBe(1);
+  });
+
+  it('still opens the grid when the as-of dates cannot load (the API defaults to the latest)', async () => {
+    const { grid, query, ready } = await render({ scope: 'failed' });
+    await ready();
+    expect(grid.setGridOption).toHaveBeenCalledWith('datasource', query.datasource);
+    expect(query.view.asOf).toBeNull();
+    Object.assign(URL, { createObjectURL: () => 'blob:z', revokeObjectURL: () => undefined });
+    let name = '';
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { name = this.download; });
+    TestBed.inject(KeyboardService).actions().exportCsv!();
+    TestBed.inject(HttpTestingController).expectOne('/api/positions/export').flush(new Blob(['a']));
+    expect(name).toBe('positions-latest.csv');
+  });
+
   it('loads catalog and presets, then opens Risk with the identity columns pinned and only displayed columns requested', async () => {
     const { el, grid, stub, query, ready } = await render();
     expect(el.querySelector('.skeleton')).toBeNull();
     expect(stub).toBeTruthy();
     expect([...el.querySelectorAll('[data-testid=preset] option')].map((o) => o.textContent)).toEqual(['Risk', 'Mine (mine)']);
-    ready();
+    await ready();
     const applied = grid.applyColumnState.mock.calls[0][0];
     expect(applied.state.slice(0, 3)).toEqual(['deal_name', 'class', 'cusip'].map((colId) => ({ colId, hide: false, pinned: 'left' })));
     expect(applied.defaultState).toEqual({ hide: true });
@@ -96,7 +133,7 @@ describe('Positions page', () => {
 
   it('opens the remembered preset with its saved filters', async () => {
     const { grid, ready, el } = await render({ remembered: 'Mine' });
-    ready();
+    await ready();
     expect(grid.setFilterModel).toHaveBeenCalledWith({ dv01: { filterType: 'number' } });
     expect(el.textContent).toContain('Delete');
   });
@@ -110,7 +147,7 @@ describe('Positions page', () => {
   it('re-requests only when the displayed set changes, and purges on a new view', async () => {
     const { stub, grid, query, ready } = await render();
     stub!.displayedColumnsChanged.emit({}); // before the grid is ready: ignored
-    ready();
+    await ready();
     const setColumns = vi.spyOn(query, 'setColumns');
     grid.getAllDisplayedColumns.mockReturnValue(['deal_name'].map((id) => ({ getColId: () => id })));
     stub!.displayedColumnsChanged.emit({});
@@ -122,7 +159,7 @@ describe('Positions page', () => {
     const { stub, grid, ready } = await render();
     const mark = vi.spyOn(performance, 'mark');
     stub!.viewportChanged.emit({}); // no grid yet
-    ready();
+    await ready();
     stub!.firstDataRendered.emit({});
     stub!.firstDataRendered.emit({});
     expect(mark).toHaveBeenCalledTimes(1);
@@ -146,7 +183,7 @@ describe('Positions page', () => {
     select.value = 'Mine';
     select.dispatchEvent(new Event('change')); // before ready: nothing to apply to
     expect(grid.applyColumnState).not.toHaveBeenCalled();
-    ready();
+    await ready();
     select.dispatchEvent(new Event('change'));
     expect(localStorage.getItem('desk.positions.preset')).toBe('Mine');
     grid.applyColumnState.mockClear();
@@ -157,10 +194,14 @@ describe('Positions page', () => {
   it('follows the scope, fills the summary row and status bar, and repaints on a new negative style', async () => {
     const { fixture, grid, query, ready } = await render();
     const update = vi.spyOn(query, 'update');
-    ready();
+    await ready();
     TestBed.inject(ScopeService).asOf.set('2026-10-05');
     await fixture.whenStable();
     expect(update).toHaveBeenCalledWith({ asOf: '2026-10-05', portfolioIds: [] });
+    update.mockClear();
+    TestBed.inject(ThemeService).palette.set('colorblind'); // an unrelated change re-runs nothing here
+    await fixture.whenStable();
+    expect(update).not.toHaveBeenCalled();
     TestBed.inject(ScopeService).selected.set([3]);
     await fixture.whenStable();
     expect(update).toHaveBeenCalledWith({ asOf: '2026-10-05', portfolioIds: [3] });
@@ -192,7 +233,7 @@ describe('Positions page', () => {
     const save = () => (el.querySelector('[aria-label="Save the current columns as a preset"]') as HTMLButtonElement).click();
     save(); // no grid yet
     expect(prompt).not.toHaveBeenCalled();
-    ready();
+    await ready();
     save(); // cancelled
     http.expectNone('/api/presets/positions');
 
@@ -212,10 +253,15 @@ describe('Positions page', () => {
 
   it('offers the current name when saving over an own preset, and deletes it', async () => {
     const { fixture, el, http, grid, ready } = await render({ remembered: 'Mine' });
-    ready();
+    await ready();
     const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null);
     (el.querySelector('[aria-label="Save the current columns as a preset"]') as HTMLButtonElement).click();
     expect(prompt.mock.calls[0][1]).toBe('Mine');
+
+    (el.querySelector('[aria-label="Delete this preset"]') as HTMLButtonElement).click();
+    http.expectOne((r) => r.method === 'DELETE').flush('no', { status: 500, statusText: 'x' });
+    await fixture.whenStable();
+    expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not delete "Mine"');
 
     (el.querySelector('[aria-label="Delete this preset"]') as HTMLButtonElement).click();
     http.expectOne((r) => r.method === 'DELETE' && r.urlWithParams.endsWith('name=Mine')).flush(null);
@@ -226,9 +272,10 @@ describe('Positions page', () => {
   });
 
   it('exports the current view as a CSV download, once at a time', async () => {
-    const { fixture, el, http, query, ready } = await render();
-    ready();
-    vi.spyOn(query, 'exportRequest').mockReturnValue({ columns: ['dv01'] });
+    const { fixture, el, http, query, grid, ready } = await render();
+    await ready();
+    const exportRequest = vi.spyOn(query, 'exportRequest').mockReturnValue({ columns: ['dv01'] });
+    grid.getAllDisplayedColumns.mockReturnValue(['dv01', 'deal_name'].map((id) => ({ getColId: () => id }))); // dragged
     const createUrl = vi.fn(() => 'blob:x');
     const revoke = vi.fn();
     Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: revoke });
@@ -241,6 +288,7 @@ describe('Positions page', () => {
     expect(button.textContent).toContain('Exporting');
     http.expectOne('/api/positions/export').flush(new Blob(['a,b']));
     await fixture.whenStable();
+    expect(exportRequest).toHaveBeenCalledWith(['dv01', 'deal_name']); // on-screen order, not the preset's
     expect(click).toHaveBeenCalled();
     expect(revoke).toHaveBeenCalledWith('blob:x');
 
@@ -250,9 +298,8 @@ describe('Positions page', () => {
     expect(el.querySelector('[role=alert]')?.textContent).toContain('Export failed');
   });
 
-  it('names the file after the as-of date when one is chosen', async () => {
-    const { http, query, ready } = await render();
-    ready();
+  it('exports the query view when the grid is not ready yet, named after the as-of date', async () => {
+    const { http, query } = await render();
     query.update({ asOf: '2026-10-05' });
     Object.assign(URL, { createObjectURL: () => 'blob:y', revokeObjectURL: () => undefined });
     let name = '';
@@ -271,7 +318,7 @@ describe('Positions page', () => {
 
     press({ key: 'c', ctrlKey: true }); // before ready
     expect(writeText).not.toHaveBeenCalled();
-    ready();
+    await ready();
     press({ key: 'c' });
     press({ key: 'v', ctrlKey: true });
     expect(writeText).not.toHaveBeenCalled();
@@ -283,6 +330,12 @@ describe('Positions page', () => {
     grid.getDisplayedRowAtIndex.mockReturnValue(undefined);
     press({ key: 'c', ctrlKey: true });
     expect(writeText).toHaveBeenLastCalledWith('');
+    // The pinned Total row has its own index space.
+    const pinned = { data: { dv01: 9999 } };
+    Object.assign(grid, { getPinnedBottomRow: vi.fn(() => pinned) });
+    grid.getFocusedCell.mockReturnValue({ rowIndex: 0, rowPinned: 'bottom', column: { getColId: () => 'dv01' } });
+    press({ key: 'c', ctrlKey: true });
+    expect(writeText).toHaveBeenLastCalledWith('9999');
     grid.getFocusedCell.mockReturnValue(null);
     writeText.mockClear();
     press({ key: 'c', ctrlKey: true });
@@ -305,7 +358,7 @@ describe('Positions page', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
     const { ready, grid } = await render();
-    ready();
+    await ready();
     expect(grid.applyColumnState).toHaveBeenCalled();
   });
 });

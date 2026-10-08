@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
 import type { ColGroupDef, GridApi, GridOptions, GridReadyEvent } from 'ag-grid-community';
 import { forkJoin } from 'rxjs';
@@ -46,7 +47,10 @@ export class Positions {
   protected readonly loadError = signal<string | null>(null);
   protected readonly exporting = signal(false);
   protected readonly saving = signal(false);
+  private readonly destroyRef = inject(DestroyRef);
   private grid: GridApi | null = null;
+  private readonly gridReady = signal(false);
+  private attached = false;
   private painted = false;
 
   protected readonly gridOptions: GridOptions = {
@@ -65,7 +69,8 @@ export class Positions {
 
   constructor() {
     this.query.onViewChanged = () => this.grid?.purgeInfiniteCache();
-    forkJoin({ catalog: this.api.columns(), presets: this.api.presets(page) }).subscribe({
+    this.scope.load(); // no-op when the shell already loaded it
+    forkJoin({ catalog: this.api.columns(), presets: this.api.presets(page) }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: ({ catalog, presets }) => {
         this.columns.set(columnDefs(catalog, this.theme.negatives));
         this.presets.set(presets);
@@ -74,13 +79,20 @@ export class Positions {
       error: () => this.loadError.set('Could not load the column catalog or presets. Reload to try again.'),
     });
 
-    // Scope changes (as-of, portfolios) from the top bar are a new view.
+    // Scope changes (as-of, portfolios) from the top bar are a new view. The grid gets its datasource only once
+    // the as-of date is known, so the first view is requested once, not once without it and again with it.
     effect(() => {
       const asOf = this.scope.asOf();
       const portfolioIds = this.scope.selected();
+      const ready = this.gridReady() && this.scope.ready();
       untracked(() => {
         if (asOf !== this.query.view.asOf || portfolioIds.join() !== this.query.view.portfolioIds.join())
           this.query.update({ asOf, portfolioIds });
+        if (ready && !this.attached) {
+          this.attached = true;
+          this.query.setColumns(this.displayed());
+          this.grid!.setGridOption('datasource', this.query.datasource);
+        }
       });
     });
 
@@ -112,8 +124,7 @@ export class Positions {
   protected onGridReady(e: GridReadyEvent): void {
     this.grid = e.api;
     this.applyPreset(this.preset());
-    this.query.setColumns(this.displayed());
-    e.api.setGridOption('datasource', this.query.datasource);
+    this.gridReady.set(true);
   }
 
   /** Only a change to the displayed *set* reaches the API (PositionsQuery.setColumns); moves and resizes don't. */
@@ -160,9 +171,10 @@ export class Positions {
     if (!name) return;
     const state = { columnState: this.grid.getColumnState(), filterModel: this.grid.getFilterModel() };
     this.saving.set(true);
-    this.api.savePreset(page, name, state).subscribe({
+    this.api.savePreset(page, name, state).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: () => {
         this.saving.set(false);
+        this.loadError.set(null);
         const own: Preset = { name, builtIn: false, state, updatedAt: new Date().toISOString() };
         this.presets.update((list) => [...list.filter((p) => p.name !== name), own]);
         this.preset.set(name);
@@ -178,9 +190,13 @@ export class Positions {
   protected deletePreset(): void {
     // Only offered for the user's own presets (the template shows the button for those).
     const name = this.preset();
-    this.api.deletePreset(page, name).subscribe(() => {
-      this.presets.update((list) => list.filter((p) => p.name !== name));
-      this.applyPreset(initialPreset(this.presets(), null));
+    this.api.deletePreset(page, name).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: () => {
+        this.loadError.set(null); // a success clears an earlier failure's tile
+        this.presets.update((list) => list.filter((p) => p.name !== name));
+        this.applyPreset(initialPreset(this.presets(), null));
+      },
+      error: () => this.loadError.set(`Could not delete "${name}". Reload and try again.`),
     });
   }
 
@@ -188,7 +204,9 @@ export class Positions {
   protected exportCsv(): void {
     if (this.exporting()) return;
     this.exporting.set(true);
-    this.api.exportPositions(this.query.exportRequest()).subscribe({
+    // The on-screen column order, not the preset's (columns may have been dragged since).
+    const columns = this.grid ? this.displayed() : this.query.view.columns;
+    this.api.exportPositions(this.query.exportRequest(columns)).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: (blob) => {
         this.exporting.set(false);
         const url = URL.createObjectURL(blob);
@@ -210,7 +228,9 @@ export class Positions {
     if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || !this.grid) return;
     const cell = this.grid.getFocusedCell();
     if (!cell) return;
-    const value = this.grid.getDisplayedRowAtIndex(cell.rowIndex)?.data?.[cell.column.getColId()];
+    // The pinned Total row has its own index space: rowIndex 0 there is not body row 0.
+    const node = cell.rowPinned === 'bottom' ? this.grid.getPinnedBottomRow(cell.rowIndex) : this.grid.getDisplayedRowAtIndex(cell.rowIndex);
+    const value = node?.data?.[cell.column.getColId()];
     void navigator.clipboard?.writeText(value === null || value === undefined ? '' : String(value));
   }
 

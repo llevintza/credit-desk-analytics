@@ -46,7 +46,8 @@ export function formatCell(kind: ColumnKind, value: Cell, negatives: NegativeSty
 /** Full precision for the hover tooltip (README §9.1). */
 export function fullPrecision(kind: ColumnKind, value: Cell): string {
   if (value === null || value === undefined) return '';
-  if (kind === 'Pct' && typeof value === 'number') return `${value * 100}%`;
+  // ×100 in binary floating point shows noise (0.07 → 7.000000000000001): 12 significant digits drops it.
+  if (kind === 'Pct' && typeof value === 'number') return `${Number((value * 100).toPrecision(12))}%`;
   return String(value);
 }
 

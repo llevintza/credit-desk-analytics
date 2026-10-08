@@ -44,6 +44,8 @@ describe('format', () => {
   it('gives full precision for tooltips', () => {
     expect(fullPrecision('Price', 99.123456789)).toBe('99.123456789');
     expect(fullPrecision('Pct', 0.05)).toBe('5%');
+    expect(fullPrecision('Pct', 0.07)).toBe('7%');
+    expect(fullPrecision('Pct', 0.0123)).toBe('1.23%');
     expect(fullPrecision('Text', null)).toBe('');
   });
 

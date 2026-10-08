@@ -73,8 +73,9 @@ export class Shell {
     if (e.key === '/' && !typing && actions.focusQuickFilter) {
       e.preventDefault();
       actions.focusQuickFilter();
-    } else if (e.altKey && /^[1-6]$/.test(e.key)) {
-      const item = this.nav().find((n) => n.key === Number(e.key));
+    } else if (e.altKey && /^Digit[1-6]$/.test(e.code)) {
+      // e.code, not e.key: on macOS Option+2 types "™", but the physical key is still Digit2.
+      const item = this.nav().find((n) => n.key === Number(e.code.slice(5)));
       if (item) {
         e.preventDefault();
         void this.router.navigate(['/', item.path]);
