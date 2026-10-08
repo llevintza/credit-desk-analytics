@@ -90,7 +90,7 @@ Option 4. A `changes` job runs `_base/.github/scripts/ci-changes.mjs` on `pull_r
 
 | Area | Paths | Jobs |
 |---|---|---|
-| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**` | `api`, `coverage` |
+| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, .NET files under `perf/` (benchmarks in `CreditDesk.slnx`) | `api`, `coverage` |
 | `web` | `web/**` | `web`, `coverage` |
 | `db` | `src/Desk.Data/**`, `src/Desk.Seeder/**`, `tests/Desk.Data.Tests/**`, `tests/Desk.Seeder.Tests/**` | `api`, `db-tools`, `coverage` |
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, and any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |

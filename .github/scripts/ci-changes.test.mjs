@@ -74,6 +74,12 @@ const FIXTURES = [
     jobs: jobsOf("run_budgets"),
   },
   {
+    name: "perf .NET benchmark (in CreditDesk.slnx, built by the api job)",
+    paths: ["perf/GridBenchmark/Bench.cs", "perf/LoadBenchmark/LoadBenchmark.csproj"],
+    flags: flagsOf("api", "app", "perf"),
+    jobs: jobsOf("run_api", "run_compose_smoke", "run_e2e", "run_budgets", "run_coverage"),
+  },
+  {
     name: "mixed (web + perf)",
     paths: ["web/src/app/grid.ts", "perf/payload-size.mjs", "README.md"],
     flags: flagsOf("web", "app", "perf"),

@@ -75,12 +75,20 @@ const AREA_PREFIXES = Object.freeze({
   perf: ["perf/"],
 });
 
+// .NET projects under perf/ (GridBenchmark, LoadBenchmark) are in CreditDesk.slnx and
+// reference src/, so the api job's solution build must run for them too.
+const PERF_DOTNET = /^perf\/.+\.(cs|csproj|fsproj|props|targets)$/;
+
 /** Areas a single path touches: `null` means shared/unknown (every flag), `[]` means docs. */
 export function areasFor(path) {
   if (isDocs(path)) return [];
   if (isShared(path)) return null;
   // A prefix ending in `/` is a directory; anything else is one exact file.
-  const hit = AREAS.filter((a) => AREA_PREFIXES[a].some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p)));
+  const hit = AREAS.filter(
+    (a) =>
+      AREA_PREFIXES[a].some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p)) ||
+      (a === "api" && PERF_DOTNET.test(path)),
+  );
   return hit.length ? hit : null;
 }
 
