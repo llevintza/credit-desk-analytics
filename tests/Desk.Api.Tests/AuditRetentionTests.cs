@@ -1,4 +1,5 @@
 using Desk.Api.Audit;
+using Desk.Data;
 using Desk.Data.App;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
@@ -124,13 +125,16 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
         Assert.Empty(await RemainingAsync(marker, cs));
     }
 
-    /// <summary>The services <see cref="AuditPurgeTimer"/> resolves: a pooled factory on <paramref name="cs"/> that counts DELETEs.</summary>
-    private static ServiceProvider Services(string cs, DeleteCounter deletes)
+    /// <summary>
+    /// The services <see cref="AuditPurgeTimer"/> resolves: a pooled factory on <paramref name="cs"/> that counts
+    /// DELETEs and, when <paramref name="connections"/> is given, every connection it opens.
+    /// </summary>
+    private static ServiceProvider Services(string cs, DeleteCounter deletes, DbConnectionCounter? connections = null)
     {
         var services = new ServiceCollection();
         services.AddPooledDbContextFactory<AppDbContext>(o => o
             .UseNpgsql(cs, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema))
-            .AddInterceptors(deletes));
+            .AddInterceptors([deletes, .. connections is null ? [] : new IInterceptor[] { connections }]));
         return services.BuildServiceProvider();
     }
 
@@ -178,28 +182,33 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
         var time = new FakeTimeProvider(start);
         var retention = AuditTests.Retention(time: time);
         var deletes = new DeleteCounter();
-        await using var sp = Services(cs, deletes);
+        var connections = new DbConnectionCounter();
+        await using var sp = Services(cs, deletes, connections);
         var logger = new AuditPurgeTimerTests.CapturingLogger();
         using var timer = AuditPurgeTimerTests.Timer(sp, retention, time, logger);
         await timer.StartAsync(Ct);
 
-        time.Advance(timer.CheckEvery); // first check: due, nothing to delete
-        await AuditPurgeTimerTests.WaitForAsync(() => logger.Lines.Count == 1);
+        await AuditPurgeTimerTests.TickAsync(timer, time); // first check: due, nothing to delete
+        Assert.Single(logger.Lines);
 
-        // A row ages past the window during the idle day. The hourly checks before the day is up don't purge.
+        // A row ages past the window during the idle day. The 23 hourly checks before the day is up each run,
+        // and none of them opens a connection or deletes anything.
         var marker = await InsertAsync(cs, time.GetUtcNow() - TimeSpan.FromDays(90) + TimeSpan.FromHours(12));
-        for (var h = 1; h < 24; h++) time.Advance(timer.CheckEvery);
-        await Task.Delay(200, Ct);
+        var (opened, deleted) = (connections.Opened, deletes.Count);
+        for (var h = 1; h < 24; h++) await AuditPurgeTimerTests.TickAsync(timer, time);
+        Assert.Equal(24, timer.Checks);
+        Assert.Equal(opened, connections.Opened);
+        Assert.Equal(deleted, deletes.Count);
         Assert.Single(await RemainingAsync(marker, cs));
         Assert.Single(logger.Lines);
-        var deletesBefore = deletes.Count;
 
-        time.Advance(timer.CheckEvery); // 24 h after the last purge: due again
-        await AuditPurgeTimerTests.WaitForAsync(() => logger.Lines.Count == 2);
+        await AuditPurgeTimerTests.TickAsync(timer, time); // 24 h after the last purge: due again
         await timer.StopAsync(Ct);
 
         Assert.Empty(await RemainingAsync(marker, cs));
-        Assert.Equal(deletesBefore + 1, deletes.Count);
+        Assert.True(connections.Opened > opened);
+        Assert.Equal(deleted + 1, deletes.Count);
+        Assert.Equal(2, logger.Lines.Count);
         Assert.StartsWith("Purged 1 ", logger.Lines[1].Text);
     }
 
