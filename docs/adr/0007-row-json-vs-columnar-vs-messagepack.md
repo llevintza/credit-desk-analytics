@@ -18,6 +18,8 @@ The P1 grid fetches blocks of 200 rows of 40–200 columns. README §10 sets the
 
 The same 200-row block for each (seed 42, scale 1.0). Server: .NET 10, Apple M5. Client: Node 24 (V8, the same JSON engine as Chrome).
 
+**These are local measurements.** The wire sizes below are enforced in CI by the `budgets` job (#125, `perf/payload-size.mjs` on a scale-1.0 compose stack): it fails above the Risk budget and warns above All.
+
 | Preset | Format | raw KB | gzip KB | **brotli KB** | serialize ms | parse ms | parse + rows ms (p50 / p95) |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Risk (42 cols) | Row JSON | 170.4 | 46.8 | 39.4 | 1.45 | 0.26 | 0.26 / 0.37 |

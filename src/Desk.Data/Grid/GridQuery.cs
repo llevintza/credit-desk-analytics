@@ -55,14 +55,16 @@ public sealed record GridSort(ColumnDef Column, bool Descending);
 public sealed record GridFilter(ColumnDef Column, bool Or, IReadOnlyList<GridCondition> Conditions);
 
 /// <summary>
-/// A typed condition. <see cref="Value"/> / <see cref="ValueTo"/> are double, string or DateOnly by filter kind;
+/// A typed condition. <see cref="Value"/> / <see cref="ValueTo"/> are decimal (money), double (other numbers),
+/// string or DateOnly by filter kind;
 /// <see cref="Values"/> is the set filter's list (null entries mean "(Blanks)").
 /// </summary>
 public sealed record GridCondition(FilterKind Kind, FilterOp Op, object? Value = null, object? ValueTo = null, IReadOnlyList<string?>? Values = null);
 
 /// <summary>
-/// A request whose filter can't be applied as asked (too many set values or conditions). Dropping it would widen
-/// the result past what the user selected, so the API answers 400 instead.
+/// A request whose filter can't be applied as asked (too many filters, conditions or set values, text too long, a
+/// money value out of range, or a combined filter with an unusable part). Dropping it would widen the result past
+/// what the user selected, so the API answers 400 instead.
 /// </summary>
 public sealed class GridRequestException(string message) : Exception(message);
 

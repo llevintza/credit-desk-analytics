@@ -7,9 +7,10 @@ namespace Desk.Data.Grid;
 /// <summary>
 /// Whitelists a <see cref="GridRequest"/> against the column catalog (README §6 P1 server rules, AGENTS.md SQL safety).
 /// Unknown or malformed parts are dropped, never echoed into SQL and never an error: a bad sort id, an injection
-/// attempt in a filter key or a filter whose value doesn't parse simply has no effect. The one exception is a
-/// filter that is valid but too large to apply (<see cref="GridRequestException"/>, a 400): dropping it would
-/// widen the result.
+/// attempt in a filter key or a filter whose value doesn't parse simply has no effect. The exception is a filter
+/// that is well-formed but can't be applied as asked (<see cref="GridRequestException"/>, a 400): too many filters,
+/// conditions or set values, text over <see cref="MaxTextLength"/>, a money value beyond <c>decimal</c>'s range, or
+/// a combined filter with a part that can't be applied. Dropping any of those would widen the result.
 /// </summary>
 public sealed class GridQueryNormalizer
 {
@@ -81,16 +82,20 @@ public sealed class GridQueryNormalizer
         var filters = new List<GridFilter>();
         foreach (var (key, spec) in (model ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
-            if (filters.Count >= MaxFilters) break;
             if (spec is null || !_byName.TryGetValue(key, out var col)) continue;
+            // Refuse before doing the work of filter 51: cutting the list would widen the result (#130 N7).
+            if (filters.Count == MaxFilters && Applies(col, spec))
+                throw new GridRequestException($"More than {MaxFilters} filters; at most {MaxFilters}.");
 
             if (spec.Conditions is { Length: > 0 } parts)
             {
                 if (parts.Length > MaxConditions)
                     throw new GridRequestException($"Filter on {col.Name} has {parts.Length} conditions; at most {MaxConditions}.");
-                var conditions = parts.Select(p => Condition(col, p, spec.FilterType)).OfType<GridCondition>().ToList();
-                if (conditions.Count == parts.Length)
-                    filters.Add(new GridFilter(col, string.Equals(spec.Operator, "OR", StringComparison.OrdinalIgnoreCase), conditions));
+                var conditions = parts.Select(p => Condition(col, p, spec.FilterType)).ToList();
+                // Dropping a combined filter because one part can't be applied would widen the result (#130 N7).
+                if (conditions.Any(c => c is null))
+                    throw new GridRequestException($"Filter on {col.Name} has a condition that can't be applied.");
+                filters.Add(new GridFilter(col, string.Equals(spec.Operator, "OR", StringComparison.OrdinalIgnoreCase), [.. conditions.OfType<GridCondition>()]));
             }
             else if (Condition(col, spec, spec.FilterType) is { } condition)
             {
@@ -100,13 +105,17 @@ public sealed class GridQueryNormalizer
         return filters;
     }
 
+    /// <summary>Whether a filter on a known column would be kept (its conditions are checked, not built).</summary>
+    private static bool Applies(ColumnDef col, FilterSpec spec) =>
+        spec.Conditions is { Length: > 0 } || Condition(col, spec, spec.FilterType) is not null;
+
     private static GridCondition? Condition(ColumnDef col, FilterSpec spec, string? parentType)
     {
         var filterType = spec.FilterType ?? parentType;
         return filterType switch
         {
-            "number" when IsNumeric(col.Kind) => NumberCondition(spec),
-            "text" when col.Kind == ColumnKind.Text => TextCondition(spec),
+            "number" when IsNumeric(col.Kind) => NumberCondition(col, spec),
+            "text" when col.Kind == ColumnKind.Text => TextCondition(col, spec),
             "date" when col.Kind == ColumnKind.Date => DateCondition(spec),
             "set" => SetCondition(col, spec),
             _ => null,
@@ -116,7 +125,7 @@ public sealed class GridQueryNormalizer
     internal static bool IsNumeric(ColumnKind kind) => kind is ColumnKind.Key or ColumnKind.Money or ColumnKind.Price
         or ColumnKind.Bp or ColumnKind.Pct or ColumnKind.Ratio or ColumnKind.Count;
 
-    private static GridCondition? NumberCondition(FilterSpec spec)
+    private static GridCondition? NumberCondition(ColumnDef col, FilterSpec spec)
     {
         var op = spec.Type switch
         {
@@ -134,11 +143,33 @@ public sealed class GridQueryNormalizer
         if (op is null) return null;
         if (op is FilterOp.Blank or FilterOp.NotBlank) return new GridCondition(FilterKind.Number, op.Value);
 
-        var from = Number(spec.Filter);
+        var from = Number(col, spec.Filter);
         if (from is null) return null;
         if (op != FilterOp.InRange) return new GridCondition(FilterKind.Number, op.Value, from);
-        var to = Number(spec.FilterTo);
+        var to = Number(col, spec.FilterTo);
         return to is null ? null : new GridCondition(FilterKind.Number, op.Value, from, to);
+    }
+
+    /// <summary>
+    /// The filter value as the column's type: <c>decimal</c> for money (<c>numeric</c>, #130 N4), so the comparison
+    /// stays exact and on the column's own type; <c>double</c> for the <c>double precision</c> and integer columns.
+    /// </summary>
+    private static object? Number(ColumnDef col, JsonElement? e) =>
+        col.Kind == ColumnKind.Money ? Money(col, e) : Number(e);
+
+    private static decimal? Money(ColumnDef col, JsonElement? e)
+    {
+        string? text;
+        if (e is { ValueKind: JsonValueKind.Number } n) text = n.GetRawText();
+        else if (e is { ValueKind: JsonValueKind.String } s) text = s.GetString();
+        else return null;
+        if (decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+            return d / 1.000000000000000000000000000000000m; // drops trailing zeros: 1000, 1000.0 and 1e3 share a cache key
+        // A real number decimal can't hold is a filter we can't apply; dropping it would widen the result. "NaN" and
+        // "Infinity" also parse as double but aren't numbers the user typed: they're dropped like any non-number.
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && !double.IsNaN(v) && text!.Any(char.IsAsciiDigit))
+            throw new GridRequestException($"Filter value on {col.Name} is outside the supported range.");
+        return null;
     }
 
     private static double? Number(JsonElement? e)
@@ -150,7 +181,7 @@ public sealed class GridQueryNormalizer
         return double.IsFinite(v) ? v : null;
     }
 
-    private static GridCondition? TextCondition(FilterSpec spec)
+    private static GridCondition? TextCondition(ColumnDef col, FilterSpec spec)
     {
         var op = spec.Type switch
         {
@@ -166,9 +197,15 @@ public sealed class GridQueryNormalizer
         };
         if (op is null) return null;
         if (op is FilterOp.Blank or FilterOp.NotBlank) return new GridCondition(FilterKind.Text, op.Value);
-        return spec.Filter is { ValueKind: JsonValueKind.String } s && s.GetString() is { Length: > 0 and <= MaxTextLength } text
+        if (spec.Filter is not { ValueKind: JsonValueKind.String } s)
+            return null;
+        var text = s.GetString()!; // never null for a JSON string
+        if (text.Length == 0)
+            return null;
+        // A long search is a real filter: dropping it would widen the result (#130 N7).
+        return text.Length <= MaxTextLength
             ? new GridCondition(FilterKind.Text, op.Value, text)
-            : null;
+            : throw new GridRequestException($"Filter text on {col.Name} is {text.Length} characters; at most {MaxTextLength}.");
     }
 
     private static GridCondition? DateCondition(FilterSpec spec)
