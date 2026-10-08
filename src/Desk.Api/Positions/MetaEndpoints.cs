@@ -42,7 +42,8 @@ public static class MetaEndpoints
             .Produces<PresetResponse[]>().ProducesProblem(StatusCodes.Status404NotFound);
         presets.MapPut("/{page}", SavePresetAsync)
             .WithName("SavePreset").WithSummary("Creates or replaces one of the current user's presets. Needs X-XSRF-TOKEN.")
-            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
         presets.MapDelete("/{page}", DeletePresetAsync)
             .WithName("DeletePreset").WithSummary("Deletes one of the current user's presets (?name=). Needs X-XSRF-TOKEN.")
             .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound);
