@@ -459,6 +459,8 @@ function checkSkippableDependents(yml) {
     if (!skippable.length) continue;
     dependents++;
     const cond = jobIf(body);
+    // An expression never needs `#`: a comment on or under the if must not satisfy the checks.
+    assert.doesNotMatch(cond, /#/, `${id}: its job-level if carries a comment`);
     assert.ok(cond.includes("!cancelled()"), `${id} needs [${skippable}] but its job-level if has no !cancelled()`);
     for (const n of skippable.filter((x) => x !== "changes")) {
       assert.ok(
@@ -507,4 +509,15 @@ test("dependency checker: unrecognised needs and job-key forms fail, never skip 
     () => checkSkippableDependents(wf(`# a column-0 comment\n  summary:\n    needs: [api]\n${onlyCancelled}`)),
     /summary must accept success or skipped/,
   );
+});
+
+test("dependency checker: a comment on or under the job-level if fails (R205-02)", () => {
+  const wf = (job) => `name: x\non: push\njobs:\n  api:\n    runs-on: ubuntu-latest\n${job}`;
+  const text = `!cancelled() contains(fromJSON('["success", "skipped"]'), needs.api.result)`;
+  for (const ifs of [`    if: \${{ success() }} # ${text}\n`, `    if: \${{ success() }}\n      # ${text}\n`]) {
+    assert.throws(
+      () => checkSkippableDependents(wf(`  summary:\n    needs: [api]\n${ifs}    steps:\n      - run: echo\n`)),
+      /summary: its job-level if carries a comment/,
+    );
+  }
 });
