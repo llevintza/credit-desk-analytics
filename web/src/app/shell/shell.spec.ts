@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router, provideRouter } from '@angular/router';
 import { AuthService } from '../core/auth.service';
 import { HealthService } from '../core/health.service';
@@ -132,6 +132,21 @@ describe('Shell', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     ([...el.querySelectorAll('.user button')].find((b) => b.textContent?.includes('Sign out')) as HTMLButtonElement).click();
     http.expectOne('/api/auth/logout').flush(null);
+    expect(navigate).toHaveBeenCalledWith(['/login']);
+  });
+
+  it.each([
+    ['a 500', (req: TestRequest) => req.flush('boom', { status: 500, statusText: 'Server Error' })],
+    ['a network error', (req: TestRequest) => req.error(new ProgressEvent('error'))],
+  ])('still signs out locally and goes to the login page when logout fails with %s', async (_, fail) => {
+    const { el, http } = await render();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const auth = TestBed.inject(AuthService);
+    const scope = TestBed.inject(ScopeService);
+    ([...el.querySelectorAll('.user button')].find((b) => b.textContent?.includes('Sign out')) as HTMLButtonElement).click();
+    fail(http.expectOne('/api/auth/logout'));
+    expect(auth.me()).toBeNull();
+    expect([scope.dates(), scope.portfolios()]).toEqual([[], []]);
     expect(navigate).toHaveBeenCalledWith(['/login']);
   });
 
