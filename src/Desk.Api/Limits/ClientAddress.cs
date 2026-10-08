@@ -28,6 +28,16 @@ public sealed class ClientAddress(bool behindProxy)
     /// <summary>Render's private network: the load balancer that connects to the app.</summary>
     internal static readonly IPNetwork[] Render = [IPNetwork.Parse("10.0.0.0/8")];
 
+    /// <summary>Addresses no client on the internet connects from: RFC 1918, CGNAT, loopback, link-local, ULA.</summary>
+    internal static readonly IPNetwork[] Private =
+    [
+        .. new[]
+        {
+            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+            "::1/128", "fc00::/7", "fe80::/10",
+        }.Select(IPNetwork.Parse),
+    ];
+
     /// <summary>
     /// https://www.cloudflare.com/ips-v4 and /ips-v6 (checked 2026-10-08; kept current by the scheduled check in #161).
     /// </summary>
@@ -46,26 +56,82 @@ public sealed class ClientAddress(bool behindProxy)
     public static ClientAddress From(IConfiguration config) =>
         new(bool.TryParse(config["FORWARDEDHEADERS_ENABLED"], out var on) && on); // = ASPNETCORE_FORWARDEDHEADERS_ENABLED
 
-    public string For(HttpContext http) =>
-        Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy)?.ToString() ?? "unknown";
+    /// <summary>Whether the app runs behind Render's proxy (<c>FORWARDEDHEADERS_ENABLED</c>).</summary>
+    public bool BehindProxy => behindProxy;
 
-    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy)
+    public string For(HttpContext http)
     {
-        if (!behindProxy || peer is null || !In(Render, peer))
-            return peer;
-
-        // Render appends the address that connected to it, so the rightmost entry is the only one Render vouches for.
-        var chain = headers["X-Forwarded-For"].ToString().Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (chain.Length == 0 || !IPAddress.TryParse(chain[^1], out var hop))
-            return peer;
-        if (!In(Cloudflare, hop))
-            return hop; // reached Render directly: that hop is the client, and any CF-* header is its own invention
-
-        // Only Cloudflare's own header; without it, the edge (R160-01).
-        return IPAddress.TryParse(headers["CF-Connecting-IP"].ToString(), out var client) ? client : hop;
+        var address = Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy, out var source);
+        // A real direct client sends no CF-Connecting-IP (Cloudflare 403s a forged one), so a DirectHop that carries
+        // one is a Cloudflare or Render hop missing from the lists, and every client shares it (R175-01).
+        if (behindProxy && (source is not (Source.CfConnectingIp or Source.DirectHop)
+                            || (source is Source.DirectHop && http.Request.Headers.ContainsKey("CF-Connecting-IP"))))
+            http.RequestServices?.GetService<ClientAddressDiagnostics>()?.Fallback(http, source);
+        return address?.ToString() ?? "unknown";
     }
 
-    private static bool In(IPNetwork[] networks, IPAddress ip)
+    /// <summary>Which rule picked the key. Everything but <see cref="CfConnectingIp"/> and a genuine
+    /// <see cref="DirectHop"/> shares one key across clients behind the proxy (#165).</summary>
+    public enum Source
+    {
+        /// <summary>Off the proxy: the socket peer is the client.</summary>
+        Peer,
+        /// <summary>Behind the proxy, but the peer isn't in <see cref="Render"/>, so no header is believed.</summary>
+        UntrustedPeer,
+        /// <summary>The peer is Render but <c>X-Forwarded-For</c> is missing or its last entry isn't an address.</summary>
+        NoForwardedFor,
+        /// <summary>
+        /// The hop Render saw is public but not in <see cref="Cloudflare"/>: either a client that reached Render
+        /// directly (the hop is that client), or, when <c>CF-Connecting-IP</c> is present, a Cloudflare or Render
+        /// range missing from the lists, which every client shares (warned, #161).
+        /// </summary>
+        DirectHop,
+        /// <summary>The hop Render saw is a private address (an internal hop, not a client): every client shares it.</summary>
+        InternalHop,
+        /// <summary>Through Cloudflare, keyed on <c>CF-Connecting-IP</c>.</summary>
+        CfConnectingIp,
+        /// <summary>Through Cloudflare without a usable <c>CF-Connecting-IP</c>: keyed on the edge.</summary>
+        Edge,
+    }
+
+    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy) =>
+        Resolve(peer, headers, behindProxy, out _);
+
+    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy, out Source source)
+    {
+        if (!behindProxy || peer is null || !In(Render, peer))
+        {
+            source = behindProxy ? Source.UntrustedPeer : Source.Peer;
+            return peer;
+        }
+
+        // Render appends the address that connected to it, so the rightmost entry is the only one Render vouches for.
+        var chain = ForwardedFor(headers);
+        if (chain.Length == 0 || !IPAddress.TryParse(chain[^1], out var hop))
+        {
+            source = Source.NoForwardedFor;
+            return peer;
+        }
+        if (!In(Cloudflare, hop))
+        {
+            source = In(Private, hop) ? Source.InternalHop : Source.DirectHop;
+            return hop; // reached Render directly: that hop is the client, and any CF-* header is its own invention
+        }
+
+        // Only Cloudflare's own header; without it, the edge (R160-01).
+        if (IPAddress.TryParse(headers["CF-Connecting-IP"].ToString(), out var client))
+        {
+            source = Source.CfConnectingIp;
+            return client;
+        }
+        source = Source.Edge;
+        return hop;
+    }
+
+    internal static string[] ForwardedFor(IHeaderDictionary headers) =>
+        headers["X-Forwarded-For"].ToString().Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    internal static bool In(IPNetwork[] networks, IPAddress ip)
     {
         var address = ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
         return networks.Any(n => n.Contains(address));
