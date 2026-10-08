@@ -85,6 +85,15 @@ var results = new List<(string Check, string Api, string Sql, bool Ok)>();
 var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof"))!;
 results.Add(("rows ≥ 18,000", $"{rowCount:N0}", $"{sqlCount:N0}", rowCount >= MinRows && rowCount == sqlCount));
 
+// The checks below reuse the API's as-of; this row makes sure the API's default is the latest snapshot date.
+await using (var maxCmd = db.CreateCommand("SELECT max(as_of_date) FROM core.position_snapshot"))
+await using (var maxReader = await maxCmd.ExecuteReaderAsync(ct))
+{
+    await maxReader.ReadAsync(ct);
+    var latest = maxReader.IsDBNull(0) ? (DateOnly?)null : maxReader.GetFieldValue<DateOnly>(0);
+    results.Add(("as-of is the latest date", $"{asOf:yyyy-MM-dd}", latest?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "null", asOf == latest));
+}
+
 // The SQL tail, in the grid's order: the sort key, then position_id in the sort key's direction.
 var sqlIds = new List<long>();
 await using (var cmd = db.CreateCommand("SELECT position_id FROM core.position_snapshot WHERE as_of_date = @asof ORDER BY market_value DESC, position_id DESC OFFSET @start LIMIT @block"))
