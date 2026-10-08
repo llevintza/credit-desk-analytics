@@ -103,4 +103,5 @@ const lazy = readdirSync(dir, { recursive: true })
 
 console.log(`Initial (br q${BROTLI_QUALITY}): ${total.toFixed(1)} KB of ${limitKb} KB budget — ${files.join(', ')}`);
 for (const f of lazy) console.log(`  lazy ${f}: ${br(f).toFixed(1)} KB br q${BROTLI_QUALITY}`);
-if (total > limitKb) fail(`initial bundle ${total.toFixed(1)} KB compressed is over the ${limitKb} KB budget (README §10).`);
+// README §10 says "< 500 KB": exactly 500 fails. `!(total < limitKb)` also fails a NaN total (#236).
+if (!(total < limitKb)) fail(`initial bundle ${total.toFixed(1)} KB compressed is at or over the ${limitKb} KB budget (README §10).`);
