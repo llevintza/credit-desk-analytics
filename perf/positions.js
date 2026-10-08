@@ -6,8 +6,11 @@
 //
 // The API must run with the per-user limit raised for the run (RATE_LIMIT_PER_USER_PER_MIN/BURST): k6 is one user.
 // MISS requests are the whole book under a filter value that has never been asked for, so neither the block nor the
-// summary is cached: the first block of a brand-new view over every row, the worst case (#129). Run at scale 1.0
-// (the 'whole book' check expects ~20k rows). HIT repeats one request. Local stack only.
+// summary is cached: the first block of a brand-new view over every row, the worst case for the Risk preset (#129).
+// setup() counts the book once (unfiltered, which also warms the HIT key); every MISS must return exactly that many
+// rows, and the 'scale 1.0 book' check needs at least MIN_BOOK (default 19000) of them. HIT repeats that one request.
+// Cached blocks and summaries live until the next batch, so MISS filter values carry a per-run offset from setup():
+// back-to-back runs against the same API stay MISS without a restart or a cache clear. Local stack only.
 import http from 'k6/http';
 import { check } from 'k6';
 import { Trend } from 'k6/metrics';
@@ -21,6 +24,9 @@ const risk = [
   'credit_enhancement_pct', 'wal', 'coupon_current', 'pnl_carry', 'pnl_rates', 'pnl_spread', 'pnl_total_mtd',
   'worst_case_price', 'stress_loss_mv', 'watchlist_flag',
 ];
+
+// The unfiltered view: setup() counts it (and so warms the HIT key); MISS adds a never-seen filter to it.
+const wholeBook = { columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }] };
 
 export const options = {
   scenarios: {
@@ -42,10 +48,14 @@ export function setup() {
     { headers: { 'Content-Type': 'application/json' } });
   check(res, { 'login 200': (r) => r.status === 200 });
   // Build the header here: cookie objects lose their shape when setup() data is handed to the VUs.
-  return {
+  const data = {
     cookie: Object.entries(res.cookies).map(([name, values]) => `${name}=${values[0].value}`).join('; '),
     xsrf: decodeURIComponent(res.cookies['XSRF-TOKEN'][0].value),
+    run: Date.now() % 1e6, // a per-run offset, so no MISS key repeats one from an earlier run (#202)
   };
+  data.book = post(data, wholeBook).json('rowCount');
+  check(data.book, { 'scale 1.0 book': (n) => n >= Number(__ENV.MIN_BOOK || 19000) });
+  return data;
 }
 
 function post(data, body) {
@@ -61,16 +71,17 @@ function post(data, body) {
 let counter = 0;
 export function miss(data) {
   counter += 1;
-  // The worst case (#129): the whole book's first view, uncached. A threshold below every spread keeps every row,
-  // and is never repeated (per VU, per iteration), so neither the block nor the summary is cached.
-  const threshold = -1e6 * __VU - counter;
+  // The worst case for the Risk preset (#129): the whole book's first view, uncached. A threshold below every spread
+  // keeps every row, and is never repeated (per VU, per iteration, per run), so neither the block nor the summary is
+  // cached. Every term stays far below 2^53, so each value is exact.
+  const threshold = -1e12 * __VU - 1e6 * data.run - counter;
   const res = post(data, {
-    columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }],
+    ...wholeBook,
     filterModel: { spread_bp: { filterType: 'number', type: 'greaterThan', filter: threshold } },
   });
   check(res, {
     'MISS': (r) => r.headers['X-Cache'] === 'MISS',
-    'whole book': (r) => r.json('rowCount') >= 19000, // scale 1.0: ~20k positions per as-of
+    'whole book': (r) => r.json('rowCount') === data.book,
   });
 }
 

@@ -40,7 +40,7 @@ Re-rendering the whole tree on every async event (zone.js) is wasted work. It al
 
 - **Zoneless change detection, signals for state, OnPush on every component.**
   - Streams over time stay RxJS (`debounceTime`, `distinctUntilChanged`, `switchMap` in `PositionsQuery`; `retry` in `HealthService`).
-  - They are bridged with `toSignal`, and the services' own subscriptions use `takeUntilDestroyed`.
+  - They are bridged with `toSignal`, and every manual subscription (services and components) uses `takeUntilDestroyed`. The one unpiped `subscribe` is the inner one in `HealthService.state()`'s `new Observable` factory: it is not a manual subscription, its teardown unsubscribes it when the `toSignal` consumer goes away.
 - **AG Grid is driven through its API** (`setGridOption`, `applyColumnState`, `purgeInfiniteCache`) from `effect()`s, never by re-binding large inputs. Bound data is never mutated: new arrays and objects are set.
 
 ## Consequences

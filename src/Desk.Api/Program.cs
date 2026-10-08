@@ -21,12 +21,13 @@ if (!builder.Environment.IsDevelopment())
 }
 
 builder.Services.AddDeskData(builder.Configuration);
-builder.Services.AddDeskAuth();
+builder.Services.AddDeskAuth(AuthSetup.HttpsOnly(builder.Configuration, builder.Environment));
 builder.Services.AddSingleton<DemoAccounts>();
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
+builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<MetaRepository>();

@@ -219,7 +219,7 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["DATABASE_URL"] = empty }).Build(), new Desk.Data.DbConnectionCounter()));
         Assert.Equal("empty", await emptyRepo.DataVersionAsync(Ct));
         // An empty snapshot is retried within seconds, so a seed into a running API is picked up.
-        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
         var emptyCache = new MetaCache(emptyRepo, time);
         var none = await emptyCache.GetAsync(Ct);
         Assert.False(none.HasData);

@@ -6,6 +6,7 @@ using Desk.Data.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Desk.Api.Tests;
@@ -72,6 +73,87 @@ public sealed class AuthTests(PostgresApiFactory api)
         req.Headers.Add("X-Forwarded-Proto", "https");
         var res = await client.SendAsync(req, Ct);
         Assert.True(res.Headers.Contains("Strict-Transport-Security"));
+    }
+
+    [Fact]
+    public async Task Behind_the_proxy_the_antiforgery_cookie_is_host_prefixed_and_always_secure()
+    {
+        // Render: the proxy sends X-Forwarded-Proto: https. Cookies are carried by hand, as a browser would on https.
+        await using var host = api.WithSettings(("FORWARDEDHEADERS_ENABLED", "true"));
+        var client = host.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            { BaseAddress = new Uri("http://desk.example.test"), HandleCookies = false, AllowAutoRedirect = false });
+        var user = await api.CreateUserAsync();
+
+        using var login = Forwarded(HttpMethod.Post, "/api/auth/login");
+        login.Content = JsonContent.Create(new LoginRequest(user.Email, PostgresApiFactory.Password));
+        var res = await client.SendAsync(login, Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var af = SetCookie(res, AuthSetup.AntiforgeryCookieName);
+        Assert.Contains("secure", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("path=/", af, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("domain=", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(SetCookieOrNull(res, AuthSetup.PlainHttpAntiforgeryCookieName));
+
+        // The token validates against the __Host- cookie.
+        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: true)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Off_the_proxy_plain_http_keeps_the_plain_antiforgery_cookie_and_it_validates()
+    {
+        // Local compose and the CI e2e/budgets stacks: Production over plain http://localhost:8080, no proxy setting.
+        var client = api.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            { BaseAddress = new Uri("http://localhost"), HandleCookies = false, AllowAutoRedirect = false });
+        var user = await api.CreateUserAsync();
+
+        var res = await PostgresApiFactory.PostLoginAsync(client, user.Email!);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var af = SetCookie(res, AuthSetup.PlainHttpAntiforgeryCookieName);
+        Assert.DoesNotContain("secure", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(SetCookieOrNull(res, AuthSetup.AntiforgeryCookieName));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: false)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("Production", "true", true)]   // Render
+    [InlineData("Production", null, false)]    // local compose, CI e2e and budgets
+    [InlineData("Production", "false", false)]
+    [InlineData("Development", "true", false)] // the dev proxy serves plain HTTP
+    [InlineData("Development", null, false)]
+    public void The_https_only_antiforgery_cookie_is_for_the_proxy_outside_development(string environment, string? forwarded, bool httpsOnly)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection([new("FORWARDEDHEADERS_ENABLED", forwarded)]).Build();
+        var env = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environment };
+        Assert.Equal(httpsOnly, AuthSetup.HttpsOnly(config, env));
+    }
+
+    private static HttpRequestMessage Forwarded(HttpMethod method, string path)
+    {
+        var req = new HttpRequestMessage(method, path);
+        req.Headers.Add("X-Forwarded-Proto", "https");
+        return req;
+    }
+
+    private static string? SetCookieOrNull(HttpResponseMessage res, string name) =>
+        res.Headers.GetValues("Set-Cookie").SingleOrDefault(c => c.StartsWith(name + "=", StringComparison.Ordinal));
+
+    private static string SetCookie(HttpResponseMessage res, string name) =>
+        SetCookieOrNull(res, name) ?? throw new Xunit.Sdk.XunitException($"No {name} cookie was set.");
+
+    /// <summary>Sends every cookie the login set, plus the XSRF token in the header, to the logout endpoint.</summary>
+    private static Task<HttpResponseMessage> LogoutAsync(HttpClient client, HttpResponseMessage login, bool forwardedHttps)
+    {
+        var req = forwardedHttps ? Forwarded(HttpMethod.Post, "/api/auth/logout") : new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+        req.Headers.Add("Cookie", string.Join("; ", login.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0])));
+        req.Headers.Add(AuthSetup.AntiforgeryHeaderName, PostgresApiFactory.XsrfToken(login));
+        return client.SendAsync(req, Ct);
     }
 
     [Theory]
