@@ -101,6 +101,12 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - It hides the socket peer from the rest of the app.
   - The explicit resolver is a pure function, unit-tested chain by chain.
 - The Cloudflare ranges are a constant, checked against cloudflare.com/ips on 2026-10-08. If Cloudflare adds a range that isn't in the list, requests through it can't be spoofed, but they fall back to keying on the edge, which is the #116 shared window, until the list is updated. A scheduled check keeps the list current (#161).
+- **Diagnostics (#165).** After #160 deployed, two real clients still shared one login window in production, so the resolver now reports what it sees instead of failing silently (`ClientAddressDiagnostics`):
+  - At start-up: `BehindProxy`, Render's networks, the Cloudflare range count, and the host's effective `ForwardedHeaders`, `KnownIPNetworks`, `KnownProxies` and `ForwardLimit`.
+  - Once per process, the first rate-limited request. At most every 10 minutes, a request behind the proxy whose key every client shares (`UntrustedPeer`, `NoForwardedFor`, `InternalHop`, `Edge`), with the count of those suppressed.
+  - Each line has the rule that chose the key, the peer, the `X-Forwarded-For` line and hop counts, and its shape (each entry as `cf`, `render`, `private`, `public` or `invalid`).
+  - No raw client address is logged. A private peer is infrastructure and is logged whole; a public one is cut to its /24 or /48. `CF-Connecting-IP` and the key are HMAC-SHA256 hashes under a random per-process key, so two clients can be told apart in one process's logs but not reversed.
+  - The trust rules above are unchanged. The fix follows from what these lines show in production.
 
 **Swagger UI and the CSP (#94)**
 - `/openapi/v1.json` and `/swagger` are admin-only.
