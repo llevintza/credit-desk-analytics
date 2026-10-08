@@ -109,6 +109,26 @@ describe('PositionsQuery', () => {
     http.expectOne('/api/positions/query').flush(block());
   });
 
+  it('keeps "Loading…" until every parallel block has returned or been aborted', () => {
+    query.update({ columns: ['dv01'] });
+    query.datasource.getRows(params(0, 200).p);
+    query.datasource.getRows(params(200, 400).p);
+    const [first, second] = http.match('/api/positions/query');
+    expect(query.loading()).toBe(true);
+    first.flush(block());
+    expect(query.loading()).toBe(true); // the second block is still in flight
+    second.flush('boom', { status: 500, statusText: 'x' });
+    expect(query.loading()).toBe(false);
+
+    query.datasource.getRows(params(0, 200).p);
+    const aborted = http.expectOne('/api/positions/query');
+    query.datasource.getRows(params(0, 200, [{ colId: 'dv01', sort: 'asc' }]).p); // a new view aborts the old block
+    expect(aborted.cancelled).toBe(true);
+    expect(query.loading()).toBe(true); // the new view's block is still in flight
+    http.expectOne('/api/positions/query').flush(block());
+    expect(query.loading()).toBe(false);
+  });
+
   it('a failed block tells the grid and shows an error, and the next success clears it', () => {
     query.update({ columns: ['dv01'] });
     const failed = params();
