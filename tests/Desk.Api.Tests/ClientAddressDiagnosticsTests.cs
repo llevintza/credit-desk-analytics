@@ -132,30 +132,69 @@ public sealed class ClientAddressDiagnosticsTests
     }
 
     [Fact]
-    public void Shared_key_fallbacks_warn_at_most_every_interval_with_the_suppressed_count()
+    public void Shared_key_fallbacks_warn_at_most_every_interval_per_source_with_the_suppressed_count()
     {
         var diagnostics = Diagnostics();
         var clients = new ClientAddress(true);
-        // Peer outside Render's network (condition 2 of #165).
+        // Peer outside Render's network (condition 2 of #165), an internal hop appended after the edge (condition 3),
+        // and no X-Forwarded-For at all: each kind gets its own line, so one can't mask another.
         Assert.Equal("100.64.3.7", clients.For(Request(diagnostics, "100.64.3.7", $"{Client}, {CfEdge}", Client)));
-        // An internal hop appended after the edge (condition 3), and no X-Forwarded-For at all.
         clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
         clients.For(Request(diagnostics, RenderLb));
+        Assert.Collection(_log.Lines,
+            l =>
+            {
+                Assert.StartsWith("Client address fell back to a shared key (UntrustedPeer):", l.Text);
+                Assert.Contains("Peer=100.64.3.7", l.Text);
+                Assert.Contains("PeerIsRender=False", l.Text);
+                Assert.Contains("Suppressed=0", l.Text);
+            },
+            l => Assert.StartsWith("Client address fell back to a shared key (InternalHop):", l.Text),
+            l => Assert.StartsWith("Client address fell back to a shared key (NoForwardedFor):", l.Text));
 
-        var first = Assert.Single(_log.Lines);
-        Assert.StartsWith("Client address fell back to a shared key (UntrustedPeer):", first.Text);
-        Assert.Contains("Peer=100.64.3.7", first.Text);
-        Assert.Contains("PeerIsRender=False", first.Text);
-        Assert.Contains("Suppressed=0", first.Text);
-
-        _time.Advance(ClientAddressDiagnostics.FallbackInterval);
+        // Within the interval, repeats of a kind are counted, then reported with its next line.
         clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
-        Assert.Equal(2, _log.Lines.Count);
-        var second = _log.Lines.Last().Text;
-        Assert.StartsWith("Client address fell back to a shared key (InternalHop):", second);
-        Assert.Contains("ForwardedForShape=public>cf>render", second);
-        Assert.Contains("Suppressed=2", second);
+        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        Assert.Equal(3, _log.Lines.Count);
+        _time.Advance(ClientAddressDiagnostics.FallbackInterval - TimeSpan.FromTicks(1));
+        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        Assert.Equal(3, _log.Lines.Count);
+        _time.Advance(TimeSpan.FromTicks(1));
+        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        var last = _log.Lines.Last().Text;
+        Assert.StartsWith("Client address fell back to a shared key (InternalHop):", last);
+        Assert.Contains("ForwardedForShape=public>cf>render", last);
+        Assert.Contains("Suppressed=3", last);
         Assert.DoesNotContain(Client, string.Join('\n', _log.Lines.Select(l => l.Text)));
+    }
+
+    [Fact]
+    public void Concurrent_fallbacks_log_once_per_interval_and_count_every_other_call()
+    {
+        const int calls = 2000;
+        var diagnostics = Diagnostics();
+        var lines = 0;
+        var suppressed = 0;
+        void Count()
+        {
+            foreach (var (_, text) in _log.Lines)
+            {
+                lines++;
+                suppressed += int.Parse(System.Text.RegularExpressions.Regex.Match(text, "Suppressed=([0-9]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+            _log.Lines.Clear();
+        }
+
+        for (var window = 0; window < 3; window++)
+        {
+            Parallel.For(0, calls, _ => diagnostics.Fallback(Request(null, RenderLb), ClientAddress.Source.NoForwardedFor));
+            Assert.Single(_log.Lines);
+            Count();
+            _time.Advance(ClientAddressDiagnostics.FallbackInterval);
+        }
+        diagnostics.Fallback(Request(null, RenderLb), ClientAddress.Source.NoForwardedFor);
+        Count();
+        Assert.Equal(3 * calls + 1, lines + suppressed);
     }
 
     [Fact]

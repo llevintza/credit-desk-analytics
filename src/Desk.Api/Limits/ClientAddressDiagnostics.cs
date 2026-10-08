@@ -16,7 +16,7 @@ namespace Desk.Api.Limits;
 /// <list type="bullet">
 /// <item>at start-up, the resolver mode and the host's effective forwarded-headers options;</item>
 /// <item>once per process, the first rate-limited request;</item>
-/// <item>at most every <see cref="FallbackInterval"/>, a request behind the proxy whose key every client shares.</item>
+/// <item>at most every <see cref="FallbackInterval"/> per <see cref="ClientAddress.Source"/>, a request behind the proxy whose key every client shares.</item>
 /// </list>
 /// No raw client address is logged: the socket peer and private hops are infrastructure and are logged as they are,
 /// a public peer is cut to its /24 or /48, and <c>CF-Connecting-IP</c> and the key are keyed hashes (a random key per
@@ -32,8 +32,11 @@ public sealed class ClientAddressDiagnostics(
 
     private readonly byte[] _hashKey = RandomNumberGenerator.GetBytes(32);
     private int _rejected;
-    private long _nextFallbackTicks = long.MinValue;
-    private int _suppressed;
+    // One throttle per Source, so a steady fallback of one kind can't mask another (R175-05). Monotonic: elapsed
+    // ticks since start, so a wall-clock step can't mute the warning.
+    private readonly long _started = time.GetTimestamp();
+    private readonly long[] _nextFallback = new long[Enum.GetValues<ClientAddress.Source>().Length];
+    private readonly int[] _suppressed = new int[Enum.GetValues<ClientAddress.Source>().Length];
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -64,14 +67,15 @@ public sealed class ClientAddressDiagnostics(
     /// <summary>A request behind the proxy keyed on something every client shares (throttled).</summary>
     public void Fallback(HttpContext http, ClientAddress.Source source)
     {
-        var now = time.GetUtcNow().UtcTicks;
-        var next = Interlocked.Read(ref _nextFallbackTicks);
-        if (now < next || Interlocked.CompareExchange(ref _nextFallbackTicks, now + FallbackInterval.Ticks, next) != next)
+        var i = (int)source;
+        var now = time.GetElapsedTime(_started).Ticks;
+        var next = Interlocked.Read(ref _nextFallback[i]);
+        if (now < next || Interlocked.CompareExchange(ref _nextFallback[i], now + FallbackInterval.Ticks, next) != next)
         {
-            Interlocked.Increment(ref _suppressed);
+            Interlocked.Increment(ref _suppressed[i]);
             return;
         }
-        Log(LogLevel.Warning, $"Client address fell back to a shared key ({source})", http, null, Interlocked.Exchange(ref _suppressed, 0));
+        Log(LogLevel.Warning, $"Client address fell back to a shared key ({source})", http, null, Interlocked.Exchange(ref _suppressed[i], 0));
     }
 
     private void Log(LogLevel level, string what, HttpContext http, string? policy, int suppressed)
