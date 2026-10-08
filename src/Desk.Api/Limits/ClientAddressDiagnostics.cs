@@ -45,7 +45,7 @@ public sealed class ClientAddressDiagnostics(
     {
         var o = forwarded.Value;
         logger.LogInformation(
-            "Client address resolver: BehindProxy={BehindProxy} RenderNetworks={RenderNetworks} CloudflareRanges={CloudflareRanges} ForwardedHeaders={ForwardedHeaders} KnownNetworks={KnownNetworks} KnownProxies={KnownProxies} ForwardLimit={ForwardLimit}",
+            "Client address resolver: BehindProxy={BehindProxy} RenderNetworks={RenderNetworks} CloudflareRanges={CloudflareRanges} ForwardedHeaders={ForwardedHeaders} KnownIPNetworks={KnownIPNetworks} KnownProxies={KnownProxies} ForwardLimit={ForwardLimit}",
             clients.BehindProxy,
             string.Join(' ', ClientAddress.Render),
             ClientAddress.Cloudflare.Length,

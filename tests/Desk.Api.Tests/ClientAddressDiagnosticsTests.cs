@@ -44,6 +44,7 @@ public sealed class ClientAddressDiagnosticsTests
     {
         var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
         forwarded.KnownIPNetworks.Clear();
+        forwarded.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("10.0.0.0/8"));
         forwarded.KnownProxies.Clear();
         forwarded.KnownProxies.Add(IPAddress.Parse("10.1.2.3"));
         await Diagnostics(forwarded: forwarded).StartAsync(TestContext.Current.CancellationToken);
@@ -54,6 +55,7 @@ public sealed class ClientAddressDiagnosticsTests
         Assert.Contains("RenderNetworks=10.0.0.0/8", line.Text);
         Assert.Contains($"CloudflareRanges={ClientAddress.Cloudflare.Length}", line.Text);
         Assert.Contains("ForwardedHeaders=XForwardedProto", line.Text);
+        Assert.Contains("KnownIPNetworks=10.0.0.0/8 ", line.Text);
         Assert.Contains("KnownProxies=10.1.2.3", line.Text);
         Assert.Contains("ForwardLimit=1", line.Text);
 
