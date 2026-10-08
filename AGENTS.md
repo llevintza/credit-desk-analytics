@@ -51,6 +51,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
   - Never share a DbContext across concurrent operations; use `IDbContextFactory` per parallel task.
   - Use `AsNoTracking` + projections for reads.
   - No captive dependencies (a scoped context inside a singleton).
+- **API surface:** every endpoint carries OpenAPI metadata (`WithName`, `WithSummary`, `WithTags`) so it shows in Swagger UI (ADR-0019). The SPA fallback, the `/api` fallback, and the Swagger-off 404 routes (`/swagger`, `/swagger/*`, `/openapi/*` when `SWAGGER_ENABLED` is off; PR #95) use `ExcludeFromDescription()` and must not appear in the OpenAPI document.
 - **Async:** pass the `CancellationToken` everywhere. No `.Result`, `.Wait()` or `async void`.
 - **Money:** use `decimal` / `numeric`. Round only at the display edge. Empty or zero weights return `null`, never `NaN`.
 - **Angular:**
@@ -75,8 +76,10 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Apply migrations (local) | `dotnet ef database update --project src/Desk.Data --startup-project src/Desk.Data` |
 | Add a migration | `dotnet ef migrations add <Name> --project src/Desk.Data --startup-project src/Desk.Data --output-dir App/Migrations` |
 | Seed (local) | `dotnet run --project src/Desk.Seeder -- --if-changed --scale 1.0` (`--force` to reseed, `--size-report`) |
+| Seed at a fixed date (local) | `dotnet run -c Release --project src/Desk.Seeder -- --force --scale 1.0 --as-of 2026-10-06` |
+| Load benchmark (local, ADR-0004) | `dotnet run -c Release --project perf/LoadBenchmark -- 100000` |
 | API | `dotnet run --project src/Desk.Api` (http://localhost:5180) |
-| API tests | `dotnet test` (coverlet.MTP, not `--collect "XPlat Code Coverage"`) |
+| All .NET tests (Docker required for Testcontainers; never skip) | `dotnet test -c Release` (coverlet.MTP, not `--collect "XPlat Code Coverage"`) |
 | Coverlet (local) | `dotnet test -- --coverlet --coverlet-output-format cobertura --coverlet-include '[Desk.*]*' --coverlet-exclude-by-file '**/obj/**' --coverlet-exclude-by-file '**/*.generated.cs' --coverlet-exclude-assemblies-without-sources MissingAll` (GeneratedCodeAttribute exclusions live in `tests/testconfig.json`; do **not** add `CompilerGeneratedAttribute`, which strips `Program.cs` lambdas) |
 | Coverage gates | `node perf/coverage-gate.mjs --dotnet TestResults/coverage --web web/coverage --base origin/main` |
 | Gate-script tests | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/coverage-gate.mjs perf/coverage-gate.test.mjs` |
@@ -87,6 +90,8 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
 | Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
 | E2E (phase 4) | `cd e2e && npx playwright test` |
 | Payload budget (phase 3) | `node perf/payload-size.mjs` |
+
+`--force` wipes the seeded tables. The load benchmark drops and recreates a `bench` schema in whatever `DATABASE_URL` points to. Never run either against production or Neon.
 
 ## Deployment
 
