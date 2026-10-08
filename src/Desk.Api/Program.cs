@@ -11,6 +11,7 @@ using Desk.Api.Positions;
 using Desk.Data.Grid;
 using Desk.Data;
 using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,7 +25,9 @@ if (!builder.Environment.IsDevelopment())
 builder.Services.AddDeskData(builder.Configuration);
 builder.Services.AddDeskAuth();
 builder.Services.AddSingleton<DemoAccounts>();
-builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration));
+// Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
+builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
+builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddSingleton<GridRepository>();
