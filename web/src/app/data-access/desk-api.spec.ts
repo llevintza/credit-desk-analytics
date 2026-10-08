@@ -122,7 +122,8 @@ describe('DeskApi positions bytes (resource timing)', () => {
     expect(info).not.toHaveProperty('bytesApprox');
     expect(clear).not.toHaveBeenCalled();
 
-    // A request with no entry of its own reports no bytes (the stale entry is never attributed).
+    // An entry that arrives while nothing is in flight is ignored, even if it would look like the next request's.
+    FakeObserver.last.deliver(entry(later(), 1234));
     const next = firstValueFrom(api.positions({ startRow: 0, endRow: 200, columns: [] }));
     http.expectOne('/api/positions/query').flush(block);
     expect((await next).info.bytes).toBeNull();

@@ -115,6 +115,7 @@ export class DeskApi {
   }
 
   private keep(entries: PerformanceEntryList): void {
+    if (this.inFlight.size === 0) return; // no request could claim them (a late aborted block, a direct fetch)
     for (const e of entries) if (e.name.endsWith(DeskApi.positionsUrl)) this.timings.push(e as PerformanceResourceTiming);
   }
 
