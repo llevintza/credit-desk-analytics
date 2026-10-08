@@ -80,6 +80,24 @@ public sealed class AuditPurgeTimerTests
         Assert.Empty(logger.Lines);
     }
 
+    [Fact]
+    public async Task Disposing_the_service_ends_the_timer_loop_cleanly()
+    {
+        var logger = new CapturingLogger();
+        var time = new FakeTimeProvider();
+        // No database registered: a tick fails and is logged, which shows the loop is running.
+        var timer = Timer(new ServiceCollection().BuildServiceProvider(), AuditTests.Retention(time: time), time, logger);
+
+        await timer.StartAsync(Ct);
+        time.Advance(timer.CheckEvery);
+        await WaitForAsync(() => logger.Failures == 1, logger);
+        timer.Dispose(); // the host disposes the service: the loop ends instead of waiting for another tick
+        await timer.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.True(timer.ExecuteTask.IsCompletedSuccessfully);
+        Assert.Equal(1, logger.Failures);
+    }
+
     internal static async Task WaitForAsync(Func<bool> condition, object? state = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
