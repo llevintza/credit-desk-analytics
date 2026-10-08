@@ -58,6 +58,56 @@ public sealed class DataSourceRegistryTests
     }
 
     [Fact]
+    public async Task Data_sources_get_the_default_pool_cap_of_20()
+    {
+        // #182: Npgsql's own default (100) is above a small Neon compute's max_connections.
+        await using var registry = new DataSourceRegistry(Config(new() { ["DATABASE_URL"] = "Host=db;Database=desk;Username=u" }), new DbConnectionCounter());
+        Assert.Equal(20, DataSourceRegistry.DefaultMaxPoolSize);
+        Assert.Contains("Maximum Pool Size=20", registry.Get(ConnectionStrings.Core).ConnectionString);
+    }
+
+    [Fact]
+    public async Task DB_MAX_POOL_SIZE_overrides_the_cap_and_the_connection_string()
+    {
+        await using var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u;Maximum Pool Size=100",
+            ["DB_MAX_POOL_SIZE"] = "12",
+        }), new DbConnectionCounter());
+        Assert.Contains("Maximum Pool Size=12", registry.Get(ConnectionStrings.Core).ConnectionString);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-5")]
+    [InlineData("twenty")]
+    [InlineData("")]
+    public async Task A_non_positive_or_junk_DB_MAX_POOL_SIZE_falls_back_to_the_default(string value)
+    {
+        await using var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u;Maximum Pool Size=100",
+            ["DB_MAX_POOL_SIZE"] = value,
+        }), new DbConnectionCounter());
+        Assert.Contains("Maximum Pool Size=20", registry.Get(ConnectionStrings.Core).ConnectionString);
+    }
+
+    [Fact]
+    public async Task Sources_on_one_database_still_share_one_capped_data_source()
+    {
+        // The cap is applied before keying, so a per-source setting equal to DATABASE_URL still shares the pool.
+        await using var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u",
+            ["ConnectionStrings:Market"] = "Host=db;Database=desk;Username=u;MaxPoolSize=50;CommandTimeout=300",
+            ["DB_MAX_POOL_SIZE"] = "15",
+        }), new DbConnectionCounter());
+        Assert.Same(registry.Get(ConnectionStrings.Core), registry.Get(ConnectionStrings.Market));
+        Assert.Equal(1, registry.DistinctDataSources);
+        Assert.Contains("Maximum Pool Size=15", registry.Get(ConnectionStrings.Market).ConnectionString);
+    }
+
+    [Fact]
     public async Task Nothing_resolves_until_first_use_and_a_missing_setting_names_the_variable()
     {
         await using var registry = new DataSourceRegistry(Config(new()), new DbConnectionCounter());
