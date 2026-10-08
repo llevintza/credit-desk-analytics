@@ -30,7 +30,11 @@ public sealed class ApiCollection : ICollectionFixture<PostgresApiFactory>
 /// </summary>
 public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    public const string Password = "Correct-horse-battery-9";
+    /// <summary>
+    /// The test accounts' password: generated per run (the app's own generator, so it meets the Identity policy),
+    /// never a literal in the repository (#118 N3).
+    /// </summary>
+    public static readonly string Password = PasswordGenerator.Generate();
 
     private readonly PostgreSqlContainer _pg =
         new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
@@ -95,8 +99,9 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         // https: the session cookie is Secure (__Host- prefix), so the cookie container only sends it over https.
         factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
 
-    public async Task<DeskUser> CreateUserAsync(string role = Roles.Viewer, DateTimeOffset? expiresAt = null, string password = Password)
+    public async Task<DeskUser> CreateUserAsync(string role = Roles.Viewer, DateTimeOffset? expiresAt = null, string? password = null)
     {
+        password ??= Password;
         await using var scope = Services.CreateAsyncScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
         var email = $"{role}-{Guid.NewGuid():N}@example.com";
@@ -107,11 +112,11 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         return user;
     }
 
-    public static Task<HttpResponseMessage> PostLoginAsync(HttpClient client, string email, string password = Password) =>
-        client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password), TestContext.Current.CancellationToken);
+    public static Task<HttpResponseMessage> PostLoginAsync(HttpClient client, string email, string? password = null) =>
+        client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password ?? Password), TestContext.Current.CancellationToken);
 
     /// <summary>Logs in and returns the XSRF token the SPA would echo in <c>X-XSRF-TOKEN</c>.</summary>
-    public static async Task<string> LoginAsync(HttpClient client, string email, string password = Password)
+    public static async Task<string> LoginAsync(HttpClient client, string email, string? password = null)
     {
         var res = await PostLoginAsync(client, email, password);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);

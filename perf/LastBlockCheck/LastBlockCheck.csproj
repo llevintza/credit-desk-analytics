@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- #134 / #43 AC4: with 18k+ rows, the last block and the summary match independent SQL (CI budgets job). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Data/Desk.Data.csproj" />
+  </ItemGroup>
+</Project>

@@ -235,11 +235,12 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | trade | 150,000 × ~100 B | ~15 MB (+ indexes ≈ 8 MB) |
 | surveillance / pricing / market | ~60 MB total | ~60 MB |
 | deal, bond, reference, app | small | < 10 MB |
-| **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
+| app.audit (90 days, `AUDIT_RETENTION_DAYS`) | 90 × audit rows/day × ~193 B (heap + PK + `IX_audit_at`) | ~17 MB per 1,000 rows/day; break-even with the 350 MB budget at ~4,500 rows/day (ADR-0022) |
+| **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
 
-**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
+**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` (current size + new data) and, on a run that would TRUNCATE, **refuses (exit 2) before TRUNCATE when it exceeds `--cap-mb`** (default 512 MB), leaving data and `app.seed_metadata` untouched (#109; §10). Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
 
 **Measured (phase 1, scale 1.0, SEED=42, Postgres 17, linux-x64):**
 - **1,563,791 rows** across 20 tables.
@@ -260,7 +261,9 @@ See ADR-0003 and ADR-0004.
     - `--if-changed`: skip when the version, seed and scale match `app.seed_metadata` (what the deploy pipeline uses)
     - `--force`: always reseed (`db-ops` reseed)
     - `--size-report`
-  - `--max-mb`
+  - `--max-mb` (default 400): budget for the **committed** size, checked just before COMMIT; over it the load rolls back (exit 2).
+  - `--cap-mb` (default 512, must be > 0): storage cap for the reseed **peak**, checked **before TRUNCATE** on runs that would reseed (version, seed or scale change, or `--force`). Over it, or when the current size can't be read, the seeder refuses with exit 2 and changes nothing. An `--if-changed` skip never checks it. See §10.
+- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled.
 - The prior business day is generated as the snapshot's second as-of date.
 - **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
@@ -504,6 +507,8 @@ The **website is public** (anyone can reach the login page). The **data is not**
 
   It generates a strong random password, **prints it once** to stdout, stores only the hash, and **never logs it**. Against production it runs locally with `ConnectionStrings__App` pointed at Neon. Credentials are shared out of band and are **never** committed or put in issues or PRs.
 - **Optional seeded demo accounts:** read from the `DEMO_ACCOUNTS_JSON` env var (secret, set in the Render dashboard). Absent means none.
+  - An entry is applied **only when its account is first created**, on that email's first login attempt. Changing an entry's password, role or expiry later does not touch the existing account; manage that account with the UserAdmin CLI (`reset` for a new password, `disable` to stop it).
+  - An account that can't be given its role is removed again and the login is refused, so the next attempt retries the creation.
 
 ### 7.2 Protecting the free tiers (Render instance hours, Neon compute and storage)
 
@@ -515,6 +520,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
@@ -645,15 +651,27 @@ The **website is public** (anyone can reach the login page). The **data is not**
 |---|---|---|---|
 | P1 first block, "Risk" preset | ≤ 60 KB compressed | `perf/payload-size.mjs` against a running API | **CI fails** above budget |
 | P1 first block, "All" (200 cols) | ≤ 250 KB compressed | same | CI warns |
-| P1 API p95, cache MISS / HIT | ≤ 150 ms / ≤ 15 ms (local, warm) | k6 `perf/positions.js` | Reported in the PR |
+| P1 API p95, cache MISS / HIT | ≤ 150 ms / ≤ 15 ms (local, warm); MISS for both the Risk and All presets | k6 `perf/positions.js`: the whole book's uncached first view (#129), HIT with `X-Cache: HIT` asserted | CI reports (`budgets` job step summary, scale 1.0); non-blocking until #87 |
 | P1 first rows painted | < 1.0 s warm | Playwright trace + `performance.mark` | Reported in the PR |
 | P2 response | < 300 ms, < 5 KB | k6 + payload script | Reported |
 | P3 first tile / all tiles | < 500 ms / < 1.5 s | Playwright | Reported |
 | Seeder runtime | < 90 s local at scale 1.0 | the seeder's own timer | Reported |
 | DB size | < 350 MB | the seeder (`pg_database_size`) | **Seeder fails** above 400 MB |
+| Reseed peak (old + new data until COMMIT) | ≤ `--cap-mb` (default 512 MB) | the seeder (`SEED_PEAK_EST_MB`) | **Seeder refuses** before TRUNCATE (exit 2) |
 | JS bundle (initial) | < 500 KB compressed | `ng build` stats | **CI fails** above budget |
 
 Every PR that touches a measured path **MUST** paste before/after numbers in its body (the PR template has the table).
+
+**Reseed peak and the storage cap (#109).**
+- **Why a reseed peaks:** `TRUNCATE` inside the seed transaction keeps the old relfilenodes until `COMMIT`, so a reseed temporarily needs about old + new data. A local `--force` at scale 1.0 peaked at **533.8 MB** (`SEED_PEAK_EST_MB=542`), over the 0.5 GB planning cap. On a 512 MiB data directory the same run failed mid-COPY with SQLSTATE 53100 (data intact).
+- **The guard:** before any destructive statement, a run that would TRUNCATE computes `SEED_PEAK_EST_MB` = current `pg_database_size` + the measured scale-1.0 size × scale. Above `--cap-mb` (default **512 MB**), or if the size can't be read (fail closed), it exits 2 and changes nothing. `--max-mb` stays the separate committed-size budget, checked before COMMIT.
+- **At the 512 MB default, a full scale-1.0 reseed is refused on purpose.** A first seed into an empty database (~280 MB peak) passes; reseeding a full book doesn't. Neon announced 1 GB per Free project on 2026-10-02, but the default stays 512 MB until Leo confirms the project's real cap. `--cap-mb` on the command line (for example `--cap-mb 1024`) only helps local runs; production can't pass it yet (runbook below).
+- **Runbook: before a `SeedVersion` or `SEED_SCALE` bump, or a db-ops reseed.**
+  - **Estimate first.** Peak ≈ production's last `DB_SIZE_MB` (the deploy log's seed step, or `app.seed_metadata.database_size_bytes`) + 271 MB × scale. With production at 276 MB, a `SeedVersion` bump at scale 1.0 estimates ~547 MB, and any `SEED_SCALE` above ~0.87 crosses 512 MB.
+  - **What a refusal looks like.** The seed step prints `SEED_PEAK_EST_MB=…` and `ERROR: reseed peak estimate is … MB …, over the 512 MB storage cap. Refused before TRUNCATE`, then exits 2. In **deploy** this happens *after* "Migrate Neon", so the Render deploy hook and the smoke test don't run and the deploy goes red. The previous data stays and the migrated schema stays backward compatible (§14.4). In **db-ops `reseed`**, the job fails with the same message and nothing changes. At the default cap, a db-ops reseed of a full book at scale 1.0 is always refused.
+  - **One of these must land first:** (a) Leo confirms the Neon cap and a seeder PR raises `SeedOptions.DefaultCapMegabytes`; or (b) the `[workflows]` follow-up (Helms sign-off) passes the cap to the seeder: `SEED_CAP_MB` through repository vars and env into deploy.yml's seed step, plus a validated `cap_mb` input on db-ops `reseed`. Tech Coordinator holds any `SeedVersion` or `SEED_SCALE` bump until that follow-up merges (Helms ruling on PR #217).
+  - **If a bump was already refused:** land (a) or (b), or revert the bump, then re-run Deploy from `main` via `workflow_dispatch` (Tech Coordinator).
+- **Stale local data:** dev databases seeded at `1.0.0` by earlier PR heads report the same version, so `--if-changed` skips and keeps the stale rows. Reseed them locally with `--force` (add `--cap-mb 1024` at scale 1.0). Never `--force` against Neon or production.
 
 ---
 
@@ -733,6 +751,7 @@ ASPNETCORE_ENVIRONMENT=Development
 
 - One project, one database, Postgres 17.
 - Use the **direct** connection endpoint, not `-pooler`, for the app. The API keeps its own Npgsql pool, and migrations need session features.
+- The pool is capped explicitly: `Maximum Pool Size` = `DB_MAX_POOL_SIZE` (1–100, default 20; anything else falls back to 20, so a typo can't lift the cap), set on every connection string `IDataSourceRegistry` resolves (§5.1). Npgsql's own default of 100 is above what a small Neon compute accepts (`max_connections` scales with compute size). 20 covers the §7.2 request path (8 concurrent DB permits) plus background users (audit writer, DataProtection key reads), and two instances overlapping during a deploy (2 × 20) still leave room for migrations and manual sessions. It replaces any `Maximum Pool Size` (`MaxPoolSize`) already in a connection string, like `Command Timeout`; a `Minimum Pool Size` above the cap fails the first query. Rationale: ADR-0002, *Connection budget*.
 - Connection string format: `Host=…;Database=…;Username=…;Password=…;SSL Mode=Require;Trust Server Certificate=false`. It's stored **only** in the Render dashboard as `DATABASE_URL` (`sync: false`).
 - **Expect autosuspend:** the first query after idle may take about 0.5–1 s extra. Cache-first reads keep this rare.
 
@@ -823,7 +842,7 @@ services:
 6. **workflows:** actionlint + shellcheck
 7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
 8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**. It also runs `.github/scripts/concurrency-wiring.test.mjs`, which asserts the CI and Deploy concurrency wiring below (#207).
-9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10).
+9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10). Then `perf/LastBlockCheck` (#43 AC4): with ≥ 18,000 rows, the final 500 ids of the Risk view sorted by `market_value` desc and every summary SUM must equal independent SQL. Any mismatch exits 1 and fails the job. Then k6 (`perf/positions.js`, `grafana/k6` pinned by digest, #135) on the same stack, with the per-user rate limit raised for that run's app only (a compose override in the job; never `render.yaml` or the production defaults): p50/p95/max for the worst-case MISS (Risk and All presets, the whole book under a never-asked filter) and the HIT (`X-Cache: HIT` asserted) go to the step summary against 150 / 15 ms, with OVER marked. The step is `continue-on-error` until #87 makes it required: a breach fails the step and annotates the run, but not the job.
 10. **e2e:** the compose stack (with `e2e/docker-compose.e2e.yml`: higher per-user limits for one automated user) migrated and seeded at scale 0.2, a throwaway viewer (generated, masked password), then Playwright: log in, the P1 acceptance flows, no console or CSP errors, and dark/light screenshots of every page. The report and screenshots are uploaded as artifacts.
 
 **Per-area runs (#169, [ADR-0023](docs/adr/0023-per-area-ci-jobs.md)):** on `pull_request`, a `changes` job runs `.github/scripts/ci-changes.mjs` **from the BASE_SHA checkout** over `git diff --name-only --no-renames BASE...HEAD` and sets one flag per area. Docs (`*.md` anywhere except under `src/` and `web/src/`, where only `AGENTS.md`/`CLAUDE.md` count; `docs/**`; `.claude/skills/**`) set none. Shared triggers (`.github/**` other than Markdown, `Directory.*.props`, `global.json`, `dotnet-tools.json`, `*.sln`/`*.slnx`, lockfiles, Docker/compose files, `perf/coverage-*`, `tests/testconfig.json`, `.gitleaks.toml`), any path that matches no area, and an empty diff set every flag.
@@ -836,7 +855,7 @@ services:
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, plus any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |
 | `perf` | `perf/**` | `budgets` |
 
-`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
+`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). Clause 1 still applies in full to every job that runs. `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
 
 **Concurrency (#207):** each `push` run has its own group (`ci-push-<sha>`) and is never cancelled, so every commit that lands on `main` gets a full CI run even when merges land back to back. `pull_request` runs share one group per PR number (`ci-pr-<number>`, never the ref) with `cancel-in-progress`, so a new push to a PR cancels the superseded run. A merged PR's `edited` event resolves to `refs/heads/main`; keyed by PR number, it can't touch a `main` run. A shared group per ref is not safe on `main`: GitHub keeps only one pending run per group, and a newer pending run cancels the older one before any job starts.
 
@@ -895,7 +914,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
@@ -937,7 +956,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 ---
 
@@ -960,7 +979,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |

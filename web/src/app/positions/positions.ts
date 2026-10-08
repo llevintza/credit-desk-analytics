@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
 import type { ColGroupDef, GridApi, GridOptions, GridReadyEvent } from 'ag-grid-community';
@@ -9,10 +10,10 @@ import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { Preset } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
-import { columnDefs, pinnedLeft } from './column-defs';
+import { columnDefs } from './column-defs';
 import { deskGridTheme, registerGridModules } from './grid-setup';
 import { PositionsQuery } from './positions-query';
-import { columnStateOf, initialPreset, nextPreset, page } from './presets';
+import { initialPreset, nextPreset, page, presetColumnState } from './presets';
 
 registerGridModules();
 
@@ -154,10 +155,7 @@ export class Positions {
     if (!preset || !this.grid) return;
     this.preset.set(name);
     Positions.remember(name);
-    const state = columnStateOf(preset.state);
-    // Identity columns stay visible and pinned whatever the preset says.
-    const pinned = pinnedLeft.map((colId) => ({ colId, hide: false, pinned: 'left' as const }));
-    this.grid.applyColumnState({ state: [...pinned, ...state.filter((s) => !pinnedLeft.includes(s.colId))], applyOrder: true, defaultState: { hide: true } });
+    this.grid.applyColumnState(presetColumnState(preset.state));
     this.grid.setFilterModel(preset.state.filterModel ?? null);
   }
 
@@ -180,9 +178,11 @@ export class Positions {
         this.preset.set(name);
         Positions.remember(name);
       },
-      error: () => {
+      error: (e: unknown) => {
         this.saving.set(false);
-        this.loadError.set(`Could not save "${name}". Names must be 1–64 characters and not a built-in name.`);
+        // The server's problem detail says why (bad name, preset limit, conflict, rate limit); else a generic line.
+        const detail = Positions.problemDetail(e);
+        this.loadError.set(detail ? `Could not save "${name}": ${detail}` : `Could not save "${name}".`);
       },
     });
   }
@@ -236,6 +236,20 @@ export class Positions {
 
   private displayed(): string[] {
     return this.grid!.getAllDisplayedColumns().map((c) => c.getColId());
+  }
+
+  /**
+   * The `detail` (else `title`) of an RFC 9457 problem response, or null for a network error or a plain body.
+   * A 409's detail alone ("Try again.") doesn't say what clashed, so it keeps the title in front: `title: detail`.
+   */
+  private static problemDetail(e: unknown): string | null {
+    const body: unknown = e instanceof HttpErrorResponse ? e.error : null;
+    if (typeof body !== 'object' || body === null) return null;
+    const { detail, title } = body as { detail?: unknown; title?: unknown };
+    const text = (v: unknown) => (typeof v === 'string' && v ? v : null);
+    const [d, t] = [text(detail), text(title)];
+    if (d && t && (e as HttpErrorResponse).status === 409) return `${t}: ${d}`;
+    return d ?? t;
   }
 
   private static remembered(): string | null {
