@@ -122,3 +122,21 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 - Cache keys are the JSON form of the normalized query: values are escaped by the serializer, so a crafted filter can't collide with another query's key or ETag in the shared cache.
 - The reference data behind every key (catalog, as-of dates, data version) is re-read every 10 minutes while traffic continues, and every 30 seconds while the database is still empty. A reseed is therefore picked up without a restart. `POST /api/admin/cache/clear` drops everything at once.
 - Revisit if the snapshot grows past ~100k rows per as-of. Options then: materialized per-filter totals, or a narrower aggregate table.
+
+## Addendum (#135, 2026-10-08): All-preset whole-book MISS
+
+README §10's 150 ms MISS budget is not scoped to a preset, so `perf/positions.js` now also measures the All preset (every column of the built-in All preset, ~200) under the same whole-book, never-asked filter, as its own `all_miss` trend with `p(95)<150`. The CI `budgets` job reports it (#135). Local numbers, labelled as such: compose stack (`docker compose up --build`), seed 42, scale 1.0, per-user limits raised in that app's environment only, one VU, 30 s per scenario, on a laptop shared with other workloads (so the Risk MISS p95 also ran higher than the 71.0 ms above):
+
+| Run | MISS Risk p50 / p95 ms | HIT p50 / p95 ms | MISS All p50 / p95 ms | All within 150 ms? |
+|---|---:|---:|---:|---|
+| 1 | 40.9 / 80.6 | 1.5 / 6.3 | 119.8 / 227.7 | **no** |
+| 2 | 55.1 / 117.6 | 1.3 / 4.9 | 117.0 / 272.8 | **no** |
+| 3 | 57.2 / 118.6 | 2.3 / 6.1 | 114.8 / 188.0 | **no** |
+
+The All-preset whole-book first view is **over the 150 ms budget** locally (p50 ~115–120 ms, p95 188–273 ms), while Risk and HIT are within theirs. The budget stays as written; whether to optimise the All first view or rescope the MISS budget to the Risk preset is open for Leo/Helms (#241).
+
+```
+# local stack only (compose, -p desk135, its own ports); a throwaway viewer from Desk.UserAdmin
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:18135 \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
+```
