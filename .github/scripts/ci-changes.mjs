@@ -68,7 +68,8 @@ export function isDocs(path) {
 }
 
 const AREA_PREFIXES = Object.freeze({
-  api: ["src/Desk.Api/", "src/Desk.Data/", "src/Desk.UserAdmin/", "tests/Desk.Api.Tests/"],
+  // deploy/start.sh is linked into Desk.Api.Tests (StartScriptTests runs it).
+  api: ["src/Desk.Api/", "src/Desk.Data/", "src/Desk.UserAdmin/", "tests/Desk.Api.Tests/", "deploy/start.sh"],
   web: ["web/"],
   db: ["src/Desk.Data/", "src/Desk.Seeder/", "tests/Desk.Data.Tests/", "tests/Desk.Seeder.Tests/"],
   app: ["deploy/", "e2e/", "render.yaml"],

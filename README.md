@@ -829,7 +829,7 @@ services:
 
 | Area | Paths | Jobs it runs |
 |---|---|---|
-| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, .NET files under `perf/` (benchmarks in `CreditDesk.slnx`) | `api`, `coverage` (.NET) |
+| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, .NET files under `perf/` (benchmarks in `CreditDesk.slnx`), `deploy/start.sh` (linked into `Desk.Api.Tests`) | `api`, `coverage` (.NET) |
 | `web` | `web/**` | `web`, `coverage` (web) |
 | `db` | `src/Desk.Data/**`, `src/Desk.Seeder/**`, `tests/Desk.Data.Tests/**`, `tests/Desk.Seeder.Tests/**` | `api` (all .NET suites, migrate, seed), `db-tools`, `coverage` (.NET) |
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, plus any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |

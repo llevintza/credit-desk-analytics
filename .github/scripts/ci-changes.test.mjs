@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, normalize as normalizePath } from "node:path";
 import {
   AREAS,
   JOBS,
@@ -57,9 +57,15 @@ const FIXTURES = [
   },
   {
     name: "app (deploy)",
-    paths: ["deploy/start.sh", "render.yaml"],
+    paths: ["render.yaml", "deploy/AGENTS.txt"],
     flags: flagsOf("app"),
     jobs: jobsOf("run_compose_smoke", "run_e2e", "run_budgets"),
+  },
+  {
+    name: "deploy/start.sh (input of the api suite)",
+    paths: ["deploy/start.sh"],
+    flags: flagsOf("api", "app"),
+    jobs: jobsOf("run_api", "run_compose_smoke", "run_e2e", "run_budgets", "run_coverage"),
   },
   {
     name: "app (e2e specs)",
@@ -334,4 +340,25 @@ test("ci.yml: no workflow-level paths filters; classifier runs from the base che
   assert.ok(changes.includes("fetch-depth: 0"));
   assert.match(changes, /- id: classify\n        if: github\.event_name == 'pull_request'/);
   assert.doesNotMatch(CI, /pull_request_target/);
+});
+
+// Every file a .NET test project builds from or links must run the api job (R173-02).
+test("every test-project input maps to the api job (or every flag)", () => {
+  const repo = new URL("../..", import.meta.url).pathname;
+  const projects = execFileSync("git", ["-C", repo, "ls-files", "tests/*.csproj", "tests/**/*.csproj"], { encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean);
+  assert.ok(projects.length >= 3, projects.join(","));
+  let checked = 0;
+  for (const proj of projects) {
+    const xml = readFileSync(join(repo, proj), "utf8");
+    for (const m of xml.matchAll(/<(ProjectReference|None|Content|Compile|EmbeddedResource)\b[^>]*\bInclude="([^"]+)"/g)) {
+      const target = normalizePath(join(dirname(proj), m[2].replaceAll("\\", "/")));
+      const probe = m[1] === "ProjectReference" ? join(dirname(target), "X.cs") : target;
+      const areas = areasFor(probe);
+      assert.ok(areas === null || areas.some((a) => JOBS.run_api.includes(a)), `${proj} -> ${probe} maps to [${areas}]`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 6, `checked ${checked} inputs`);
 });

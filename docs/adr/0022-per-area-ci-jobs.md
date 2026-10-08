@@ -53,7 +53,7 @@ Projected from #166's per-job numbers (the `changes` job is new and not yet meas
 |---|---|---:|---:|
 | docs only | secrets, workflows, gate-tests, changes | ≈ 49 | ≈ 708 (94%) |
 | perf only (`perf/payload-size.mjs`) | + budgets | ≈ 201 | ≈ 556 (73%) |
-| app only (`deploy/start.sh`, `e2e/**`) | + compose-smoke, e2e, budgets | ≈ 467 | ≈ 290 (38%) |
+| app only (`deploy/**` except `start.sh`, `e2e/**`, `render.yaml`) | + compose-smoke, e2e, budgets | ≈ 467 | ≈ 290 (38%) |
 | web only | + web, coverage (web), compose-smoke, e2e, budgets | ≈ 531 | ≈ 226 (30%) |
 | api or db, or a shared trigger | everything | ≈ 772 | none (+15 s for `changes`) |
 
@@ -90,7 +90,7 @@ Option 4. A `changes` job runs `_base/.github/scripts/ci-changes.mjs` on `pull_r
 
 | Area | Paths | Jobs |
 |---|---|---|
-| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, .NET files under `perf/` (benchmarks in `CreditDesk.slnx`) | `api`, `coverage` |
+| `api` | `src/Desk.Api/**`, `src/Desk.Data/**`, `src/Desk.UserAdmin/**`, `tests/Desk.Api.Tests/**`, .NET files under `perf/` (benchmarks in `CreditDesk.slnx`), `deploy/start.sh` (linked into `Desk.Api.Tests`) | `api`, `coverage` |
 | `web` | `web/**` | `web`, `coverage` |
 | `db` | `src/Desk.Data/**`, `src/Desk.Seeder/**`, `tests/Desk.Data.Tests/**`, `tests/Desk.Seeder.Tests/**` | `api`, `db-tools`, `coverage` |
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, and any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |
