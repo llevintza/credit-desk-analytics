@@ -29,3 +29,4 @@ Area file for `src/Desk.Api/` (ASP.NET Core 10: endpoints, auth, rate limiting, 
 
 - The API reads `DATABASE_URL` / `ConnectionStrings__<Source>` from the environment. There is no default connection string (README §12).
 - Agents don't open, print or source `.env`. If the variables aren't already set in your session, ask Tech Coordinator; don't add a default.
+- Patterns and examples: [`docs/agents/guidelines/dotnet-api.md`](../../docs/agents/guidelines/dotnet-api.md); new endpoints: the `add-endpoint` skill.

@@ -13,7 +13,7 @@ Area file for `web/` (Angular workspace and Vitest unit tests). The root `AGENTS
 ## AG Grid
 
 - **Community only.** Don't import or enable Enterprise modules.
-- Use the `ag-grid-infinite` skill for grid work.
+- Grid work: follow [`docs/agents/guidelines/angular-ag-grid.md`](../docs/agents/guidelines/angular-ag-grid.md).
 
 ## Commands
 
