@@ -46,6 +46,13 @@ public sealed class GeneratorTests
     }
 
     [Fact]
+    public void Weighted_pick_falls_back_to_the_last_item()
+    {
+        var r = new Rng(1);
+        Assert.Equal("only", r.Pick([("only", 0.0)]));
+    }
+
+    [Fact]
     public void Rng_algorithm_is_pinned()
     {
         // If these change, every seeded value changes: bump SeedVersion deliberately, then update the pins.

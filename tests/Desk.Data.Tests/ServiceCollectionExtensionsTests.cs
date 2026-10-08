@@ -27,9 +27,38 @@ public sealed class ServiceCollectionExtensionsTests
         var tasks = Enumerable.Range(0, 8).Select(async _ =>
         {
             await using var ctx = await factory.CreateDbContextAsync(TestContext.Current.CancellationToken);
-            Assert.NotNull(ctx);
+            Assert.NotNull(ctx.SeedMetadata);
+            Assert.NotNull(ctx.ColumnCatalog);
         });
         await Task.WhenAll(tasks);
+    }
+
+    [Fact]
+    public void App_entities_expose_their_columns()
+    {
+        var meta = new SeedMetadata
+        {
+            Id = 1, Version = "1.0.0", Seed = 42, Scale = 1.0m,
+            CompletedAt = DateTimeOffset.UnixEpoch, DatabaseSizeBytes = 8,
+        };
+        Assert.Equal(1, meta.Id);
+        Assert.Equal("1.0.0", meta.Version);
+        Assert.Equal(42, meta.Seed);
+        Assert.Equal(1.0m, meta.Scale);
+        Assert.Equal(DateTimeOffset.UnixEpoch, meta.CompletedAt);
+        Assert.Equal(8, meta.DatabaseSizeBytes);
+
+        var col = new ColumnCatalogEntry
+        {
+            Name = "cusip", Ordinal = 1, Group = "keys", Kind = "Text",
+            Aggregation = "None", Header = "CUSIP",
+        };
+        Assert.Equal("cusip", col.Name);
+        Assert.Equal(1, col.Ordinal);
+        Assert.Equal("keys", col.Group);
+        Assert.Equal("Text", col.Kind);
+        Assert.Equal("None", col.Aggregation);
+        Assert.Equal("CUSIP", col.Header);
     }
 
     [Fact]

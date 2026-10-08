@@ -26,6 +26,21 @@ public sealed class SeedAppTests
     }
 
     [Fact]
+    public async Task Missing_connection_string_exits_1()
+    {
+        using var env = Env.Set(("DATABASE_URL", null), ("ConnectionStrings__App", null));
+        var err = new StringWriter();
+        var oldErr = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            Assert.Equal(1, await SeedApp.RunAsync(["--size-report"], TestContext.Current.CancellationToken));
+        }
+        finally { Console.SetError(oldErr); }
+        Assert.Contains("Connection", err.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pending_migrations_exit_1()
     {
         using var env = Env.Set(("DATABASE_URL", _pg.ConnectionString), ("ConnectionStrings__App", null));
