@@ -1,4 +1,5 @@
 using Desk.Data.App;
+using Desk.Data.Sources;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -27,6 +28,7 @@ public static class ServiceCollectionExtensions
                       .CommandTimeout(CommandTimeoutSeconds))
             .AddInterceptors(sp.GetServices<IInterceptor>()));
         services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
+        services.AddSingleton<IDataSourceRegistry, DataSourceRegistry>();
         return services;
     }
 }

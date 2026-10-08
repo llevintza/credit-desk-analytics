@@ -39,11 +39,19 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
 
     public string ConnectionString => _pg.GetConnectionString();
 
+    /// <summary>README §11: the integration database is seeded at scale 0.1 with SEED=42 (2,000 positions per as-of).</summary>
+    public static readonly DateOnly AsOf = new(2026, 10, 6);
+
     public async ValueTask InitializeAsync()
     {
         await _pg.StartAsync();
-        await using var db = NewContext();
-        await db.Database.MigrateAsync();
+        await using (var db = NewContext())
+            await db.Database.MigrateAsync();
+        var output = new StringWriter();
+        var code = await Desk.Seeder.SeedRunner.RunAsync(
+            new Desk.Seeder.SeedOptions(Seed: 42, Scale: 0.1m, IfChanged: true, Force: false, SizeReportOnly: false, MaxMegabytes: 400, AsOf: AsOf),
+            ConnectionString, output, output);
+        if (code != 0) throw new InvalidOperationException($"seed failed ({code}): {output}");
     }
 
     public override async ValueTask DisposeAsync()
@@ -59,6 +67,8 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Production");
+        // Every source (App, Core, …) resolves to the container; CI's own DATABASE_URL must never leak in.
+        builder.UseSetting("DATABASE_URL", ConnectionString);
         builder.UseSetting("ConnectionStrings:App", ConnectionString);
         builder.UseSetting("SWAGGER_ENABLED", "true");
         builder.UseSetting("AUDIT_FLUSH_SECONDS", "0"); // write audit rows right away so tests can see them

@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/perf/">
+    <Project Path="perf/GridBenchmark/GridBenchmark.csproj" />
     <Project Path="perf/LoadBenchmark/LoadBenchmark.csproj" />
   </Folder>
   <Folder Name="/src/">

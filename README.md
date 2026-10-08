@@ -940,8 +940,8 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | phase-2/auth-and-limits | In review |
-| 3 Positions API | n/a | Not started |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage |
+| 3 Positions API | phase-3/positions-api | In review |
 | 4 Shell + Positions UI | n/a | Not started |
 | 5 Fund Performance | n/a | Not started |
 | 6 Insights Board | n/a | Not started |

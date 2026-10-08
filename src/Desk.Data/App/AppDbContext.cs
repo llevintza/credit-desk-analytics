@@ -21,6 +21,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<SeedMetadata> SeedMetadata => Set<SeedMetadata>();
     public DbSet<ColumnCatalogEntry> ColumnCatalog => Set<ColumnCatalogEntry>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
+    public DbSet<Preset> Presets => Set<Preset>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -64,6 +65,20 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(x => x.Cache).HasColumnName("cache").HasMaxLength(8);
             // The Usage page reads "per user per day" and "slowest today": both start from a time range.
             e.HasIndex(x => x.At);
+        });
+
+        b.Entity<Preset>(e =>
+        {
+            e.ToTable("preset");
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.UserId).HasColumnName("user_id");
+            e.Property(x => x.Page).HasColumnName("page").HasMaxLength(32);
+            e.Property(x => x.Name).HasColumnName("name").HasMaxLength(64);
+            e.Property(x => x.State).HasColumnName("state").HasColumnType("jsonb");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.UserId, x.Page, x.Name }).IsUnique();
+            // A deleted account takes its presets with it.
+            e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<DeskUser>(e =>

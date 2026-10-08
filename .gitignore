@@ -29,3 +29,4 @@ secrets/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+perf/out/
