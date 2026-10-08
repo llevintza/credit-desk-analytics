@@ -56,6 +56,18 @@ if (tags.length !== (html.match(/<(?:script|link)\b/gi) ?? []).length) fail('ind
 // is lazy and excluded (the `(` stops the match). Bare specifiers can't load in the browser without an import map.
 const staticImports = (source) => [...source.matchAll(/(?:\bfrom|\bimport)\s*["']((?:\.{1,2})?\/[^"']+)["']/g)].map((m) => m[1]);
 
+// CSS `@import` (#266 N4), quoted or in url(), in a counted stylesheet or an inline <style>. Unlike a JS specifier, a
+// bare `theme.css` is relative. CSS comments aren't stripped, so an @import inside one is counted: that fails closed.
+const cssImports = (source) =>
+  [...source.matchAll(/@import\s*(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]+))|"([^"]*)"|'([^']*)')/gi)].map((m) =>
+    m.slice(1).find((v) => v !== undefined),
+  );
+const stylesheet = (from, spec) => {
+  const file = normalize(from, spec);
+  if (!file.endsWith('.css')) fail(`@import "${spec}" in ${from} is not a .css file; refusing to guess its size.`);
+  return file;
+};
+
 const initial = [];
 const inlineImports = [];
 for (const { 0: tag, 1: name, 2: text, index } of tags) {
@@ -80,18 +92,23 @@ for (const { 0: tag, 1: name, 2: text, index } of tags) {
   }
 }
 for (const spec of inlineImports) initial.push(normalize('index.html', spec));
+for (const [, body] of html.matchAll(/<style\b(?:[^>"']|"[^"]*"|'[^']*')*>([\s\S]*?)<\/style\s*>/gi))
+  for (const spec of cssImports(body)) initial.push(stylesheet('index.html', spec));
 const main = initial.find((f) => /^main-[^/]*\.js$/.test(f));
 if (initial.length === 0 || !main) fail('index.html lists no initial scripts or no main-*.js; refusing to pass the budget.');
 
 // Static imports of the initial scripts load up front too, followed transitively and resolved against the importer
 // (#204): any file name or sub-path, not only `./chunk-*.js` at the root. Every script is followed, whatever its
-// extension: an inline module can import `./boot.mjs` (#266 N3).
+// extension: an inline module can import `./boot.mjs` (#266 N3). Stylesheets are followed through @import (#266 N4).
 const files = [...new Set(initial)];
-const queue = files.filter((f) => !f.endsWith('.css'));
+const queue = [...files];
 while (queue.length > 0) {
   const importer = queue.shift();
-  for (const spec of staticImports(read(importer).toString('utf8'))) {
-    const file = normalize(importer, spec);
+  const source = read(importer).toString('utf8');
+  const imports = importer.endsWith('.css')
+    ? cssImports(source).map((spec) => stylesheet(importer, spec))
+    : staticImports(source).map((spec) => normalize(importer, spec));
+  for (const file of imports) {
     if (!files.includes(file)) {
       files.push(file);
       queue.push(file);

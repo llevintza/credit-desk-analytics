@@ -297,3 +297,34 @@ test('follows the static imports of a non-.js script an inline module imports', 
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /over the 500 KB budget/);
 });
+
+// #266 N4: a stylesheet's @import loads up front too, from a counted .css file or an inline <style>, transitively,
+// resolved against the importer, in every spelling CSS allows.
+for (const [label, head, files] of [
+  ['a quoted @import', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': '@import "theme-A1.css";p{}' }],
+  ['an @import url()', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': "@import url( 'theme-A1.css' ) screen;" }],
+  ['an unquoted upper-case @IMPORT url()', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': '@IMPORT url(theme-A1.css);' }],
+  [
+    'a nested @import relative to its importer',
+    '<link rel="stylesheet" href="styles-A1.css">',
+    { 'styles-A1.css': '@import"css/a-A1.css";', 'css/a-A1.css': "@import '../theme-A1.css';" },
+  ],
+  ['an inline <style> @import', '<style>@import url("theme-A1.css");</style>', {}],
+]) {
+  test(`counts ${label}`, () => {
+    const r = run({ 'index.html': page(`${head}<script src="main-A1.js" type="module"></script>`), 'main-A1.js': 'void 0;', 'theme-A1.css': big(), ...files });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
+
+test('fails closed on an @import of a file that is not .css', () => {
+  const r = run({
+    'index.html': page('<link rel="stylesheet" href="styles-A1.css"><script src="main-A1.js" type="module"></script>'),
+    'styles-A1.css': '@import "theme-A1.php";',
+    'theme-A1.php': big(),
+    'main-A1.js': 'void 0;',
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /@import "theme-A1\.php" in styles-A1\.css is not a \.css file/);
+});
