@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// WCAG 2.x contrast of the up/down text tokens on every background token, per theme and palette (#147, #51 AC6).
-// Reads the tokens from src/styles.scss, so it checks what ships. Grid figures are 13 px normal text: AA is 4.5:1.
+// WCAG 2.x contrast of every text token on every background token, per theme and palette (#147, #51 AC6, #228).
+// Reads the tokens from src/styles.scss, so it checks what ships. Grid figures are 12 px normal text: AA is 4.5:1.
 // Usage: node web/scripts/contrast-check.mjs [path/to/styles.scss]   (exit 1 if any pair is below 4.5:1)
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const AA = 4.5;
-const FOREGROUNDS = ['up', 'down'];
+const FOREGROUNDS = ['text', 'muted', 'accent', 'warn', 'up', 'down'];
 const BACKGROUNDS = ['surface-1', 'surface-2', 'surface-3', 'zebra', 'hover'];
 const SELECTORS = {
   dark: ':root',
@@ -63,9 +63,9 @@ export function check(scss) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const file = process.argv[2] ?? fileURLToPath(new URL('../src/styles.scss', import.meta.url));
   const rows = check(readFileSync(file, 'utf8'));
-  console.log(`theme                 fg    hex      bg         hex      ratio  AA ${AA}:1`);
+  console.log(`theme                 fg     hex      bg         hex      ratio  AA ${AA}:1`);
   for (const r of rows) {
-    console.log(`${r.theme.padEnd(21)} ${r.fg.padEnd(5)} ${r.fgHex}  ${r.bg.padEnd(10)} ${r.bgHex}  ${r.ratio.toFixed(2).padStart(5)}  ${r.ratio >= AA ? 'pass' : 'FAIL'}`);
+    console.log(`${r.theme.padEnd(21)} ${r.fg.padEnd(6)} ${r.fgHex}  ${r.bg.padEnd(10)} ${r.bgHex}  ${r.ratio.toFixed(2).padStart(5)}  ${r.ratio >= AA ? 'pass' : 'FAIL'}`);
   }
   const failed = rows.filter((r) => r.ratio < AA);
   const worst = rows.reduce((a, b) => (b.ratio < a.ratio ? b : a));
