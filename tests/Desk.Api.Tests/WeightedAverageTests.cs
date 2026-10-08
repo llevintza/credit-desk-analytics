@@ -37,8 +37,12 @@ public sealed class WeightedAverageTests(PostgresApiFactory api)
     [Fact]
     public async Task Zero_and_null_weights_count_for_nothing_and_no_weight_is_null_never_nan()
     {
+        // A zero weight and a NULL measure both drop out: (100·500) / 500.
         Assert.Equal(100, (await WeightedAsync("(100.0::float8, 500.0::numeric), (900.0, 0.0), (NULL, 700.0)"))!.Value, 9);
         Assert.Null(await WeightedAsync("(100.0::float8, 0.0::numeric), (900.0, 0.0)"));
         Assert.Null(await WeightedAsync("(NULL::float8, 500.0::numeric)"));
+        // A NULL weight (market_value is nullable) excludes the row from both sides: (100·500) / 500.
+        Assert.Equal(100, (await WeightedAsync("(100.0::float8, 500.0::numeric), (900.0, NULL)"))!.Value, 9);
+        Assert.Null(await WeightedAsync("(100.0::float8, NULL::numeric)"));
     }
 }
