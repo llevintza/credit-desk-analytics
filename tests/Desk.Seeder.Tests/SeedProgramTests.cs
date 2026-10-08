@@ -35,6 +35,26 @@ public sealed class SeedProgramTests
         Assert.Equal(1, code);
     }
 
+    [Theory]
+    [InlineData("--cap-mb")]
+    [InlineData("--max-mb")]
+    [InlineData("--seed")]
+    public async Task Assembly_entry_point_rejects_an_overflowing_number(string flag)
+    {
+        // R217-05: OverflowException from Parse is a bad argument (exit 1), not an unhandled crash.
+        using var env = Env.Set(("DATABASE_URL", null), ("ConnectionStrings__App", null));
+        var entry = typeof(SeedRunner).Assembly.EntryPoint;
+        Assert.NotNull(entry);
+        var invoked = entry.Invoke(null, [new[] { "--force", flag, "99999999999999999999" }]);
+        var code = invoked switch
+        {
+            Task<int> task => await task,
+            int i => i,
+            _ => throw new InvalidOperationException($"Unexpected entry point return {invoked?.GetType().FullName}"),
+        };
+        Assert.Equal(1, code);
+    }
+
     [Fact]
     public async Task Assembly_entry_point_rejects_missing_connection_string()
     {

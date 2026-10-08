@@ -49,4 +49,7 @@ button { cursor: pointer; background: var(--surface-3); }
 button:disabled { opacity: 0.6; cursor: default; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
