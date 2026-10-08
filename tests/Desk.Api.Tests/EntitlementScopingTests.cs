@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Desk.Api.Positions;
+using Desk.Data.Grid;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -63,16 +64,16 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
     private const string CountSql = "SELECT count(*) FROM core.position_snapshot WHERE portfolio_id = @p AND as_of_date = @asof";
     private const string SumSql = "SELECT sum(market_value) FROM core.position_snapshot WHERE portfolio_id = @p AND as_of_date = @asof";
 
-    private static object Block(int start) => new { columns = new[] { "portfolio_id", "market_value" }, startRow = start, endRow = start + 500 };
+    private static object Block(int start) => new { columns = new[] { "portfolio_id", "market_value" }, startRow = start, endRow = start + GridQueryNormalizer.MaxBlockRows };
     private static readonly object Body = Block(0);
 
-    /// <summary>Every block of the query (500 rows each, the cap), concatenated: the portfolio column and the first block.</summary>
+    /// <summary>Every block of the query (<see cref="GridQueryNormalizer.MaxBlockRows"/> rows each, the cap), concatenated: the portfolio column and the first block.</summary>
     private static async Task<(int[] Portfolios, JsonElement First)> AllBlocksAsync(HttpClient client, string xsrf)
     {
         var first = await JsonAsync(await client.SendAsync(Post("/api/positions/query", xsrf, Body), Ct));
         var rows = first.GetProperty("rowCount").GetInt32();
         var portfolios = new List<int>();
-        for (var start = 0; start < rows; start += 500)
+        for (var start = 0; start < rows; start += GridQueryNormalizer.MaxBlockRows)
         {
             var block = start == 0 ? first : await JsonAsync(await client.SendAsync(Post("/api/positions/query", xsrf, Block(start)), Ct));
             portfolios.AddRange(block.GetProperty("data")[1].EnumerateArray().Select(v => v.GetInt32()));
@@ -161,7 +162,7 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
         Assert.Equal("MISS", second.Headers.GetValues("X-Cache").Single());
         var secondDoc = await JsonAsync(second);
         Assert.All(secondDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
-        Assert.Equal(Math.Min(p2Count, 500), secondDoc.GetProperty("data")[1].GetArrayLength());
+        Assert.Equal(Math.Min(p2Count, GridQueryNormalizer.MaxBlockRows), secondDoc.GetProperty("data")[1].GetArrayLength());
         // The summary cache (sum:{SummaryKey}) is shared by every block of a view: it must not carry portfolio 1's totals.
         Assert.Equal(p2Count, secondDoc.GetProperty("rowCount").GetInt32());
         Assert.Equal(p2Sum, secondDoc.GetProperty("summary").GetProperty("market_value").GetDecimal());
@@ -170,7 +171,7 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
         var replay = await client.SendAsync(Post("/api/positions/query", xsrf, Body, ifNoneMatch: etag), Ct);
         var replayDoc = await JsonAsync(replay);
         Assert.All(replayDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
-        Assert.Equal(Math.Min(p2Count, 500), replayDoc.GetProperty("data")[1].GetArrayLength());
+        Assert.Equal(Math.Min(p2Count, GridQueryNormalizer.MaxBlockRows), replayDoc.GetProperty("data")[1].GetArrayLength());
         Assert.Equal(p2Count, replayDoc.GetProperty("rowCount").GetInt32());
     }
 
