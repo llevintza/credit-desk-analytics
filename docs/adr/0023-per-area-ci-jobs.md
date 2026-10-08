@@ -98,7 +98,7 @@ Option 4. A `changes` job runs `_base/.github/scripts/ci-changes.mjs` on `pull_r
 
 The paths are classified in this order, and the first match wins:
 
-1. Docs set no flag: `*.md` anywhere, including under `.github/`, plus `docs/**` and `.claude/skills/**`.
+1. Docs set no flag: `*.md` anywhere, including under `.github/`, plus `docs/**` and `.claude/skills/**`. Under `src/` and `web/src/`, where Markdown could be embedded or imported, only `AGENTS.md` and `CLAUDE.md` count as docs.
 2. Shared triggers set every flag: `.github/**`, `Directory.*.props|targets`, `global.json`, `dotnet-tools.json`, `nuget.config`, `*.sln`/`*.slnx`, `package-lock.json`, `packages.lock.json`, `Dockerfile*`, `.dockerignore`, `docker-compose*.yml`/`compose*.yml`, `perf/coverage-*`, `tests/testconfig.json` and `.gitleaks.toml`.
 3. Area paths set their own flags.
 4. Anything else sets every flag. An empty diff also sets every flag.

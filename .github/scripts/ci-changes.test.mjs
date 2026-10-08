@@ -174,6 +174,13 @@ test("an empty diff sets every flag", () => {
   assert.deepEqual(classify(["", "  "]).flags, ALL);
 });
 
+test("Markdown in a source tree is not docs, except AGENTS.md/CLAUDE.md (R173-09)", () => {
+  assert.deepEqual(classify(["web/src/x.md"]).flags, flagsOf("web", "app"));
+  assert.deepEqual(classify(["src/Desk.Api/Templates/mail.md"]).flags, flagsOf("api", "app"));
+  assert.deepEqual(classify(["src/Desk.Api/AGENTS.md", "web/src/app/CLAUDE.md"]).flags, flagsOf());
+  assert.deepEqual(classify(["web/README.md", "e2e/notes.md"]).flags, flagsOf());
+});
+
 test("paths are not trimmed: a trailing space is not docs", () => {
   const r = classify(["README.md "]);
   assert.deepEqual(r.flags, ALL);

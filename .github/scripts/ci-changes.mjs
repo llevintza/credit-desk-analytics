@@ -7,7 +7,8 @@
  * `$GITHUB_OUTPUT` as `true` / `false`.
  *
  * Each path is classified in this order (first match wins):
- *   1. docs (`*.md` anywhere, `docs/**`, `.claude/skills/**`)  -> no flag
+ *   1. docs (`*.md` anywhere, `docs/**`, `.claude/skills/**`)  -> no flag;
+ *      under `src/` and `web/src/` only AGENTS.md / CLAUDE.md count as docs
  *      Markdown runs in no CI job, so `.github/AGENTS.md` is docs too (#166).
  *   2. shared trigger (`.github/**`, build props, SDK pins, solution files,
  *      lockfiles, Docker/compose files, CI and coverage scripts) -> every flag
@@ -63,8 +64,15 @@ export function isShared(path) {
   );
 }
 
+// Markdown in source trees could be embedded or imported, so there only the agent
+// rule files (AGENTS.md / CLAUDE.md, docs "anywhere" per #169) count as docs.
+const SOURCE_TREE = /^(src|web\/src)\//;
+const AGENT_DOCS = new Set(["AGENTS.md", "CLAUDE.md"]);
+
 export function isDocs(path) {
-  return path.endsWith(".md") || path.startsWith("docs/") || path.startsWith(".claude/skills/");
+  if (path.startsWith("docs/") || path.startsWith(".claude/skills/")) return true;
+  if (!path.endsWith(".md")) return false;
+  return !SOURCE_TREE.test(path) || AGENT_DOCS.has(basename(path));
 }
 
 const AREA_PREFIXES = Object.freeze({
