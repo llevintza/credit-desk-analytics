@@ -35,6 +35,7 @@ export class ScopeService {
   load(): void {
     if (this.loading || this.dates().length) return;
     this.loading = true;
+    // Root injector: fires only at app teardown; reset() is what cancels an in-flight load on sign-out.
     this.loadSub = forkJoin({ asOf: this.api.asOf(), portfolios: this.api.portfolios() })
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
