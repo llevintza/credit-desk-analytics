@@ -22,6 +22,22 @@ public sealed class DataSourceRegistryTests
     }
 
     [Fact]
+    public void Synchronous_dispose_releases_every_data_source_it_created()
+    {
+        // The CLI tools dispose their containers synchronously, and EF resolves the registry when its pool is built (#128).
+        var registry = new DataSourceRegistry(Config(new()
+        {
+            ["DATABASE_URL"] = "Host=db;Database=desk;Username=u",
+            ["ConnectionStrings:Surveillance"] = "Host=other-db;Database=surv;Username=u",
+        }), new DbConnectionCounter());
+        var core = registry.Get(ConnectionStrings.Core);
+        var surveillance = registry.Get(ConnectionStrings.Surveillance);
+        registry.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => core.OpenConnection());
+        Assert.Throws<ObjectDisposedException>(() => surveillance.OpenConnection());
+    }
+
+    [Fact]
     public async Task A_per_source_setting_gets_its_own_data_source()
     {
         await using var registry = new DataSourceRegistry(Config(new()
