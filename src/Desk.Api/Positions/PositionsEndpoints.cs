@@ -55,25 +55,9 @@ public static class PositionsEndpoints
         var hash = Hash(query.CanonicalKey);
         // The ETag changes with the data (reseed), the query and the representation: a 304 needs no database read.
         var etag = $"W/\"{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{hash}:{(msgpack ? "mp" : "js")}\"";
-        http.Response.Headers.ETag = etag;
-        http.Response.Headers.CacheControl = "private, no-cache";
         http.Response.Headers.Vary = HeaderNames.Accept;
-        var audit = http.Features.Get<AuditFeature>();
-
-        if (http.Request.Headers.IfNoneMatch.Contains(etag))
-        {
-            SetTiming(http, "HIT", 0, 0, started);
-            if (audit is not null) audit.Cache = "HIT";
-            return Results.StatusCode(StatusCodes.Status304NotModified);
-        }
-
-        var key = $"pos:{etag}";
-        if (cache.Cache.TryGetValue(key, out byte[]? cached) && cached is not null)
-        {
-            SetTiming(http, "HIT", 0, 0, started);
-            if (audit is not null) audit.Cache = "HIT";
-            return Results.Bytes(cached, contentType);
-        }
+        if (CachedResponse.TryHit(http, cache, etag, contentType, started) is { } hit)
+            return hit;
 
         // Totals depend on the filter, not on paging or sort: the first block of a view computes them (one round
         // trip with the page) and every later block of that view reads only its indexed page.
@@ -89,15 +73,7 @@ public static class PositionsEndpoints
             ? ColumnarSerializer.ToMsgPack(block, query.AsOf, generatedAt)
             : ColumnarSerializer.ToJson(block, query.AsOf, generatedAt);
         var serializeMs = Stopwatch.GetElapsedTime(serializeStarted).TotalMilliseconds;
-
-        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = meta.BatchEndsAt });
-        SetTiming(http, "MISS", block.DbMs, serializeMs, started);
-        if (audit is not null)
-        {
-            audit.Cache = "MISS";
-            audit.Rows = block.Rows;
-        }
-        return Results.Bytes(bytes, contentType);
+        return CachedResponse.Store(http, cache, etag, bytes, contentType, meta.BatchEndsAt, block.DbMs, serializeMs, started, block.Rows);
     }
 
     internal static async Task<IResult> ExportAsync(
