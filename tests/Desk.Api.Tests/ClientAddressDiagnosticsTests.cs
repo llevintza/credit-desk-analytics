@@ -155,6 +155,25 @@ public sealed class ClientAddressDiagnosticsTests
     }
 
     [Fact]
+    public void A_public_hop_outside_the_lists_warns_only_when_cloudflare_vouched_for_a_client()
+    {
+        var diagnostics = Diagnostics();
+        var clients = new ClientAddress(true);
+        // An edge in a Cloudflare range the list doesn't have yet: the key is that hop for every client.
+        Assert.Equal("8.8.8.8", clients.For(Request(diagnostics, RenderLb, $"{Client}, 8.8.8.8", Client)));
+        var line = Assert.Single(_log.Lines).Text;
+        Assert.StartsWith("Client address fell back to a shared key (DirectHop):", line);
+        Assert.Contains("ForwardedForShape=public>public", line);
+        Assert.Matches("CfConnectingIp=v4:[0-9a-f]{12} ", line);
+
+        // A client that reached Render directly has no CF header: it is its own key, nothing to warn about.
+        _log.Lines.Clear();
+        _time.Advance(ClientAddressDiagnostics.FallbackInterval);
+        Assert.Equal("8.8.8.8", clients.For(Request(diagnostics, RenderLb, $"{Client}, 8.8.8.8")));
+        Assert.Empty(_log.Lines);
+    }
+
+    [Fact]
     public void Per_client_keys_and_the_unproxied_host_never_warn()
     {
         var diagnostics = Diagnostics();

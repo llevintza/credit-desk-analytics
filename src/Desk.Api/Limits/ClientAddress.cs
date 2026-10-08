@@ -62,13 +62,16 @@ public sealed class ClientAddress(bool behindProxy)
     public string For(HttpContext http)
     {
         var address = Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy, out var source);
-        if (behindProxy && source is not (Source.CfConnectingIp or Source.DirectHop))
+        // A real direct client sends no CF-Connecting-IP (Cloudflare 403s a forged one), so a DirectHop that carries
+        // one is a Cloudflare or Render hop missing from the lists, and every client shares it (R175-01).
+        if (behindProxy && (source is not (Source.CfConnectingIp or Source.DirectHop)
+                            || (source is Source.DirectHop && http.Request.Headers.ContainsKey("CF-Connecting-IP"))))
             http.RequestServices?.GetService<ClientAddressDiagnostics>()?.Fallback(http, source);
         return address?.ToString() ?? "unknown";
     }
 
-    /// <summary>Which rule picked the key. Everything but <see cref="CfConnectingIp"/> and <see cref="DirectHop"/>
-    /// shares one key across clients behind the proxy (#165).</summary>
+    /// <summary>Which rule picked the key. Everything but <see cref="CfConnectingIp"/> and a genuine
+    /// <see cref="DirectHop"/> shares one key across clients behind the proxy (#165).</summary>
     public enum Source
     {
         /// <summary>Off the proxy: the socket peer is the client.</summary>
@@ -77,7 +80,11 @@ public sealed class ClientAddress(bool behindProxy)
         UntrustedPeer,
         /// <summary>The peer is Render but <c>X-Forwarded-For</c> is missing or its last entry isn't an address.</summary>
         NoForwardedFor,
-        /// <summary>The hop Render saw isn't Cloudflare: it reached Render directly and is the client.</summary>
+        /// <summary>
+        /// The hop Render saw is public but not in <see cref="Cloudflare"/>: either a client that reached Render
+        /// directly (the hop is that client), or, when <c>CF-Connecting-IP</c> is present, a Cloudflare or Render
+        /// range missing from the lists, which every client shares (warned, #161).
+        /// </summary>
         DirectHop,
         /// <summary>The hop Render saw is a private address (an internal hop, not a client): every client shares it.</summary>
         InternalHop,
