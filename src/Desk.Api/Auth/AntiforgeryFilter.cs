@@ -10,7 +10,13 @@ namespace Desk.Api.Auth;
 /// </summary>
 public sealed class AntiforgeryFilter(IAntiforgery antiforgery) : IEndpointFilter
 {
-    /// <summary>The 400's ProblemDetails title. The SPA matches it to refresh the token and retry once (#233).</summary>
+    /// <summary>
+    /// The 400's ProblemDetails <c>type</c>: a stable URI the SPA matches to refresh the token and retry once (#233,
+    /// #282). It's the contract; the title is for people and may change.
+    /// </summary>
+    public const string ProblemType = "urn:desk:problem:antiforgery";
+
+    /// <summary>The 400's ProblemDetails title. The SPA still accepts it as a fallback for one release (#282).</summary>
     public const string ProblemTitle = "Missing or invalid antiforgery token";
 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
@@ -22,7 +28,7 @@ public sealed class AntiforgeryFilter(IAntiforgery antiforgery) : IEndpointFilte
             && !await antiforgery.IsRequestValidAsync(http))
         {
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: ProblemTitle,
-                detail: $"Send the XSRF-TOKEN cookie value in the {AuthSetup.AntiforgeryHeaderName} header.");
+                type: ProblemType, detail: $"Send the XSRF-TOKEN cookie value in the {AuthSetup.AntiforgeryHeaderName} header.");
         }
         return await next(ctx);
     }
