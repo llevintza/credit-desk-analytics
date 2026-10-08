@@ -74,7 +74,11 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - it is JSON-only, so a cross-site form can't produce it without CORS, which we never enable;
   - it is limited to 5/min per IP;
   - there is no session to ride.
-- The antiforgery cookie (`desk-af`) is `SameAsRequest`, because the framework refuses to issue a Secure cookie on plain HTTP (local compose, the dev proxy).
+- The antiforgery cookie depends on where the app runs (#118 N1):
+  - **Behind Render's TLS proxy, outside Development** (`ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`, so production): `__Host-desk-af`, `SecurePolicy=Always`. The `__Host-` prefix means no other subdomain or plain-HTTP response can plant or overwrite it. Every request there is HTTPS: Render redirects plain HTTP, and the app reads `X-Forwarded-Proto`.
+  - **Everywhere else** (local compose and the CI e2e and budgets stacks, which run Production over plain `http://localhost:8080`, and the dev proxy): `desk-af`, `SameAsRequest`. The framework refuses to issue an always-Secure antiforgery cookie on a plain-HTTP request; making it `Always` everywhere was a login 500 on compose. A `__Host-` cookie without `Secure` is rejected by the browser, so the prefix goes with `Always`.
+  - Consequence: a plain-HTTP request that reaches the app behind the proxy without `X-Forwarded-Proto: https` gets a 500 on login, logout and the antiforgery refresh. Render never forwards one.
+  - `AuthTests` proves both: a forwarded-https login gets `__Host-desk-af` (Secure, no Domain) and its token validates; a plain-HTTP login off the proxy gets `desk-af` and its token validates.
 
 **Keys**
 - Data-protection keys live in `auth.data_protection_keys`, so sessions survive restarts.

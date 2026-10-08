@@ -43,8 +43,11 @@ public sealed class ClientAddress(bool behindProxy)
         }.Select(IPNetwork.Parse),
     ];
 
-    public static ClientAddress From(IConfiguration config) =>
-        new(bool.TryParse(config["FORWARDEDHEADERS_ENABLED"], out var on) && on); // = ASPNETCORE_FORWARDEDHEADERS_ENABLED
+    public static ClientAddress From(IConfiguration config) => new(BehindProxy(config));
+
+    /// <summary>True on Render: <c>ASPNETCORE_FORWARDEDHEADERS_ENABLED=true</c> (render.yaml). Unset in local, compose and CI.</summary>
+    public static bool BehindProxy(IConfiguration config) =>
+        bool.TryParse(config["FORWARDEDHEADERS_ENABLED"], out var on) && on; // = ASPNETCORE_FORWARDEDHEADERS_ENABLED
 
     public string For(HttpContext http) =>
         Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy)?.ToString() ?? "unknown";
