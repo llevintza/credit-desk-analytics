@@ -239,7 +239,7 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
 
-**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
+**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` (current size + new data) and, on a run that would TRUNCATE, **refuses (exit 2) before TRUNCATE when it exceeds `--cap-mb`** (default 512 MB), leaving data and `app.seed_metadata` untouched (#109; §10). Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
 
 **Measured (phase 1, scale 1.0, SEED=42, Postgres 17, linux-x64):**
 - **1,563,791 rows** across 20 tables.
@@ -260,7 +260,9 @@ See ADR-0003 and ADR-0004.
     - `--if-changed`: skip when the version, seed and scale match `app.seed_metadata` (what the deploy pipeline uses)
     - `--force`: always reseed (`db-ops` reseed)
     - `--size-report`
-  - `--max-mb`
+  - `--max-mb` (default 400): budget for the **committed** size, checked just before COMMIT; over it the load rolls back (exit 2).
+  - `--cap-mb` (default 512, must be > 0): storage cap for the reseed **peak**, checked **before TRUNCATE** on runs that would reseed (version, seed or scale change, or `--force`). Over it, or when the current size can't be read, the seeder refuses with exit 2 and changes nothing. An `--if-changed` skip never checks it. See §10.
+- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled.
 - The prior business day is generated as the snapshot's second as-of date.
 - **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
@@ -651,9 +653,17 @@ The **website is public** (anyone can reach the login page). The **data is not**
 | P3 first tile / all tiles | < 500 ms / < 1.5 s | Playwright | Reported |
 | Seeder runtime | < 90 s local at scale 1.0 | the seeder's own timer | Reported |
 | DB size | < 350 MB | the seeder (`pg_database_size`) | **Seeder fails** above 400 MB |
+| Reseed peak (old + new data until COMMIT) | ≤ `--cap-mb` (default 512 MB) | the seeder (`SEED_PEAK_EST_MB`) | **Seeder refuses** before TRUNCATE (exit 2) |
 | JS bundle (initial) | < 500 KB compressed | `ng build` stats | **CI fails** above budget |
 
 Every PR that touches a measured path **MUST** paste before/after numbers in its body (the PR template has the table).
+
+**Reseed peak and the storage cap (#109).**
+- **Why a reseed peaks:** `TRUNCATE` inside the seed transaction keeps the old relfilenodes until `COMMIT`, so a reseed temporarily needs about old + new data. A local `--force` at scale 1.0 peaked at **533.8 MB** (`SEED_PEAK_EST_MB=542`), over the 0.5 GB planning cap. On a 512 MiB data directory the same run failed mid-COPY with SQLSTATE 53100 (data intact).
+- **The guard:** before any destructive statement, a run that would TRUNCATE computes `SEED_PEAK_EST_MB` = current `pg_database_size` + the measured scale-1.0 size × scale. Above `--cap-mb` (default **512 MB**), or if the size can't be read (fail closed), it exits 2 and changes nothing. `--max-mb` stays the separate committed-size budget, checked before COMMIT.
+- **At the 512 MB default, a full scale-1.0 reseed is refused on purpose.** A first seed into an empty database (~280 MB peak) passes; reseeding a full book doesn't. Neon announced 1 GB per Free project on 2026-10-02, but the default stays 512 MB until Leo confirms the project's real cap. To reseed against a larger cap, pass a higher `--cap-mb` (for example `--cap-mb 1024`).
+- **This guard must be in place before any `SeedVersion` or `SEED_SCALE` bump:** those reseed production automatically on merge (§14.2).
+- **Stale local data:** dev databases seeded at `1.0.0` by earlier PR heads report the same version, so `--if-changed` skips and keeps the stale rows. Reseed them locally with `--force` (add `--cap-mb 1024` at scale 1.0). Never `--force` against Neon or production.
 
 ---
 
