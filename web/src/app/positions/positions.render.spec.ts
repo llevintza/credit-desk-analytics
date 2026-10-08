@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { PositionsQuery } from './positions-query';
 import { Positions } from './positions';
 
 /**
@@ -38,6 +39,34 @@ describe('Positions page with the real grid', () => {
     await fixture.whenStable();
     expect(el.querySelector('[data-testid=positions-grid]')).not.toBeNull();
     expect(el.querySelector('.skeleton')).toBeNull();
+
+    // Drive every conditional block of the compiled template explicitly (not by request timing).
+    const component = fixture.componentInstance as unknown as {
+      preset: { set(v: string): void }; exporting: { set(v: boolean): void }; loadError: { set(v: string | null): void };
+    };
+    const query = fixture.debugElement.injector.get(PositionsQuery);
+    component.preset.set('Mine');           // own preset: Delete button
+    component.exporting.set(true);          // "Exporting…"
+    query.loading.set(true);                // "Loading…"
+    query.error.set('Could not load positions.');
+    await fixture.whenStable();
+    expect(el.textContent).toContain('Delete');
+    expect(el.textContent).toContain('Exporting');
+    expect(el.textContent).toContain('Loading');
+    expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not load positions');
+
+    component.loadError.set('Catalog failed.'); // loadError wins over the query error
+    await fixture.whenStable();
+    expect(el.querySelector('[role=alert]')?.textContent).toContain('Catalog failed.');
+
+    component.preset.set('Risk');
+    component.exporting.set(false);
+    query.loading.set(false);
+    query.error.set(null);
+    component.loadError.set(null);
+    await fixture.whenStable();
+    expect(el.querySelector('[role=alert]')).toBeNull();
+    expect(el.textContent).not.toContain('Loading');
     fixture.destroy();
   });
 });
