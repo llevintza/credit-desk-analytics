@@ -12,7 +12,7 @@ The P1 grid fetches blocks of 200 rows of 40–200 columns. README §10 sets the
 
 1. **Row JSON:** `[{ "deal_name": …, "dv01": … }, …]`. Every row repeats every property name.
 2. **Columnar JSON:** `{ columns: [...], data: [[col0 values], [col1 values], …], rowCount, summary }`. It is written straight from the typed column buffers with `Utf8JsonWriter`. The other DTOs use System.Text.Json source generation (`DeskJsonContext`).
-3. **Columnar MessagePack:** the same document in MessagePack (MessagePack-CSharp 3.1.11), served on `Accept: application/x-msgpack`. Money goes as float64, because MessagePack has no decimal. That is exact to the cent below ~9e13.
+3. **Columnar MessagePack:** the same document in MessagePack (MessagePack-CSharp 3.1.11), served on `Accept: application/x-msgpack`. MessagePack has no decimal, so money goes as its exact invariant string (`"1250000.25"`), never as a binary float (AGENTS.md money rule).
 
 ## Evaluation
 
@@ -22,10 +22,10 @@ The same 200-row block for each (seed 42, scale 1.0). Server: .NET 10, Apple M5.
 |---|---|---:|---:|---:|---:|---:|---:|
 | Risk (42 cols) | Row JSON | 170.4 | 46.8 | 39.4 | 1.45 | 0.26 | 0.26 / 0.37 |
 | | **Columnar JSON** | **61.9** | **27.6** | **25.2** | 0.40 | 0.11 | 0.28 / 0.35 |
-| | Columnar MessagePack | 70.6 | 34.4 | 36.4 | 0.21 | 0.07 | 0.21 / 0.30 |
+| | Columnar MessagePack | 68.0 | 34.8 | 38.7 | 0.30 | 0.15 | 0.29 / 0.39 |
 | All (197 cols) | Row JSON | 880.5 | 269.2 | 227.3 | 2.49 | 2.89 | 2.89 / 3.30 |
 | | **Columnar JSON** | **304.2** | **133.1** | **120.7** | 1.84 | 0.55 | 1.36 / 1.79 |
-| | Columnar MessagePack | 336.0 | 143.3 | 147.7 | 0.95 | 0.29 | 0.95 / 1.18 |
+| | Columnar MessagePack | 332.6 | 145.0 | 151.7 | 1.08 | 0.41 | 1.07 / 1.37 |
 
 **On the wire through the running API** (`perf/payload-size.mjs`, `Accept-Encoding: br, gzip`):
 
@@ -37,7 +37,7 @@ The same 200-row block for each (seed 42, scale 1.0). Server: .NET 10, Apple M5.
 **Notes:**
 - Columnar JSON is about a third the raw size of row JSON, and about 40% smaller compressed.
 - MessagePack is *larger* than columnar JSON once compressed. Its type-tagged binary numbers compress worse than the short decimal text JSON uses for these values.
-- MessagePack decodes about 0.4 ms faster on the 197-column block and costs a ~30 KB client library.
+- MessagePack decodes about 0.3 ms faster on the 197-column block, costs a ~30 KB client library, and carries money as strings the client must parse.
 
 **How to reproduce:**
 
