@@ -24,7 +24,8 @@ public sealed record MetaSnapshot(
 /// Loads <see cref="MetaSnapshot"/> cache-first (README §7.2). It's re-read every <see cref="Revalidate"/> while
 /// requests come in, so a reseed (new data version) changes every cache key and ETag within minutes without a
 /// restart, and every <see cref="RetryEmpty"/> while the database isn't seeded yet. Concurrent requests share one
-/// load; the four reads run in parallel on their own connections.
+/// load. The four reads run one after another: the request that loads holds one database permit, so it may hold
+/// only one connection at a time (#127); in parallel, a cold load took four connections under one permit.
 /// </summary>
 public sealed class MetaCache(MetaRepository repo, TimeProvider time)
 {
@@ -50,17 +51,15 @@ public sealed class MetaCache(MetaRepository repo, TimeProvider time)
                 return (loaded, null);
 
             var started = Stopwatch.GetTimestamp();
-            var catalog = repo.CatalogAsync(ct);
-            var dates = repo.AsOfDatesAsync(ct);
-            var version = repo.DataVersionAsync(ct);
-            var portfolios = repo.PortfoliosAsync(ct);
-            await Task.WhenAll(catalog, dates, version, portfolios);
-            var columns = await catalog;
+            var columns = await repo.CatalogAsync(ct);
+            var dates = await repo.AsOfDatesAsync(ct);
+            var version = await repo.DataVersionAsync(ct);
+            var portfolios = await repo.PortfoliosAsync(ct);
 
             var now = time.GetUtcNow();
             var batchEnd = BatchClock.NextBatchAfter(now);
             var normalizer = columns.Any(c => c.Name == GridQueryNormalizer.RowIdColumn) ? new GridQueryNormalizer(columns) : null;
-            var snapshot = new MetaSnapshot(columns, normalizer, await dates, await version, await portfolios, now, batchEnd);
+            var snapshot = new MetaSnapshot(columns, normalizer, dates, version, portfolios, now, batchEnd);
             _current = snapshot with { ExpiresAt = Min(now + (snapshot.HasData ? Revalidate : RetryEmpty), batchEnd) };
             return (_current, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }
