@@ -102,3 +102,18 @@ test('ignores non-js/css links such as manifest.json', () => {
   });
   assert.equal(r.status, 0, r.stderr);
 });
+
+test('terminates on an import cycle and counts each chunk once', () => {
+  const r = run({
+    'index.html': page('<link rel="modulepreload" href="chunk-ONE.js"><script src="main-A1.js" type="module"></script>'),
+    'main-A1.js': 'import"./chunk-ONE.js";',
+    'chunk-ONE.js': 'import"./chunk-TWO.js";import"./main-A1.js";',
+    'chunk-TWO.js': 'import"./chunk-ONE.js";',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /chunk-ONE\.js, main-A1\.js, chunk-TWO\.js$/m);
+});
+
+test('fails when index.html is missing', () => {
+  assert.notEqual(run({ 'main-A1.js': 'void 0;' }).status, 0);
+});
