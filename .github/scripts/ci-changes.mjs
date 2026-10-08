@@ -170,7 +170,8 @@ export function main(argv, env = process.env, deps = { changedPaths, appendFileS
 }
 
 function normalize(p) {
-  return String(p).trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  // No trim: `git diff -z` paths are exact, and "x.md " is not a docs file.
+  return String(p).replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 function basename(p) {

@@ -174,6 +174,12 @@ test("an empty diff sets every flag", () => {
   assert.deepEqual(classify(["", "  "]).flags, ALL);
 });
 
+test("paths are not trimmed: a trailing space is not docs", () => {
+  const r = classify(["README.md "]);
+  assert.deepEqual(r.flags, ALL);
+  assert.deepEqual(r.reasons, ["matches no area: README.md "]);
+});
+
 test("paths are normalized", () => {
   assert.deepEqual(classify(["./web/src/a.ts"]).flags, flagsOf("web", "app"));
   assert.deepEqual(classify(["web\\src\\a.ts"]).flags, flagsOf("web", "app"));
