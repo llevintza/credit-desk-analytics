@@ -2,7 +2,8 @@ namespace Desk.Seeder.Generation;
 
 /// <summary>
 /// xoshiro256** seeded through SplitMix64. Used instead of System.Random so the same seed produces the
-/// same database on every .NET version and OS (README §5: deterministic seed). Not cryptographic.
+/// same database on the same platform and runtime (README §5: deterministic seed). Math.* draws are
+/// not guaranteed bit-identical across OS/arch. Not cryptographic.
 /// </summary>
 public sealed class Rng
 {

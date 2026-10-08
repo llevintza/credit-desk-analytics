@@ -65,7 +65,7 @@ public static class ColumnCatalog
         Add("portfolio_id", keys, ColumnKind.Key, Aggregation.None, "Portfolio");
         Add("fund_id", keys, ColumnKind.Key, Aggregation.None, "Fund");
         Add("bond_id", keys, ColumnKind.Key, Aggregation.None, "Bond");
-        Add("deal_id", keys, ColumnKind.Key, Aggregation.None, "Deal");
+        Add("deal_id", keys, ColumnKind.Key, Aggregation.None, "Deal id");
         Add("cusip", keys, ColumnKind.Text, Aggregation.None, "CUSIP");
         Add("deal_name", keys, ColumnKind.Text, Aggregation.None, "Deal");
         Add("class", keys, ColumnKind.Text, Aggregation.None, "Class");

@@ -75,12 +75,12 @@ public sealed class Universe
         }
 
         var issuers = Enumerable.Range(1, 60).Select(i =>
-            new Named(i, $"{NameA[(i * 7) % NameA.Length]} {NameB[(i * 3) % NameB.Length]} {Suffix[i % Suffix.Length]}",
+            new Named(i, $"{NameA[(i * 7) % NameA.Length]} {NameB[(i * 3) % NameB.Length]} {Suffix[i % Suffix.Length]} {i:00}",
                 i % 9 == 0 ? "GB" : "US")).ToList();
         var servicers = Enumerable.Range(1, 25).Select(i =>
-            new Named(i, $"{NameA[(i * 11) % NameA.Length]} Servicing {(i % 3 == 0 ? "Corp." : "LLC")}")).ToList();
+            new Named(i, $"{NameA[i % NameA.Length]} Servicing {i:00}")).ToList();
         var trustees = Enumerable.Range(1, 8).Select(i =>
-            new Named(i, $"{NameA[(i * 5 + 3) % NameA.Length]} Trust Company")).ToList();
+            new Named(i, $"{NameA[i % NameA.Length]} Trust {i:00}")).ToList();
 
         var deals = new List<Deal>();
         var bonds = new List<Bond>();
