@@ -337,8 +337,8 @@ jobs:
           # A throwaway viewer for this run; the CLI prints its generated password once, captured and masked here.
           out=$(dotnet run -c Release --project src/Desk.UserAdmin -- add --email budgets@example.com --role viewer --expires 2099-12-31)
           DESK_PASSWORD=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
+          test -n "$DESK_PASSWORD" # fail loudly if the CLI's output format changes
           echo "::add-mask::$DESK_PASSWORD"
-          test -n "$DESK_PASSWORD"
           for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
           BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
             node perf/payload-size.mjs | tee -a "$GITHUB_STEP_SUMMARY"
