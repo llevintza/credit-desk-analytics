@@ -63,7 +63,8 @@ public static class SeedRunner
                 // TRUNCATE keeps the old files until COMMIT, so the reseed peaks near current size + new data.
                 long dbBefore;
                 try { dbBefore = await databaseSize(conn, ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                // A cancellation can surface as a non-OCE (e.g. NpgsqlException); let it propagate so it exits 130, not 2.
+                catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
                 {
                     err.WriteLine($"ERROR: cannot read the current database size ({ex.GetType().Name}: {ex.Message}), so the reseed peak " +
                                   $"cannot be checked against the {options.CapMegabytes} MB cap. Refused before TRUNCATE; nothing was changed.");
@@ -76,7 +77,10 @@ public static class SeedRunner
                     err.WriteLine($"ERROR: reseed peak estimate is {peakEstMb} MB (current database {dbBefore / 1024 / 1024} MB + new data ~{NewDataMegabytes(options.Scale)} MB), " +
                                   $"over the {options.CapMegabytes} MB storage cap. Refused before TRUNCATE; data and app.seed_metadata are unchanged. " +
                                   "TRUNCATE keeps the old files until COMMIT, so a reseed needs about old + new. If the database's real storage cap is higher, " +
-                                  "pass a larger --cap-mb (README §10). A full scale-1.0 reseed (~534 MB peak) is refused at the 512 MB default on purpose.");
+                                  "pass a larger --cap-mb (README §10)." +
+                                  (options.CapMegabytes == SeedOptions.DefaultCapMegabytes
+                                      ? $" At the {SeedOptions.DefaultCapMegabytes} MB default a full-book scale-1.0 reseed is refused on purpose until the Neon cap is confirmed."
+                                      : ""));
                     return 2;
                 }
 
@@ -86,6 +90,9 @@ public static class SeedRunner
                 output.WriteLine($"Generating as of {options.AsOf:yyyy-MM-dd} (prior business day {tables.PriorBusinessDay:yyyy-MM-dd}): " +
                                   $"{universe.Deals.Count} deals, {universe.Bonds.Count} bonds, {tables.Positions.Count} positions");
 
+                // dbBefore (read before generating) feeds the peak guard; the pre-commit projection needs a size read
+                // next to seededBefore, so both describe the same moment.
+                var dbAtLoad = await databaseSize(conn, ct);
                 var seededBefore = await SeededRelationBytesAsync(conn, ct);
 
                 // One transaction: a failed or over-budget reseed leaves the previous data in place (README §14.3).
@@ -99,7 +106,7 @@ public static class SeedRunner
                     foreach (var s in stats) output.WriteLine($"  {s.Table,-28} {s.Rows,10:N0} rows  {s.Elapsed.TotalSeconds,6:F1} s");
 
                     var seededAfter = await SeededRelationBytesAsync(conn, ct);
-                    var projected = dbBefore - seededBefore + seededAfter;
+                    var projected = dbAtLoad - seededBefore + seededAfter;
                     if (projected < 0) projected = seededAfter;
                     var projectedMb = projected / 1024 / 1024;
                     if (projectedMb > options.MaxMegabytes)
@@ -166,9 +173,13 @@ public static class SeedRunner
         return 0;
     }
 
-    /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).</summary>
-    public static long PeakEstimateMegabytes(long currentBytes, decimal scale) =>
-        (currentBytes + (long)(MeasuredMegabytesAtScale1 * (double)scale * 1024 * 1024)) / 1024 / 1024;
+    /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).
+    /// In MiB (1024²), rounded up so the fail-closed guard never under-states the peak.</summary>
+    public static long PeakEstimateMegabytes(long currentBytes, decimal scale)
+    {
+        const long MiB = 1024 * 1024;
+        return (currentBytes + (long)Math.Ceiling(MeasuredMegabytesAtScale1 * (double)scale * MiB) + MiB - 1) / MiB;
+    }
 
     static long NewDataMegabytes(decimal scale) => (long)(MeasuredMegabytesAtScale1 * (double)scale);
 
