@@ -145,20 +145,31 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
         await using var _ = host;
 
         var first = await client.SendAsync(Post("/api/positions/query", xsrf, Body), Ct);
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal("MISS", first.Headers.GetValues("X-Cache").Single());
         var etag = first.Headers.ETag!.ToString();
+        var firstDoc = await JsonAsync(first);
+        Assert.All(firstDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P1, v.GetInt32()));
+        Assert.Equal((int)await ScalarAsync<long>(CountSql, P1), firstDoc.GetProperty("rowCount").GetInt32());
 
         stub.Ids = [P2];
+        var p2Count = (int)await ScalarAsync<long>(CountSql, P2);
+        var p2Sum = await ScalarAsync<decimal>(SumSql, P2);
+        Assert.True(p2Count > 0, "the seed must give portfolio 2 positions for this test to mean anything");
+
         var second = await client.SendAsync(Post("/api/positions/query", xsrf, Body), Ct);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
         Assert.NotEqual(etag, second.Headers.ETag!.ToString());
         Assert.Equal("MISS", second.Headers.GetValues("X-Cache").Single());
-        Assert.All((await JsonAsync(second)).GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        var secondDoc = await JsonAsync(second);
+        Assert.All(secondDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        // The summary cache (sum:{SummaryKey}) is shared by every block of a view: it must not carry portfolio 1's totals.
+        Assert.Equal(p2Count, secondDoc.GetProperty("rowCount").GetInt32());
+        Assert.Equal(p2Sum, secondDoc.GetProperty("summary").GetProperty("market_value").GetDecimal());
 
         // Portfolio 1's ETag, replayed under the portfolio 2 grant, is a full 200 for portfolio 2, never a 304.
         var replay = await client.SendAsync(Post("/api/positions/query", xsrf, Body, ifNoneMatch: etag), Ct);
-        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
-        Assert.All((await JsonAsync(replay)).GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        var replayDoc = await JsonAsync(replay);
+        Assert.All(replayDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        Assert.Equal(p2Count, replayDoc.GetProperty("rowCount").GetInt32());
     }
 
     [Fact]
