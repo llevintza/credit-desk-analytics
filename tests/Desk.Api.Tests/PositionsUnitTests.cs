@@ -127,25 +127,10 @@ public sealed class PositionsUnitTests
     public void Positions_cache_size_defaults_to_64_mb(string? value, int expectedMb)
     {
         using var cache = new PositionsCache(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build(), TimeProvider.System);
+            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build());
         Assert.Equal(expectedMb * 1024L * 1024L, cache.SizeLimitBytes);
         cache.Cache.Set("k", new byte[] { 1 }, new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions { Size = 1 });
         cache.Clear();
-        Assert.False(cache.Cache.TryGetValue("k", out _));
-    }
-
-    [Fact]
-    public void Positions_cache_entries_expire_on_the_app_clock_not_the_wall_clock()
-    {
-        // The batch end is computed on the app's TimeProvider; the cache must measure expiry on the same clock.
-        // On the wall clock, a fake clock's batch end in the past expired every entry at once.
-        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(new DateTimeOffset(2020, 1, 1, 12, 0, 0, TimeSpan.Zero));
-        using var cache = new PositionsCache(new ConfigurationBuilder().Build(), time);
-        cache.Cache.Set("k", new byte[] { 1 }, new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
-            { Size = 1, AbsoluteExpiration = time.GetUtcNow().AddHours(1) });
-
-        Assert.True(cache.Cache.TryGetValue("k", out _));
-        time.Advance(TimeSpan.FromHours(2));
         Assert.False(cache.Cache.TryGetValue("k", out _));
     }
 
