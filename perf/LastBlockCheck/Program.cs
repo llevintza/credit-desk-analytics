@@ -61,6 +61,17 @@ async Task<JsonElement> QueryAsync(int start)
     return JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct)).RootElement.Clone();
 }
 
+// The viewer's entitled portfolios (ADR-0021), so the independent SQL sees the same rows the API may serve.
+int[] portfolios;
+using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/meta/portfolios"))
+{
+    req.Headers.Add("Cookie", cookie);
+    using var res = await http.SendAsync(req, ct);
+    res.EnsureSuccessStatusCode();
+    using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+    portfolios = [.. doc.RootElement.EnumerateArray().Select(p => p.GetProperty("portfolioId").GetInt32())];
+}
+
 var first = await QueryAsync(0);
 var rowCount = first.GetProperty("rowCount").GetInt32();
 var asOf = DateOnly.Parse(first.GetProperty("asOf").GetString()!, CultureInfo.InvariantCulture);
@@ -81,6 +92,7 @@ async Task<object?> ScalarAsync(string sql)
 {
     await using var cmd = db.CreateCommand(sql);
     cmd.Parameters.AddWithValue("asof", asOf);
+    cmd.Parameters.AddWithValue("portfolios", portfolios);
     var value = await cmd.ExecuteScalarAsync(ct);
     return value is DBNull ? null : value;
 }
@@ -94,7 +106,7 @@ foreach (var column in sumColumns)
     if (!Regex.IsMatch(column.Name, "^[a-z][a-z0-9_]*$")) throw new InvalidOperationException(column.Name);
 
 var results = new List<(string Check, string Api, string Sql, bool Ok)>();
-var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof"))!;
+var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios)"))!;
 results.Add(("rows ≥ 18,000", $"{rowCount:N0}", $"{sqlCount:N0}", rowCount >= MinRows && rowCount == sqlCount));
 
 // The checks below reuse the API's as-of; this row makes sure the API's default is the latest snapshot date.
@@ -111,9 +123,10 @@ await using (var maxReader = await maxCmd.ExecuteReaderAsync(ct))
 var sqlIds = new List<long>();
 var sqlCells = new List<decimal?[]>();
 var tailColumns = string.Concat(sumColumns.Select(c => $", \"{c.Name}\""));
-await using (var cmd = db.CreateCommand($"SELECT position_id{tailColumns} FROM core.position_snapshot WHERE as_of_date = @asof ORDER BY market_value DESC, position_id DESC OFFSET @start LIMIT @block"))
+await using (var cmd = db.CreateCommand($"SELECT position_id{tailColumns} FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios) ORDER BY market_value DESC, position_id DESC OFFSET @start LIMIT @block"))
 {
     cmd.Parameters.AddWithValue("asof", asOf);
+    cmd.Parameters.AddWithValue("portfolios", portfolios);
     cmd.Parameters.AddWithValue("start", lastStart);
     cmd.Parameters.AddWithValue("block", Block);
     await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -156,7 +169,7 @@ foreach (var column in sumColumns)
 {
     // A missing key or a JSON null is a FAIL row, not an exception.
     decimal? api = summary.TryGetProperty(column.Name, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
-    var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof");
+    var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios)");
     results.Add(($"SUM({column.Name})", Show(api), Show(sql), api is not null && api == sql));
 }
 // The loop above must not pass by comparing nothing: the Sum columns the API served equal the ones compared.
@@ -165,7 +178,7 @@ var served = summary.EnumerateObject().Select(p => p.Name)
     .Where(n => ColumnCatalog.PositionSnapshot.Any(c => c.Name == n && c.Aggregation == Aggregation.Sum)).ToHashSet();
 results.Add(("SUM columns compared", $"{served.Count}", $"{expected.Count}", expected.Count > 0 && expected.SetEquals(served)));
 
-Console.WriteLine($"### Last block and summary at {rowCount:N0} rows (as of {asOf:yyyy-MM-dd}, Risk preset, market value desc)");
+Console.WriteLine($"### Last block and summary at {rowCount:N0} rows (as of {asOf:yyyy-MM-dd}, {portfolios.Length} entitled portfolios, Risk preset, market value desc)");
 Console.WriteLine();
 Console.WriteLine("| Check | API | Independent SQL | Result |");
 Console.WriteLine("|---|---:|---:|---|");
