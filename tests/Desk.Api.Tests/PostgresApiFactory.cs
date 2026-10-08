@@ -96,6 +96,9 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         {
             s.RemoveAll<TimeProvider>();
             s.AddSingleton<TimeProvider>(_time);
+            // The fake clock never advances by itself: without this every failed login would wait on it forever.
+            // The floor's own tests put the production value back (LoginTimingTests).
+            s.AddSingleton(new LoginFloorOptions(TimeSpan.Zero, TimeSpan.Zero));
         });
     }
 
