@@ -326,14 +326,17 @@ describe('Positions page', () => {
     expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not save "Risk": Invalid preset name');
   });
 
-  it('says why a save failed: the server\'s detail, else its title, else a generic line', async () => {
+  it('says why a save failed: the server\'s detail (a 409 keeps its title), else its title, else a generic line', async () => {
     const { fixture, el, http, ready } = await render();
     await ready();
     vi.spyOn(window, 'prompt').mockReturnValue('Desk view');
     const save = () => (el.querySelector('[aria-label="Save the current columns as a preset"]') as HTMLButtonElement).click();
     const alert = () => el.querySelector('[role=alert]')?.textContent?.trim();
     const cases: [body: object | string | null, status: number, shown: string][] = [
-      [{ title: 'Preset changed concurrently', detail: 'Try again.' }, 409, 'Could not save "Desk view": Try again.'],
+      [{ title: 'Preset changed concurrently', detail: 'Try again.' }, 409, 'Could not save "Desk view": Preset changed concurrently: Try again.'],
+      [{ title: 'Preset changed concurrently' }, 409, 'Could not save "Desk view": Preset changed concurrently'],
+      [{ detail: 'Someone else saved it first.' }, 409, 'Could not save "Desk view": Someone else saved it first.'],
+      [{ title: 'Bad request', detail: 'Names must be 1–64 characters.' }, 400, 'Could not save "Desk view": Names must be 1–64 characters.'],
       [{ title: 'Too many requests', detail: '' }, 429, 'Could not save "Desk view": Too many requests'],
       [{ detail: 42 }, 400, 'Could not save "Desk view".'],
       ['plain text', 500, 'Could not save "Desk view".'],
