@@ -131,7 +131,7 @@ README §10's 150 ms MISS budget is not scoped to a preset, so `perf/positions.j
 | 2 | 55.1 / 117.6 | 1.3 / 4.9 | 117.0 / 272.8 | **no** |
 | 3 | 57.2 / 118.6 | 2.3 / 6.1 | 114.8 / 188.0 | **no** |
 
-The All-preset whole-book first view is **over the 150 ms budget** locally (p50 ~115–120 ms, p95 188–273 ms), while Risk and HIT are within theirs. The budget stays as written; whether to optimise the All first view or rescope the MISS budget to the Risk preset is open for Leo/Helms (follow-up issue, linked from #135's PR).
+The All-preset whole-book first view is **over the 150 ms budget** locally (p50 ~115–120 ms, p95 188–273 ms), while Risk and HIT are within theirs. The budget stays as written; whether to optimise the All first view or rescope the MISS budget to the Risk preset is open for Leo/Helms (#241).
 
 ```
 # local stack only (compose, -p desk135, its own ports); a throwaway viewer from Desk.UserAdmin
