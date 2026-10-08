@@ -45,14 +45,14 @@ And for the delete itself:
 
 The one gap in option 2 is real but harmless. While nobody uses the app, no rows are added, and rows past the window stay until the next login. That login writes an audit row, which triggers the purge within `AUDIT_FLUSH_SECONDS`. Storage can't grow while the app is idle, and nobody reads the table then either.
 
-**Delete cost and table size (measured).** `perf/audit-retention.sql` builds a copy of `app.audit` (same columns, PK and `IX_audit_at`). It fills the copy with 120 days at 10,000 rows a day, a busy demo: about 7 requests a minute around the clock. Then it times each statement with `EXPLAIN ANALYZE`. `perf/audit-retention.sh` runs it **warm** (one pass; every buffer a `shared hit`), then **cold**: before each step, it restarts Postgres and drops the Docker VM's page cache. The macOS host can still cache the VM's disk, so read the cold numbers as a lower bound. On a box with a real cold read (x86, local disk), Code Reviewer measured the one-statement backlog at **2,633 ms**. Neon's pageserver reads are slower again, and the purge runs right after a cold start. Postgres 17 (the pinned test image), Apple M5, three runs of the script:
+**Delete cost and table size (measured).** `perf/audit-retention.sql` builds a copy of `app.audit` (same columns, PK and `IX_audit_at`). It fills the copy with 120 days at 10,000 rows a day, a busy demo: about 7 requests a minute around the clock. Then it times each statement with `EXPLAIN ANALYZE`. `perf/audit-retention.sh` runs it **warm** (one pass; every buffer a `shared hit` except (b)'s sequential scan, which goes through a small ring buffer), then **cold**: before each step, it restarts Postgres and drops the Docker VM's page cache. The macOS host can still cache the VM's disk, so read the cold numbers as a lower bound. On a box with a real cold read (x86, local disk), Code Reviewer measured the one-statement backlog at **2,633 ms**. Neon's pageserver reads are slower again, and the purge runs right after a cold start. Postgres 17 (the pinned test image), Apple M5, three runs of the script:
 
 | Case (ms) | Rows | Warm, runs 1 / 2 / 3 | Cold, runs 1 / 2 / 3 |
 |---|---|---|---|
 | Daily purge (oldest day), one statement | 10,000 | 2.8 / 3.6 / 3.6 | 12 / 28 / 17 |
 | Backlog, **(a) one statement**, 30 days past a 90-day window | 300,000 | 189 / 120 / 228 | 348 / 1,328 / 575 (2,633 on x86, by Code Reviewer) |
 | Backlog, **(b) one `id IN (… LIMIT)` batch** | 50,000 | 275 / 244 / 286 | 409 / 927 / 495 |
-| Backlog, **(c) one time-range batch** (edge + delete) | 50,000 | 23 / 20 / 19 | 60 / 152 / 277 |
+| Backlog, **(c) one time-range batch** (edge + delete) | 50,000 | 23 / 20 / 19 | 60 / 151 / 277 |
 | Nothing to delete, (c) (edge + delete) | 0 | 20 / 25 / 20 | n/a |
 
 | Table size | Rows | Total (heap + PK + `IX_audit_at`) |
@@ -115,7 +115,7 @@ Run 3, trimmed to the plan lines:
 ```
 
 <details>
-<summary>Runs 1 and 2 (same script, same machine), trimmed to the plan and <code>Buffers</code> lines: warm runs show only <code>shared hit</code>, cold runs show <code>read</code></summary>
+<summary>Runs 1 and 2 (same script, same machine), trimmed to the plan and <code>Buffers</code> lines: cold steps show <code>read</code>; warm steps show only <code>shared hit</code>, except (b)'s sequential scan, which reads through a small ring buffer (<code>read=5077</code>) even warm</summary>
 
 Run 1:
 
