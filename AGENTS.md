@@ -30,7 +30,8 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
    - Fix [blocking] comments on the same branch and push. Don't resolve a reviewer thread you haven't fixed.
    - **Tech Coordinator merges. Never merge a PR yourself, including your own.** A Claude `blocking=0` marker, self-resolved threads, or green checks without coverage are not the gate and do not authorize a merge or the next phase.
    - **After a merge, wait for Tech Coordinator to start the next phase.** Don't start it yourself.
-   - Changes to `.github/`, `.claude/`, `CLAUDE.md`, `AGENTS.md`, README §14, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` go in their own `[workflows]` PR, reviewed by hand by Tech Coordinator and Leo. CODEOWNERS and the `[workflows]` title prefix are advisory only: no GitHub protection enforces them (every bot acts as the owner and cannot approve its own PR).
+   - Changes to `.github/`, `.claude/`, `CLAUDE.md`, `AGENTS.md`, README §14, `perf/coverage-*` (other than a measured raise-only bump of `perf/coverage-baseline.json`), `tests/testconfig.json`, or `.gitleaks.toml` go in their own `[workflows]` PR, reviewed by hand by Tech Coordinator and Leo. CODEOWNERS and the `[workflows]` title prefix are advisory only: no GitHub protection enforces them (every bot acts as the owner and cannot approve its own PR). A measured, raise-only bump of `perf/coverage-baseline.json` may ride in the feature PR that earned it when all of these hold: the floor is read from **base** (not head); there are **no** threshold or measurement-scope changes; and Code Reviewer's governance check passes. Any **lowering** of `perf/coverage-baseline.json`, or any **measurement-scope** change, still needs its own `[workflows]` PR with an override record and sign-off from Code Reviewer, Tech Coordinator and Helms.
+   - Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
    - **The PR is closed without merging:** stop and ask.
 7. **Stop after opening each PR** and wait for review. Don't start the next phase on top of an unmerged one. After Tech Coordinator merges, wait for Tech Coordinator to start the next phase, then branch from fresh `origin/main` (squash by default; a merge commit is also fine).
 
@@ -44,7 +45,7 @@ Read `README.md` first. It's the spec, and its MUST items are acceptance criteri
   - The UserAdmin CLI prints generated passwords **once** and never logs them.
   - Never paste credentials into commits, PRs, issues or ADRs.
   - **No default or example credentials either**, not even for local throwaway databases: no `Password=…` literals in compose, CI, code or docs. Local passwords are generated into the gitignored `.env`. CI databases use trust auth or a per-run random password.
-  - The CI `secrets` job (gitleaks, `.gitleaks.toml`) scans the **full history** of every PR. A finding means rewrite the branch (fixup + autosquash) before merge, not a follow-up commit.
+  - The CI `secrets` job (gitleaks, `.gitleaks.toml`) scans the **full history** of every PR. Agents **never force-push**, including `--force-with-lease`. If gitleaks flags an agent's **own unmerged** commit, the agent **stops and reports to Tech Coordinator**. Rewrite (lease-protected, feature branch only) only when Tech Coordinator or Helms authorizes it. `main` is **never** rewritten.
 - **No real company, employer, client or person names** in code, data, docs, commits or screenshots. All data is synthetic and fictional.
 - **SQL safety:** client-supplied identifiers (columns, sort, filter keys) are resolved through the column-catalog whitelist. Every value is a parameter. Never concatenate client input into SQL.
 - **EF Core:**
