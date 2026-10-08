@@ -32,7 +32,8 @@ public sealed class MetaCache(MetaRepository repo, TimeProvider time)
     public static readonly TimeSpan RetryEmpty = TimeSpan.FromSeconds(30);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private MetaSnapshot? _current;
+    // Read without the gate on the fast path; volatile so a reader never sees a stale reference.
+    private volatile MetaSnapshot? _current;
 
     public async ValueTask<MetaSnapshot> GetAsync(CancellationToken ct) => (await GetWithStatusAsync(ct)).Snapshot;
 
@@ -54,11 +55,12 @@ public sealed class MetaCache(MetaRepository repo, TimeProvider time)
             var version = repo.DataVersionAsync(ct);
             var portfolios = repo.PortfoliosAsync(ct);
             await Task.WhenAll(catalog, dates, version, portfolios);
+            var columns = await catalog;
 
             var now = time.GetUtcNow();
             var batchEnd = BatchClock.NextBatchAfter(now);
-            var normalizer = catalog.Result.Any(c => c.Name == GridQueryNormalizer.RowIdColumn) ? new GridQueryNormalizer(catalog.Result) : null;
-            var snapshot = new MetaSnapshot(catalog.Result, normalizer, dates.Result, version.Result, portfolios.Result, now, batchEnd);
+            var normalizer = columns.Any(c => c.Name == GridQueryNormalizer.RowIdColumn) ? new GridQueryNormalizer(columns) : null;
+            var snapshot = new MetaSnapshot(columns, normalizer, await dates, await version, await portfolios, now, batchEnd);
             _current = snapshot with { ExpiresAt = Min(now + (snapshot.HasData ? Revalidate : RetryEmpty), batchEnd) };
             return (_current, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }

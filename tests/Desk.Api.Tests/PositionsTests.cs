@@ -383,5 +383,12 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.Equal("\"a,b\"", Csv.Escape("a,b"));
         Assert.Equal("\"say \"\"hi\"\"\"", Csv.Escape("say \"hi\""));
         Assert.Equal("\"two\nlines\"", Csv.Escape("two\nlines"));
+        Assert.Equal("'=HYPERLINK(x)", Csv.Escape("=HYPERLINK(x)"));    // formula injection: neutralised
+        Assert.Equal("\"'=SUM(A1,B1)\"", Csv.Escape("=SUM(A1,B1)"));   // ...and still quoted when it has a comma
+        Assert.Equal("'+1", Csv.Escape("+1"));
+        Assert.Equal("'-1", Csv.Escape("-1"));
+        Assert.Equal("'@x", Csv.Escape("@x"));
+        Assert.Equal("'\tx", Csv.Escape("\tx"));
+        Assert.Equal("", Csv.Escape(""));
     }
 }

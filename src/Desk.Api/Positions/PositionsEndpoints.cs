@@ -201,8 +201,16 @@ public static class PositionsEndpoints
 /// <summary>CSV values formatted by catalog kind, in display units (the same precision the grid shows).</summary>
 internal static class Csv
 {
-    public static string Escape(string s) =>
-        s.IndexOfAny([',', '"', '\n', '\r']) >= 0 ? $"\"{s.Replace("\"", "\"\"")}\"" : s;
+    /// <summary>
+    /// RFC 4180 quoting, plus formula-injection defence: a text cell starting with = + - @ (or tab/CR) would run as
+    /// a formula when the file is opened in a spreadsheet, so it gets a leading apostrophe (OWASP CSV injection).
+    /// </summary>
+    public static string Escape(string s)
+    {
+        if (s.Length > 0 && s[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+            s = "'" + s;
+        return s.IndexOfAny([',', '"', '\n', '\r']) >= 0 ? $"\"{s.Replace("\"", "\"\"")}\"" : s;
+    }
 
     public static void Append(StringBuilder line, ColumnDef col, System.Data.Common.DbDataReader r, int i)
     {
