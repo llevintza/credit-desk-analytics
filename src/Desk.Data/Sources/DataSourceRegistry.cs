@@ -18,7 +18,7 @@ public interface IDataSourceRegistry
     ValueTask<NpgsqlConnection> OpenAsync(string source, CancellationToken ct);
 }
 
-public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounter counter) : IDataSourceRegistry, IAsyncDisposable
+public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounter counter) : IDataSourceRegistry, IAsyncDisposable, IDisposable
 {
     // Keyed by the normalized connection string, so two sources pointing at one database share a pool.
     private readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _byConnectionString = new(StringComparer.Ordinal);
@@ -48,5 +48,15 @@ public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounte
     {
         foreach (var lazy in _byConnectionString.Values.Where(l => l.IsValueCreated))
             await lazy.Value.DisposeAsync();
+    }
+
+    /// <summary>
+    /// For containers disposed synchronously (the CLI tools): EF's pooled factory resolves the registry when it is
+    /// built, so the registry can be owned by such a container even if no connection was ever opened.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var lazy in _byConnectionString.Values.Where(l => l.IsValueCreated))
+            lazy.Value.Dispose();
     }
 }
