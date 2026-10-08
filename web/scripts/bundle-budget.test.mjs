@@ -42,6 +42,16 @@ test('fails an oversize main bundle', () => {
   assert.match(r.stderr, /over the 500 KB budget/);
 });
 
+// #203: the API serves Brotli at CompressionLevel.Fastest (quality 1). A 400 KB random block repeated once is
+// ~600 KB at q1, which misses the distant repeat, but ~300 KB at q4, which finds it: only measuring at q1 fails.
+test('measures at the served Brotli quality (q1), not q4', () => {
+  const block = randomBytes(300 * 1024).toString('base64');
+  const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': block + block });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /Initial \(br q1\)/);
+  assert.match(r.stderr, /over the 500 KB budget/);
+});
+
 test('fails when index.html references no assets', () => {
   const r = run({ 'index.html': page(''), 'main-A1.js': big() });
   assert.equal(r.status, 1);
