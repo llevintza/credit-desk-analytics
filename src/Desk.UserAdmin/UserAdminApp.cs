@@ -53,7 +53,7 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
             return options.Command switch
             {
                 UserAdminCommand.Add => await AddAsync(users, options, ct),
-                UserAdminCommand.List => await ListAsync(users, ct),
+                UserAdminCommand.List => await ListAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>(), ct),
                 UserAdminCommand.Disable => await DisableAsync(users, options.Email!, ct),
                 _ => await ResetAsync(users, options.Email!, ct),
             };
@@ -106,14 +106,28 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         return 0;
     }
 
-    private async Task<int> ListAsync(UserManager<DeskUser> users, CancellationToken ct)
+    private async Task<int> ListAsync(AppDbContext db, CancellationToken ct)
     {
         var now = _time.GetUtcNow();
-        var all = await users.Users.AsNoTracking().OrderBy(u => u.Email).ToListAsync(ct);
+        // One round trip, only the columns shown (no password hashes or stamps leave the database).
+        var all = await db.Users.AsNoTracking()
+            .OrderBy(u => u.Email)
+            .Select(u => new
+            {
+                u.Email,
+                u.ExpiresAt,
+                u.IsDisabled,
+                u.LockoutEnd,
+                Roles = db.UserRoles.Where(ur => ur.UserId == u.Id)
+                    .Join(db.Roles, ur => ur.RoleId, r => r.Id, (_, r) => r.Name)
+                    .OrderBy(n => n)
+                    .ToList(),
+            })
+            .ToListAsync(ct);
         await stdout.WriteLineAsync($"{"EMAIL",-40} {"ROLES",-14} {"EXPIRES (UTC)",-17} STATUS");
         foreach (var u in all)
         {
-            var roleNames = string.Join(",", await users.GetRolesAsync(u));
+            var roleNames = string.Join(",", u.Roles);
             var status = u.IsDisabled ? "disabled"
                 : now >= u.ExpiresAt ? "expired"
                 : u.LockoutEnd > now ? "locked"
@@ -131,8 +145,8 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
             return await FailAsync($"No account for {email}.");
         ct.ThrowIfCancellationRequested();
         user.IsDisabled = true;
-        Check(await users.UpdateAsync(user));
-        // A new stamp makes the API's security-stamp check end any live session (README §7.1).
+        // One write: the stamp update saves the whole user, flag included. The new stamp makes the API's
+        // security-stamp check end any live session (README §7.1).
         Check(await users.UpdateSecurityStampAsync(user));
         await stdout.WriteLineAsync($"Disabled {email}. Live sessions end within a few minutes.");
         return 0;
