@@ -300,8 +300,9 @@ jobs:
 
   budgets:
     # README §10 / §14.1 step 9: P1 first-block payload budgets on the compose stack, seeded at scale 1.0.
-    # Fails above the "Risk" budget (60 KB on the wire); warns above "All" (250 KB). No secrets: the database
-    # password and the throwaway account's password are generated per run and masked.
+    # Fails above the "Risk" budget (60 KB on the wire); warns above "All" (250 KB). Then #43 AC4 (#134): with 18k+
+    # rows, the last block and every summary SUM equal independent SQL. No secrets: the database password and the
+    # throwaway account's password are generated per run and masked.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -330,7 +331,7 @@ jobs:
           for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U desk -d creditdesk && break; sleep 2; done
           dbtools/efbundle
           dbtools/seeder/Desk.Seeder --force --scale 1.0
-      - name: Payload budgets
+      - name: Payload budgets and the 18k+ last block
         run: |
           set -a; . ./.env; set +a
           export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
@@ -342,6 +343,9 @@ jobs:
           for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
           BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
             node perf/payload-size.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+          # #43 AC4: exits 1 on any mismatch (pipefail keeps that through tee).
+          BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
+            dotnet run -c Release --project perf/LastBlockCheck | tee -a "$GITHUB_STEP_SUMMARY"
       - if: failure()
         run: docker compose logs
 
