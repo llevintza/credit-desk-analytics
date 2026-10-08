@@ -835,7 +835,7 @@ services:
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, plus any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |
 | `perf` | `perf/**` | `budgets` |
 
-`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
+`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). Clause 1 still applies in full to every job that runs. `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -892,7 +892,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
@@ -934,7 +934,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 ---
 
