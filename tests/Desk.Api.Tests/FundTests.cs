@@ -5,6 +5,8 @@ using Desk.Api.Positions;
 using Desk.Data.Funds;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
+using Desk.Data;
+using Desk.Data.Sources;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -145,44 +147,64 @@ public sealed class FundTests(PostgresApiFactory api)
             Assert.Equal(HttpStatusCode.NotFound, (await none.GetAsync($"/api/funds/{fund}/performance", Ct)).StatusCode);
     }
 
+    /// <summary>Counts connections opened on the <c>core</c> source (the fund reads); audit writes use <c>app</c>.</summary>
+    private sealed class CoreOpens(DataSourceRegistry inner) : IDataSourceRegistry
+    {
+        private int _count;
+        public int Count => Volatile.Read(ref _count);
+        public NpgsqlDataSource Get(string source) => inner.Get(source);
+        public ValueTask<NpgsqlConnection> OpenAsync(string source, CancellationToken ct)
+        {
+            if (source == ConnectionStrings.Core) Interlocked.Increment(ref _count);
+            return inner.OpenAsync(source, ct);
+        }
+    }
+
     [Fact]
     public async Task A_fund_without_performance_history_is_404_without_an_etag_and_without_a_second_query()
     {
-        // A throwaway fund + portfolio of its own (never touches the seeded rows other tests read).
+        // A throwaway fund + portfolio far outside any seeded id, created and removed by this test alone.
+        const int Id = 900_001;
         async Task Exec(string sql)
         {
             await using var conn = new NpgsqlConnection(api.ConnectionString);
             await conn.OpenAsync(Ct);
             await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("id", Id);
             await cmd.ExecuteNonQueryAsync(Ct);
         }
-        await Exec("INSERT INTO core.fund VALUES (99, 'Test Fund (no history)', DATE '2026-09-01', 'test'); INSERT INTO core.portfolio VALUES (99, 99, 'Test Portfolio', 'test', 'none');");
-        var (admin, xsrf, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
-        async Task ClearCache()
-        {
-            using var clear = new HttpRequestMessage(HttpMethod.Post, "/api/admin/cache/clear");
-            clear.Headers.Add("X-XSRF-TOKEN", xsrf);
-            Assert.Equal(HttpStatusCode.NoContent, (await admin.SendAsync(clear, Ct)).StatusCode);
-        }
+        const string Cleanup = "DELETE FROM core.portfolio WHERE portfolio_id = @id; DELETE FROM core.fund WHERE fund_id = @id;";
         try
         {
-            await ClearCache(); // the portfolio list is reference data: reload it
-            var first = await admin.GetAsync("/api/funds/99/performance?range=QTD", Ct);
+            await Exec(Cleanup); // idempotent: a previous run that died mid-test left nothing behind
+            await Exec("""
+                INSERT INTO core.fund (fund_id, name, inception_date, strategy) VALUES (@id, 'Test Fund (no history)', DATE '2026-09-01', 'test');
+                INSERT INTO core.portfolio (portfolio_id, fund_id, name, manager, benchmark) VALUES (@id, @id, 'Test Portfolio', 'test', 'none');
+                """);
+            // A private host: its own (empty) caches load the new portfolio, and the shared fixture's caches are untouched.
+            CoreOpens? opens = null;
+            await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+            {
+                s.AddSingleton<DataSourceRegistry>();
+                s.AddSingleton<IDataSourceRegistry>(sp => opens = new CoreOpens(sp.GetRequiredService<DataSourceRegistry>()));
+            }));
+            var client = PostgresApiFactory.NewClient(host);
+            await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+
+            var first = await client.GetAsync($"/api/funds/{Id}/performance?range=QTD", Ct);
             Assert.Equal(HttpStatusCode.NotFound, first.StatusCode);
             Assert.Null(first.Headers.ETag);
 
-            // "No data" is cached too (cache-first): the second request's only connection is its own audit write.
-            var me = (await admin.GetFromJsonAsync<Desk.Api.Auth.MeResponse>("/api/me", Ct))!.Email;
-            await api.WaitForAuditAsync(a => a.UserName == me && a.Endpoint == "GET /api/me");
-            var opened = api.ConnectionsOpened(api);
-            Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/funds/99/performance?range=YTD", Ct)).StatusCode);
-            await api.WaitForAuditAsync(a => a.UserName == me && a.Endpoint == "GET /api/funds/{fundId:int}/performance" && a.Status == 404, atLeast: 2);
-            Assert.Equal(opened + 1, api.ConnectionsOpened(api));
+            // "No data" is cached too (cache-first): another range for the same fund reads nothing.
+            var before = opens!.Count;
+            var second = await client.GetAsync($"/api/funds/{Id}/performance?range=YTD", Ct);
+            Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
+            Assert.Null(second.Headers.ETag);
+            Assert.Equal(before, opens.Count);
         }
         finally
         {
-            await Exec("DELETE FROM core.portfolio WHERE portfolio_id = 99; DELETE FROM core.fund WHERE fund_id = 99;");
-            await ClearCache();
+            await Exec(Cleanup);
         }
     }
 
