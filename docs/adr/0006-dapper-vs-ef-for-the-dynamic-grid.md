@@ -23,7 +23,7 @@ The page is not the expensive part. The **summary**, a COUNT plus a SUM or marke
 
 Seed 42, scale 1.0, as-of 2026-10-06. 20,001 rows per as-of, 202 columns, about 63 MB of heap. Postgres 17.11 in Docker, Apple M5, .NET 10.0.12, 200 iterations after warm-up.
 
-**These are local measurements.** In CI, the `budgets` job (#125) enforces the payload budget on a scale-1.0 compose stack; the latency budgets are measured locally until the CI k6 step (#135) lands.
+**These are local measurements.** In CI, the `budgets` job enforces the payload budget (#125) on a scale-1.0 compose stack and runs the k6 p95 checks (#135); the k6 latency results are reported but non-blocking until #87 (see the Addendum and #241).
 
 **The page (200 rows, sort `market_value DESC`, indexed):**
 
