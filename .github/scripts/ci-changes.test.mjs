@@ -401,9 +401,14 @@ function workflowJobs(yml) {
   const jobs = new Map();
   let current = null;
   for (const line of lines) {
+    if (/^\s*(#.*)?$/.test(line)) {
+      if (current) jobs.get(current).push(line);
+      continue;
+    }
+    if (/^\S/.test(line)) break;
     const head = /^  ([A-Za-z_][\w-]*):\s*$/.exec(line);
     if (head) jobs.set((current = head[1]), []);
-    else if (/^\S/.test(line)) break;
+    else if (/^  \S/.test(line)) assert.fail(`unparsed job key: ${line}`);
     else if (current) jobs.get(current).push(line);
   }
   return [...jobs].map(([id, body]) => [id, body]);
@@ -414,13 +419,20 @@ function jobNeeds(id, body) {
   const at = body.findIndex((l) => /^    needs:/.test(l));
   if (at < 0) return [];
   const value = body[at].replace(/^    needs:/, "").trim();
-  if (/^\[[^\]]*\]$/.test(value)) return value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+  if (/^\[[^\]]*\]$/.test(value)) {
+    const xs = value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+    for (const x of xs) if (!/^[\w-]+$/.test(x)) assert.fail(`${id}: unparsed needs entry ${x}`);
+    return xs;
+  }
   if (/^[\w-]+$/.test(value)) return [value];
   if (value === "") {
     const items = [];
+    // Only the next key ends the list; anything else inside it fails.
     for (const l of body.slice(at + 1)) {
+      if (/^ {0,4}[^\s#]/.test(l)) break;
+      if (l.trim() === "") continue;
       const item = /^      - ([\w-]+)\s*$/.exec(l);
-      if (!item) break;
+      if (!item) assert.fail(`${id}: unparsed needs item: ${l}`);
       items.push(item[1]);
     }
     if (items.length) return items;
@@ -476,4 +488,23 @@ test("dependency checker: block-list needs, step-level ifs and comments do not p
   assert.equal(checkSkippableDependents(wf(good)), 1);
   assert.throws(() => checkSkippableDependents(wf("  summary:\n    needs: ${{ fromJSON('[]') }}\n")), /summary: unparsed needs/);
   assert.throws(() => checkSkippableDependents(wf("  summary:\n    needs:\n    steps: []\n")), /summary: unparsed needs/);
+});
+
+test("dependency checker: unrecognised needs and job-key forms fail, never skip (R205-01)", () => {
+  const wf = (job) => `name: x\non: push\njobs:\n  api:\n    runs-on: ubuntu-latest\n${job}`;
+  const onlyCancelled = "    if: ${{ !cancelled() }}\n    steps:\n      - run: echo\n";
+  const cases = [
+    ["comment between items", "    needs:\n      - changes\n      # x\n      - api\n", /summary: unparsed needs item/],
+    ["quoted item", '    needs:\n      - changes\n      - "api"\n', /summary: unparsed needs item/],
+    ["trailing-comment item", "    needs:\n      - changes\n      - api # x\n", /summary: unparsed needs item/],
+    ["quoted flow entry", "    needs: [changes, 'api']\n", /summary: unparsed needs entry 'api'/],
+  ];
+  for (const [name, needs, err] of cases) {
+    assert.throws(() => checkSkippableDependents(wf(`  summary:\n${needs}${onlyCancelled}`)), err, name);
+  }
+  assert.throws(() => checkSkippableDependents(wf(`  summary: # x\n    needs: [api]\n${onlyCancelled}`)), /unparsed job key/);
+  assert.throws(
+    () => checkSkippableDependents(wf(`# a column-0 comment\n  summary:\n    needs: [api]\n${onlyCancelled}`)),
+    /summary must accept success or skipped/,
+  );
 });
