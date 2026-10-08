@@ -27,6 +27,7 @@ builder.Services.AddSingleton<DemoAccounts>();
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
+builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<MetaRepository>();

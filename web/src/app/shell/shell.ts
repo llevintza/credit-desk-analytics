@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { HttpErrorResponse } from '@angular/common/http';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from '../core/auth.service';
 import { HealthService } from '../core/health.service';
@@ -35,6 +36,7 @@ export class Shell {
   protected readonly theme = inject(ThemeService);
   private readonly keyboard = inject(KeyboardService);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly api = toSignal(inject(HealthService).state(), { initialValue: { kind: 'waking', attempt: 0 } as const });
   protected readonly nav = computed(() => navItems.filter((n) => !n.admin || this.auth.isAdmin()));
@@ -62,8 +64,21 @@ export class Shell {
     this.scope.asOf.set((event.target as HTMLSelectElement).value);
   }
 
+  /**
+   * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in.
+   * The server session may survive until it expires; see the follow-up issue.
+   * Teardown unsubscribes the logout request on purpose: Shell only goes away on navigation to /login.
+   */
   protected logout(): void {
-    this.auth.logout().subscribe(() => void this.router.navigate(['/login']));
+    this.auth.logout().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: () => void this.router.navigate(['/login']),
+      error: (e: unknown) => {
+        // 401: sessionInterceptor has already signed out and navigated to /login.
+        if (e instanceof HttpErrorResponse && e.status === 401) return;
+        this.auth.signedOut();
+        void this.router.navigate(['/login']);
+      },
+    });
   }
 
   /** README §9.3 shortcuts. Typing in a field keeps its keys, except the Ctrl+Shift combos. */

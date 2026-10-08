@@ -3,11 +3,13 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { AgGridAngular } from 'ag-grid-angular';
+import { throwError } from 'rxjs';
 import { KeyboardService } from '../core/keyboard.service';
 import { ScopeService } from '../core/scope.service';
 import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { CatalogColumn, Preset } from '../data-access/api.types';
+import { DeskApi } from '../data-access/desk-api';
 import { PositionsQuery } from './positions-query';
 import { Positions, firstRowsMark } from './positions';
 
@@ -194,8 +196,12 @@ describe('Positions page', () => {
     expect([...el.querySelectorAll('[data-testid=preset] option')].map((o) => o.textContent)).toEqual(['Risk', 'Mine (mine)']);
     await ready();
     const applied = grid.applyColumnState.mock.calls[0][0];
-    expect(applied.state.slice(0, 3)).toEqual(['deal_name', 'class', 'cusip'].map((colId) => ({ colId, hide: false, pinned: 'left' })));
-    expect(applied.defaultState).toEqual({ hide: true });
+    expect(applied.state.slice(0, 3)).toEqual([
+      { colId: 'deal_name', hide: false, sort: null, pinned: 'left' }, // Risk lists deal_name, unsorted
+      { colId: 'class', hide: false, pinned: 'left' },
+      { colId: 'cusip', hide: false, pinned: 'left' },
+    ]);
+    expect(applied.defaultState).toEqual({ hide: true, sort: null }); // the previous sort never leaks into the next view
     expect(query.view.columns).toEqual(['deal_name', 'dv01']);
     expect(grid.setGridOption).toHaveBeenCalledWith('datasource', query.datasource);
   });
@@ -315,9 +321,40 @@ describe('Positions page', () => {
     expect(localStorage.getItem('desk.positions.preset')).toBe('Desk view');
 
     save();
-    http.expectOne((r) => r.method === 'PUT').flush('no', { status: 400, statusText: 'x' });
+    http.expectOne((r) => r.method === 'PUT').flush({ title: 'Invalid preset name' }, { status: 400, statusText: 'x' });
     await fixture.whenStable();
-    expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not save "Risk"');
+    expect(el.querySelector('[role=alert]')?.textContent).toContain('Could not save "Risk": Invalid preset name');
+  });
+
+  it('says why a save failed: the server\'s detail, else its title, else a generic line', async () => {
+    const { fixture, el, http, ready } = await render();
+    await ready();
+    vi.spyOn(window, 'prompt').mockReturnValue('Desk view');
+    const save = () => (el.querySelector('[aria-label="Save the current columns as a preset"]') as HTMLButtonElement).click();
+    const alert = () => el.querySelector('[role=alert]')?.textContent?.trim();
+    const cases: [body: object | string | null, status: number, shown: string][] = [
+      [{ title: 'Preset changed concurrently', detail: 'Try again.' }, 409, 'Could not save "Desk view": Try again.'],
+      [{ title: 'Too many requests', detail: '' }, 429, 'Could not save "Desk view": Too many requests'],
+      [{ detail: 42 }, 400, 'Could not save "Desk view".'],
+      ['plain text', 500, 'Could not save "Desk view".'],
+      [null, 502, 'Could not save "Desk view".'],
+    ];
+    for (const [body, status, shown] of cases) {
+      save();
+      http.expectOne((r) => r.method === 'PUT').flush(body, { status, statusText: 'x' });
+      await fixture.whenStable();
+      expect(alert()).toBe(shown);
+    }
+
+    save();
+    http.expectOne((r) => r.method === 'PUT').error(new ProgressEvent('error')); // network failure
+    await fixture.whenStable();
+    expect(alert()).toBe('Could not save "Desk view".');
+
+    vi.spyOn(TestBed.inject(DeskApi), 'savePreset').mockReturnValue(throwError(() => new Error('not HTTP')));
+    save();
+    await fixture.whenStable();
+    expect(alert()).toBe('Could not save "Desk view".');
   });
 
   it('offers the current name when saving over an own preset, and deletes it', async () => {
