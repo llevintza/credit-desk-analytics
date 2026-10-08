@@ -75,7 +75,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 - **Angular:** OnPush + signals; `switchMap` for supersedable queries; `takeUntilDestroyed` for manual subscriptions; no mutation of bound data; `@for` tracks a stable id. Detail: `web/AGENTS.md`.
 - **AG Grid Community only.** Don't import or enable Enterprise modules.
 - **Respect the free tiers:** no keep-awake pingers; health probes never touch the DB; cache-first reads; rate limits stay on in every environment except unit tests.
-- **Never run DDL or seeding from the app at startup.** Never run `--force` seeding or the load benchmark against production or Neon. Run the grid benchmarks and k6 only against a local stack (compose or `dotnet run`), never against Render, Neon or production. Run e2e, `perf/payload-size.mjs` and k6 only against a local stack (`BASE_URL=http://localhost:8080`) with a throwaway account you created locally with Desk.UserAdmin; never against the Render URL or with a real account's login.
+- **Never run DDL or seeding from the app at startup.** Never run `--force` seeding or the load benchmark against production or Neon. Run the grid benchmarks and k6 only against a local stack (compose or `dotnet run`), never against Render, Neon or production. Run e2e, `perf/payload-size.mjs`, `perf/LastBlockCheck` and k6 only against a local stack (`BASE_URL=http://localhost:8080`) with a throwaway account you created locally with Desk.UserAdmin; never against the Render URL or with a real account's login.
 
 ## Commands (keep them current; area commands are in the area files)
 
@@ -90,6 +90,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 | Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
 | E2E (phase 4) | `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build`, migrate, seed `--scale 0.2`, create a viewer with Desk.UserAdmin, then `cd e2e && npm ci && npx playwright install chromium && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test` (CI `e2e` job; `PERF=1 … npx playwright test perf` for ADR-0009 numbers) (local compose/CI stack only; create the viewer with Desk.UserAdmin against the local or test database, never Render, Neon or production) |
 | Payload budget (phase 3) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs` (CI `budgets` job; exit 1 over the Risk budget) |
+| Last block + summary vs SQL (#43 AC4) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… DATABASE_URL=… dotnet run -c Release --project perf/LastBlockCheck` (CI `budgets` job; exit 1 on any mismatch) |
 | Grid benchmarks (ADR-0006/7/8) | `DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out`, then `(cd perf && npm ci) && node perf/parse-bench.mjs perf/out` |
 | API latency p95 (k6) | `docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=… -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js` (local stack only: raise RATE_LIMIT_PER_USER_PER_MIN / RATE_LIMIT_PER_USER_BURST in that local process's environment for the run; never on Render, in render.yaml or the Render dashboard) |
 
