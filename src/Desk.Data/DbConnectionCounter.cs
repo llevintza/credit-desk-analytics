@@ -13,6 +13,9 @@ public sealed class DbConnectionCounter : DbConnectionInterceptor
 
     public long Opened => Interlocked.Read(ref _opened);
 
+    /// <summary>Counts a connection opened outside EF (Dapper reads through the data-source registry).</summary>
+    public void Record() => Interlocked.Increment(ref _opened);
+
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData) =>
         Interlocked.Increment(ref _opened);
 
