@@ -83,6 +83,24 @@ public sealed class GeneratorTests
     }
 
     [Fact]
+    public void Prices_are_positive_and_market_values_never_negative()
+    {
+        // #131: weighted averages weigh by ABS(market_value), but a non-positive price or market value from the
+        // generator would still be a bug. Scale 1.0, both as-of dates.
+        var u = Universe.Generate(42, 1.0, AsOf);
+        var t = new Tables(42, 1.0, AsOf, u);
+        Assert.All(t.BondAnalytics.Values, a => Assert.True(a.Price > 0, $"price {a.Price}"));
+        var names = ColumnCatalog.PositionSnapshot.Select(c => c.Name).ToList();
+        var (mv, price) = (names.IndexOf("market_value"), names.IndexOf("price"));
+        foreach (var date in new[] { t.AsOf, t.PriorBusinessDay })
+            Assert.All(t.PositionSnapshotRows(date), r =>
+            {
+                Assert.True((decimal)r[mv]! >= 0, $"market_value {r[mv]}");
+                Assert.True(Convert.ToDouble(r[price]) > 0, $"price {r[price]}");
+            });
+    }
+
+    [Fact]
     public void Scenario_prices_fall_as_spreads_widen()
     {
         var u = Universe.Generate(42, 0.05, AsOf);
