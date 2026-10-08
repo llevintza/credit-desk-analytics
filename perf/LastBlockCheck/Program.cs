@@ -85,6 +85,13 @@ async Task<object?> ScalarAsync(string sql)
     return value is DBNull ? null : value;
 }
 static string Show(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "null";
+static decimal? Number(JsonElement e) => e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
+
+// The Risk preset's Sum columns. Names come from the compiled ColumnCatalog allowlist (compile-time constants, never
+// client input); the shape guard keeps them safe to quote in SQL.
+var sumColumns = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.Sum && columns.Contains(c.Name)).ToArray();
+foreach (var column in sumColumns)
+    if (!Regex.IsMatch(column.Name, "^[a-z][a-z0-9_]*$")) throw new InvalidOperationException(column.Name);
 
 var results = new List<(string Check, string Api, string Sql, bool Ok)>();
 var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof"))!;
@@ -99,29 +106,54 @@ await using (var maxReader = await maxCmd.ExecuteReaderAsync(ct))
     results.Add(("as-of is the latest date", $"{asOf:yyyy-MM-dd}", latest?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "null", asOf == latest));
 }
 
-// The SQL tail, in the grid's order: the sort key, then position_id in the sort key's direction.
+// The SQL tail, in the grid's order: the sort key, then position_id in the sort key's direction. It also reads every
+// Sum column, so the last block's cells are compared, not only its ids.
 var sqlIds = new List<long>();
-await using (var cmd = db.CreateCommand("SELECT position_id FROM core.position_snapshot WHERE as_of_date = @asof ORDER BY market_value DESC, position_id DESC OFFSET @start LIMIT @block"))
+var sqlCells = new List<decimal?[]>();
+var tailColumns = string.Concat(sumColumns.Select(c => $", \"{c.Name}\""));
+await using (var cmd = db.CreateCommand($"SELECT position_id{tailColumns} FROM core.position_snapshot WHERE as_of_date = @asof ORDER BY market_value DESC, position_id DESC OFFSET @start LIMIT @block"))
 {
     cmd.Parameters.AddWithValue("asof", asOf);
     cmd.Parameters.AddWithValue("start", lastStart);
     cmd.Parameters.AddWithValue("block", Block);
     await using var reader = await cmd.ExecuteReaderAsync(ct);
-    while (await reader.ReadAsync(ct)) sqlIds.Add(reader.GetInt64(0));
+    while (await reader.ReadAsync(ct))
+    {
+        sqlIds.Add(reader.GetInt64(0));
+        sqlCells.Add([.. sumColumns.Select((_, i) => reader.IsDBNull(i + 1) ? (decimal?)null : reader.GetDecimal(i + 1))]);
+    }
 }
 results.Add(($"last block ids (rows {lastStart + 1:N0}–{rowCount:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
     $"{sqlIds.Count} ids, last {sqlIds.LastOrDefault()}", apiIds.SequenceEqual(sqlIds) && apiIds.Length == rowCount - lastStart));
+// The last block's Sum-column cells, at each column's index in the response's column order. A misaligned column in
+// the columnar serializer at a high offset fails here even when the ids match.
+var apiColumns = last.GetProperty("columns").EnumerateArray().Select(c => c.GetString()).ToList();
+var data = last.GetProperty("data");
+int cells = 0, cellMismatches = 0, missingColumns = 0;
+for (var j = 0; j < sumColumns.Length; j++)
+{
+    var index = apiColumns.IndexOf(sumColumns[j].Name);
+    if (index < 0) { missingColumns++; continue; }
+    var apiValues = data[index].EnumerateArray().Select(Number).ToArray();
+    for (var row = 0; row < Math.Max(apiValues.Length, sqlCells.Count); row++)
+    {
+        cells++;
+        var api = row < apiValues.Length ? apiValues[row] : null;
+        var sql = row < sqlCells.Count ? sqlCells[row][j] : null;
+        if (row >= apiValues.Length || row >= sqlCells.Count || api != sql) cellMismatches++;
+    }
+}
+results.Add(($"last block Sum-column cells ({sumColumns.Length} columns)", $"{cells - cellMismatches:N0} equal",
+    $"{cells:N0} cells, {cellMismatches} differ, {missingColumns} columns missing",
+    cells > 0 && cellMismatches == 0 && missingColumns == 0));
 results.Add(($"aligned last block ids (rows {alignedStart + 1:N0}–{rowCount:N0})", $"{alignedIds.Length} ids, last {alignedIds.LastOrDefault()}",
     $"{rowCount - alignedStart} ids, last {sqlIds.LastOrDefault()}",
     alignedIds.Length == rowCount - alignedStart && alignedIds.SequenceEqual(sqlIds.TakeLast(alignedIds.Length))));
 
-// Every SUM in the summary against an independent SUM. Column names come from the compiled ColumnCatalog allowlist
-// (compile-time constants, never client input); the shape guard keeps them safe to quote.
+// Every SUM in the summary against an independent SUM.
 var summary = first.GetProperty("summary");
-var sumColumns = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.Sum && columns.Contains(c.Name)).ToArray();
 foreach (var column in sumColumns)
 {
-    if (!Regex.IsMatch(column.Name, "^[a-z][a-z0-9_]*$")) throw new InvalidOperationException(column.Name);
     // A missing key or a JSON null is a FAIL row, not an exception.
     decimal? api = summary.TryGetProperty(column.Name, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
     var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof");
