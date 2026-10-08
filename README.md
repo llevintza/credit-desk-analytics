@@ -334,6 +334,7 @@ Accept: application/json            (or application/x-msgpack, see ADR-0007)
 - `position_id` is always included (the row id) and always appended to `ORDER BY` as a **deterministic tie-breaker** (otherwise offset paging duplicates or skips rows).
 - Block size is clamped to ≤ 500 rows, and displayed columns to ≤ 250.
 - **One round trip:** the page query and the totals query (`COUNT(*)` + per-column aggregates from the catalog: SUM, or market-value-weighted average) are sent together (`QueryMultipleAsync` or a single batch).
+- **Weighting rule:** weighted averages weigh each row by `ABS(market_value)`, the size of the position, so short or negative positions can't cancel longs or flip the sign of the denominator. Rows where the measure is `NULL` don't count toward the weight, and zero or no weight gives `null`, never `NaN` (#131).
 - **Paging:** `OFFSET … FETCH` by default. ADR-0008 evaluates keyset paging, which the Infinite Row Model's random-access jumps make harder, and records the measured trade-off at deep offsets.
 - **Caching:** the key is (as-of, canonicalized query JSON, user's portfolio entitlements). Entries live until the next as-of date. Support `If-None-Match` → **304**.
 - The `CancellationToken` flows to Npgsql, so scrolling past a block cancels its query. The command timeout is 10 s.
