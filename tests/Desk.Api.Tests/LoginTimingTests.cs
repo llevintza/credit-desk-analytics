@@ -77,6 +77,36 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
         }
     }
 
+    public enum Outcome { Success, NotAllowed, LockedOut, Failed }
+
+    [Theory]
+    [InlineData(LoginPath.Disabled, Outcome.NotAllowed)]
+    [InlineData(LoginPath.Expired, Outcome.NotAllowed)]
+    [InlineData(LoginPath.Locked, Outcome.LockedOut)]
+    [InlineData(LoginPath.LockedWithTheRightPassword, Outcome.LockedOut)]
+    [InlineData(LoginPath.TriggersLockout, Outcome.LockedOut)]
+    [InlineData(LoginPath.NoStoredPassword, Outcome.Failed)]
+    [InlineData(LoginPath.EmptyPassword, Outcome.Failed)]
+    [InlineData(LoginPath.MissingPassword, Outcome.Failed)]
+    [InlineData(LoginPath.WrongPassword, Outcome.Failed)]
+    [InlineData(LoginPath.Success, Outcome.Success)]
+    public async Task Each_account_state_gets_its_own_sign_in_result(LoginPath path, Outcome expected)
+    {
+        // #231: the endpoint answers every failure with the same 401, so only the manager's result tells a swapped
+        // outcome apart.
+        var (email, password) = await ArrangeAsync(path);
+        await using var scope = api.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByEmailAsync(email!);
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, password!, lockoutOnFailure: true);
+
+        Assert.Equal(expected == Outcome.Success, result.Succeeded);
+        Assert.Equal(expected == Outcome.NotAllowed, result.IsNotAllowed);
+        Assert.Equal(expected == Outcome.LockedOut, result.IsLockedOut);
+        Assert.False(result.RequiresTwoFactor);
+    }
+
     [Theory]
     [InlineData(LoginPath.UnknownEmail)]
     [InlineData(LoginPath.MissingEmail)]
