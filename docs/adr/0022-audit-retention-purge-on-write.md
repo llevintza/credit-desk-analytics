@@ -114,6 +114,197 @@ Run 3, trimmed to the plan lines:
  Execution Time: 494.723 ms
 ```
 
+<details>
+<summary>Runs 1 and 2 (same script, same machine), trimmed to the plan and <code>Buffers</code> lines: warm runs show only <code>shared hit</code>, cold runs show <code>read</code></summary>
+
+Run 1:
+
+```
+===== warm (rows_per_day=10000)
+--- size with 120 days
+ 1200000 | 208 MB |         181.6
+--- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
+ Delete on audit (actual time=2.599..2.599 rows=0 loops=1)
+   Buffers: shared hit=10343
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.017..0.886 rows=10000 loops=1)
+         Buffers: shared hit=197
+   Buffers: shared hit=7
+ Execution Time: 2.783 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+ Delete on audit (actual time=189.212..189.212 rows=0 loops=1)
+   Buffers: shared hit=310025
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.046..29.588 rows=300000 loops=1)
+         Buffers: shared hit=5822
+ Execution Time: 189.236 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+ Limit (actual time=6.415..6.415 rows=1 loops=1)
+   Buffers: shared hit=974
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=0.021..5.206 rows=50000 loops=1)
+         Buffers: shared hit=974
+   Buffers: shared hit=12
+ Execution Time: 6.441 ms
+ Delete on audit a (actual time=16.135..16.135 rows=0 loops=1)
+   Buffers: shared hit=50973
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.013..5.505 rows=50000 loops=1)
+         Buffers: shared hit=973
+   Buffers: shared hit=3
+ Execution Time: 16.152 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+ Delete on audit a (actual time=274.995..274.998 rows=0 loops=1)
+   Buffers: shared hit=63288 read=5077
+   ->  Hash Semi Join (actual time=253.347..265.691 rows=50000 loops=1)
+         Buffers: shared hit=13288 read=5077
+         ->  Seq Scan on audit a (actual time=0.010..78.629 rows=1200000 loops=1)
+                           ->  Index Scan using "IX_audit_at" on audit a0 (actual time=0.016..5.067 rows=50000 loops=1)
+   Buffers: shared hit=50 read=2
+ Execution Time: 275.237 ms
+--- the 90-day purge, then the purge right after it (nothing to delete: the edge query finds no row)
+ Limit (actual time=18.755..18.755 rows=0 loops=1)
+   Buffers: shared hit=5823
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=18.753..18.754 rows=0 loops=1)
+         Buffers: shared hit=5823
+ Execution Time: 18.775 ms
+ Delete on audit (actual time=0.982..0.982 rows=0 loops=1)
+   Buffers: shared hit=1473
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.981..0.981 rows=0 loops=1)
+         Buffers: shared hit=1473
+ Execution Time: 0.995 ms
+--- size with 90 days (after the purge and a vacuum; space is reused, not returned to the OS)
+ 900000 | 174 MB
+===== cold (rows_per_day=10000)
+--- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
+ Delete on audit (actual time=11.995..11.996 rows=0 loops=1)
+   Buffers: shared hit=10149 read=194 dirtied=147
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.151..9.128 rows=10000 loops=1)
+         Buffers: shared hit=3 read=194
+   Buffers: shared hit=60 read=24
+ Execution Time: 12.257 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+ Delete on audit (actual time=348.232..348.233 rows=0 loops=1)
+   Buffers: shared hit=304202 read=5823 dirtied=4350
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.158..260.549 rows=300000 loops=1)
+         Buffers: shared read=5822 dirtied=146
+   Buffers: shared hit=60 read=20
+ Execution Time: 348.352 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+ Limit (actual time=45.387..45.388 rows=1 loops=1)
+   Buffers: shared read=974 dirtied=726
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=0.250..44.304 rows=50000 loops=1)
+         Buffers: shared read=974 dirtied=726
+   Buffers: shared hit=68 read=22
+ Execution Time: 45.409 ms
+ Delete on audit a (actual time=14.350..14.351 rows=0 loops=1)
+   Buffers: shared hit=50973
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.006..3.046 rows=50000 loops=1)
+         Buffers: shared hit=973
+   Buffers: shared hit=6
+ Execution Time: 14.521 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+ Delete on audit a (actual time=408.650..408.653 rows=0 loops=1)
+   Buffers: shared hit=50727 read=17638 dirtied=4348 written=3591
+   ->  Hash Semi Join (actual time=386.749..396.970 rows=50000 loops=1)
+         Buffers: shared hit=727 read=17638 dirtied=4348 written=3591
+         ->  Seq Scan on audit a (actual time=0.052..147.651 rows=1200000 loops=1)
+                           ->  Index Scan using "IX_audit_at" on audit a0 (actual time=0.115..56.495 rows=50000 loops=1)
+   Buffers: shared hit=160 read=29 dirtied=1
+ Execution Time: 409.301 ms
+```
+
+Run 2:
+
+```
+===== warm (rows_per_day=10000)
+--- size with 120 days
+ 1200000 | 208 MB |         181.6
+--- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
+ Delete on audit (actual time=3.374..3.374 rows=0 loops=1)
+   Buffers: shared hit=10343
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.020..1.250 rows=10000 loops=1)
+         Buffers: shared hit=197
+   Buffers: shared hit=7
+ Execution Time: 3.636 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+ Delete on audit (actual time=120.036..120.036 rows=0 loops=1)
+   Buffers: shared hit=310025
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.015..29.921 rows=300000 loops=1)
+         Buffers: shared hit=5822
+ Execution Time: 120.062 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+ Limit (actual time=6.147..6.147 rows=1 loops=1)
+   Buffers: shared hit=974
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=0.061..4.962 rows=50000 loops=1)
+         Buffers: shared hit=974
+   Buffers: shared hit=12
+ Execution Time: 6.177 ms
+ Delete on audit a (actual time=14.118..14.118 rows=0 loops=1)
+   Buffers: shared hit=50973
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.011..4.757 rows=50000 loops=1)
+         Buffers: shared hit=973
+   Buffers: shared hit=3
+ Execution Time: 14.166 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+ Delete on audit a (actual time=243.864..243.867 rows=0 loops=1)
+   Buffers: shared hit=63288 read=5077
+   ->  Hash Semi Join (actual time=225.767..236.190 rows=50000 loops=1)
+         Buffers: shared hit=13288 read=5077
+         ->  Seq Scan on audit a (actual time=0.012..77.889 rows=1200000 loops=1)
+                           ->  Index Scan using "IX_audit_at" on audit a0 (actual time=0.011..5.368 rows=50000 loops=1)
+   Buffers: shared hit=50 read=2
+ Execution Time: 244.190 ms
+--- the 90-day purge, then the purge right after it (nothing to delete: the edge query finds no row)
+ Limit (actual time=22.908..22.909 rows=0 loops=1)
+   Buffers: shared hit=5823
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=22.907..22.907 rows=0 loops=1)
+         Buffers: shared hit=5823
+ Execution Time: 22.937 ms
+ Delete on audit (actual time=2.202..2.203 rows=0 loops=1)
+   Buffers: shared hit=1473
+   ->  Index Scan using "IX_audit_at" on audit (actual time=2.201..2.201 rows=0 loops=1)
+         Buffers: shared hit=1473
+ Execution Time: 2.230 ms
+--- size with 90 days (after the purge and a vacuum; space is reused, not returned to the OS)
+ 900000 | 174 MB
+===== cold (rows_per_day=10000)
+--- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
+ Delete on audit (actual time=27.642..27.643 rows=0 loops=1)
+   Buffers: shared hit=10149 read=194 dirtied=147
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.091..22.776 rows=10000 loops=1)
+         Buffers: shared hit=3 read=194
+   Buffers: shared hit=60 read=24
+ Execution Time: 27.861 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+ Delete on audit (actual time=1327.399..1327.399 rows=0 loops=1)
+   Buffers: shared hit=304202 read=5823 dirtied=4350
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.375..1075.841 rows=300000 loops=1)
+         Buffers: shared read=5822 dirtied=146
+   Buffers: shared hit=60 read=20
+ Execution Time: 1327.837 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+ Limit (actual time=129.669..129.670 rows=1 loops=1)
+   Buffers: shared read=974 dirtied=726
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=5.999..127.867 rows=50000 loops=1)
+         Buffers: shared read=974 dirtied=726
+   Buffers: shared hit=68 read=22
+ Execution Time: 129.698 ms
+ Delete on audit a (actual time=21.415..21.416 rows=0 loops=1)
+   Buffers: shared hit=50973
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.016..4.425 rows=50000 loops=1)
+         Buffers: shared hit=973
+   Buffers: shared hit=6
+ Execution Time: 21.799 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+ Delete on audit a (actual time=924.035..924.047 rows=0 loops=1)
+   Buffers: shared hit=50727 read=17638 dirtied=4348 written=3591
+   ->  Hash Semi Join (actual time=866.403..892.076 rows=50000 loops=1)
+         Buffers: shared hit=727 read=17638 dirtied=4348 written=3591
+         ->  Seq Scan on audit a (actual time=0.874..366.567 rows=1200000 loops=1)
+                           ->  Index Scan using "IX_audit_at" on audit a0 (actual time=0.418..209.980 rows=50000 loops=1)
+   Buffers: shared hit=160 read=29 dirtied=1
+ Execution Time: 926.961 ms
+```
+
+</details>
+
 **Size against the database budget.** The binding limit isn't Neon's 0.5 GB cap. It's README §10/§5.4: the database MUST stay under **350 MB**, and the seeder **fails above 400 MB**. Both are measured with `pg_database_size`, and `app.audit` lives in the same Neon database as the seeded data (README §5.1). The seeded database is 271 MB (§5.4), which leaves about 79 MB of headroom under 350 MB, and about 129 MB under the seeder's hard fail. At the measured ~193 bytes per row (heap and both indexes), a 90-day window costs about **17 MB per 1,000 audit rows a day**:
 
 | Audit rows a day | 90 days of `app.audit` | Database total (271 MB seeded) |
