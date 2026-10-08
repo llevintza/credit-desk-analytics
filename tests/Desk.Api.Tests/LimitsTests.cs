@@ -153,6 +153,30 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.DoesNotContain("203.0.113.7", string.Join('\n', lines));
     }
 
+    [Fact]
+    public async Task A_signed_in_users_429_leaves_the_first_rejection_line_for_anonymous_callers()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using var host = BehindCloudflare(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "2")).WithWebHostBuilder(b =>
+            b.ConfigureTestServices(s => s.AddSingleton<ILoggerProvider>(logs)));
+        List<string> Rejections() => [.. logs.Lines.Where(l => l.Category == typeof(ClientAddressDiagnostics).FullName && l.Text.StartsWith("First rate-limited request:", StringComparison.Ordinal)).Select(l => l.Text)];
+
+        var user = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(user, (await api.CreateUserAsync()).Email!);
+        HttpStatusCode last = default;
+        for (var i = 0; i < 4 && last != HttpStatusCode.TooManyRequests; i++)
+            last = (await user.GetAsync("/api/me", Ct)).StatusCode;
+        Assert.Equal(HttpStatusCode.TooManyRequests, last);
+        Assert.Empty(Rejections());
+
+        var anonymous = PostgresApiFactory.NewClient(host);
+        HttpRequestMessage Me() => Via(new HttpRequestMessage(HttpMethod.Get, "/api/me"), RenderLb, $"203.0.113.9, {CfEdge}", "203.0.113.9");
+        for (var i = 0; i < 2; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.SendAsync(Me(), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await anonymous.SendAsync(Me(), Ct)).StatusCode);
+        Assert.Contains("EndpointPolicy=global", Assert.Single(Rejections()));
+    }
+
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
         public System.Collections.Concurrent.ConcurrentQueue<(string Category, string Text)> Lines { get; } = new();

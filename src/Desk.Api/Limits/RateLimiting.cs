@@ -96,7 +96,10 @@ public static class RateLimiting
             ? Math.Max(1, (int)Math.Ceiling(after.TotalSeconds))
             : 1;
         var http = ctx.HttpContext;
-        http.RequestServices.GetRequiredService<ClientAddressDiagnostics>().Rejected(http);
+        // A signed-in caller is keyed on the user, not the client address: their 429 (their own queue, their bucket)
+        // says nothing about the resolver and must not use up its one-shot line (#165).
+        if (!http.User.IsSignedIn())
+            http.RequestServices.GetRequiredService<ClientAddressDiagnostics>().Rejected(http);
         http.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
         await Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
