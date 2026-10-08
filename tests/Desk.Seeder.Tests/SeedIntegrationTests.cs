@@ -324,6 +324,29 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
     }
 
     [Fact]
+    public async Task Seeded_run_over_budget_after_commit_warns_and_exits_0()
+    {
+        // R217-04: the pre-commit guard accepted the data, so an over-budget size read after COMMIT only warns.
+        // The probe reports the real size until the run's metadata row is committed, then MaxMegabytes + 1 MiB.
+        var before = await StateAsync();
+        var o = new StringWriter();
+        var err = new StringWriter();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct)
+        {
+            await using var cmd = new NpgsqlCommand("SELECT count(*) FROM app.seed_metadata", conn);
+            return (long)(await cmd.ExecuteScalarAsync(ct))! > before.Meta
+                ? (roomy.MaxMegabytes + 1) * 1024 * 1024
+                : await SeedRunner.DatabaseSizeAsync(conn, ct);
+        }
+        Assert.Equal(0, await SeedRunner.RunAsync(roomy, db.ConnectionString, o, err, Probe, TestContext.Current.CancellationToken));
+        Assert.Contains("SEED_ACTION=seeded", o.ToString());
+        Assert.Contains($"DB_SIZE_MB={roomy.MaxMegabytes + 1}", o.ToString());
+        Assert.Contains("committed data was accepted by the pre-commit guard", err.ToString());
+        Assert.Equal(before.Meta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Fact]
     public async Task Copy_failure_mid_load_rolls_back()
     {
         var before = await db.ScalarAsync<long>("SELECT count(*) FROM core.fund");
