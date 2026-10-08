@@ -461,7 +461,16 @@ export function runGate(options = {}) {
         failed = true;
         say(`- **FAIL** committed baseline ${name} is below the BASE_SHA floor.`);
       }
-      if (!ran(name)) continue;
+      if (!ran(name)) {
+        // Defence in depth: without measurement a skipped suite's baseline may not move at all.
+        if (round1(c.line) !== round1(f.line) || round1(c.branch) !== round1(f.branch)) {
+          failed = true;
+          say(
+            `- **FAIL** ${name} did not run, but its committed baseline differs from the BASE_SHA floor; a baseline change needs the suite measured.`,
+          );
+        }
+        continue;
+      }
       if (!(round1(c.line) <= round1(m.line) + NO_DROP_EPS) || !(round1(c.branch) <= round1(m.branch) + NO_DROP_EPS)) {
         failed = true;
         say(

@@ -2089,6 +2089,26 @@ test("a skipped suite's committed baseline still may not drop below the floor", 
   }
 });
 
+test("a skipped suite's committed baseline may not move without measurement (R173-10)", () => {
+  const { dir } = setupPassRepo();
+  try {
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 90, branch: 90 } });
+    const floorBase = commit(dir, "floor web 90/90");
+    rmSync(join(dir, "cov/web"), { recursive: true, force: true });
+
+    const same = runQuiet(dir, gateArgs(floorBase, ["--suites", "dotnet"]));
+    assert.equal(same.failed, false, same.output);
+
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 95, branch: 90 } });
+    commit(dir, "raise web baseline without running web");
+    const raised = runQuiet(dir, gateArgs(floorBase, ["--suites", "dotnet"]));
+    assert.equal(raised.failed, true);
+    assert.match(raised.output, /web did not run, but its committed baseline differs from the BASE_SHA floor/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("an override needs every suite measured", () => {
   const { dir, base } = setupPassRepo();
   try {
