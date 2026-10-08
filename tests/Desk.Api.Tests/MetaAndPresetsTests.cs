@@ -290,7 +290,9 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
             await db.Database.MigrateAsync(Ct);
             db.ColumnCatalog.AddRange(
                 new ColumnCatalogEntry { Name = "position_id", Ordinal = 1, Group = "keys", Kind = "Key", Aggregation = "None", Header = "Position" },
-                new ColumnCatalogEntry { Name = "deal\" OR 1=1 --", Ordinal = 2, Group = "keys", Kind = "Text", Aggregation = "None", Header = "Deal" });
+                new ColumnCatalogEntry { Name = "deal\" OR 1=1 --", Ordinal = 2, Group = "keys", Kind = "Text", Aggregation = "None", Header = "Deal" },
+                // A trailing newline must not pass: the check anchors at \z, not $.
+                new ColumnCatalogEntry { Name = "sector\n", Ordinal = 3, Group = "keys", Kind = "Text", Aggregation = "None", Header = "Sector" });
             await db.SaveChangesAsync(Ct);
         }
         var repo = new MetaRepository(
@@ -304,7 +306,12 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         Assert.False(snapshot.HasData);
         var (level, message) = Assert.Single(log.Entries);
         Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, level);
+        Assert.Contains("has 2 names", message);
         Assert.DoesNotContain("OR 1=1", message);
+        // The grid says why it's unavailable instead of claiming the database isn't seeded.
+        var problem = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(PositionsEndpoints.Unavailable(snapshot, new GridRequest()));
+        Assert.Equal(503, problem.StatusCode);
+        Assert.Equal("Column catalog invalid", problem.ProblemDetails.Title);
     }
 
     private static Task<HttpResponseMessage> SendWithCookie(HttpClient client, string cookie, HttpMethod method, string path, string? xsrf = null, object? body = null)

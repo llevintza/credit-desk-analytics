@@ -85,6 +85,6 @@ public sealed partial class MetaCache(MetaRepository repo, TimeProvider time, IL
 
     private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a < b ? a : b;
 
-    [GeneratedRegex("^[a-z_][a-z0-9_]*$")]
+    [GeneratedRegex(@"^[a-z_][a-z0-9_]*\z")] // \z, not $: $ also matches before a trailing newline
     private static partial Regex SafeName();
 }

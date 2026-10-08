@@ -119,9 +119,8 @@ public static class MetaEndpoints
     {
         var started = Stopwatch.GetTimestamp();
         var result = await next(ctx);
-        var ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        ctx.HttpContext.Response.Headers["Server-Timing"] = string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"db;dur={ms:0.0}, ser;dur=0.0, total;dur={ms:0.0}");
+        // Presets aren't cached: every response is a MISS, and the handler's time is all database time.
+        PositionsEndpoints.SetTiming(ctx.HttpContext, "MISS", Stopwatch.GetElapsedTime(started).TotalMilliseconds, 0, started);
         return result;
     }
 
