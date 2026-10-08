@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // README §10: initial JS < 500 KB compressed — CI fails above it (#76). angular.json budgets measure raw bytes;
-// this measures what the browser downloads: Brotli (as the API serves it) of every script and stylesheet the
-// built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
+// this measures what the browser downloads: Brotli at the quality the API serves (BROTLI_QUALITY) of every script and
+// stylesheet the built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
 // Fails closed (#145): anything that would leave the budget unchecked exits 1 instead of passing.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
@@ -9,6 +9,10 @@ import { brotliCompressSync, constants } from 'node:zlib';
 
 const dir = process.argv[2] ?? 'dist/web/browser';
 const limitKb = 500;
+// The quality the API serves (#203): src/Desk.Api/Program.cs sets BrotliCompressionProviderOptions.Level =
+// CompressionLevel.Fastest, which .NET maps to Brotli quality 1. Change both together. q1 output is 9–18% larger
+// than q4 on minified bundles, so measuring at a higher quality would under-report the wire bytes.
+const BROTLI_QUALITY = 1;
 const fail = (message) => {
   console.error(`FAIL: ${message}`);
   process.exit(1);
@@ -45,10 +49,10 @@ while (queue.length > 0) {
 
 for (const f of files) if (read(f).length === 0) fail(`${f} is 0 bytes; refusing to pass the budget.`);
 
-const br = (file) => brotliCompressSync(read(file), { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }).length / 1024;
+const br = (file) => brotliCompressSync(read(file), { params: { [constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }).length / 1024;
 const total = files.reduce((sum, f) => sum + br(f), 0);
 const lazy = readdirSync(dir).filter((f) => f.endsWith('.js') && !files.includes(f));
 
-console.log(`Initial (br): ${total.toFixed(1)} KB of ${limitKb} KB budget — ${files.join(', ')}`);
-for (const f of lazy) console.log(`  lazy ${f}: ${br(f).toFixed(1)} KB br`);
+console.log(`Initial (br q${BROTLI_QUALITY}): ${total.toFixed(1)} KB of ${limitKb} KB budget — ${files.join(', ')}`);
+for (const f of lazy) console.log(`  lazy ${f}: ${br(f).toFixed(1)} KB br q${BROTLI_QUALITY}`);
 if (total > limitKb) fail(`initial bundle ${total.toFixed(1)} KB compressed is over the ${limitKb} KB budget (README §10).`);
