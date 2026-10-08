@@ -41,7 +41,8 @@ public sealed class DeskSignInManager(
         var refused = await PreSignInCheck(user);
         if (refused is not null || string.IsNullOrEmpty(password) || user.PasswordHash is null)
         {
-            guard.Verify(password);
+            // The endpoint coalesces a missing password to "", other callers may not: the hasher throws on null.
+            guard.Verify(password ?? string.Empty);
             return refused ?? SignInResult.Failed;
         }
 

@@ -259,6 +259,28 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_null_password_fails_with_one_hash()
+    {
+        // #231: callers other than the endpoint may pass null; the decoy still runs, without throwing.
+        var hasher = new CountingHasher();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<IPasswordHasher<DeskUser>>();
+            s.AddSingleton<IPasswordHasher<DeskUser>>(hasher);
+        }));
+        var user = await api.CreateUserAsync();
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByIdAsync(user.Id.ToString());
+
+        hasher.Reset();
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, null!, lockoutOnFailure: true);
+
+        Assert.Equal(SignInResult.Failed, result);
+        Assert.Equal(1, hasher.Verifications);
+    }
+
+    [Fact]
     public async Task Without_lockout_on_failure_a_wrong_password_is_not_counted()
     {
         var user = await api.CreateUserAsync();
