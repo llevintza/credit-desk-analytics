@@ -211,19 +211,50 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         var user = await api.CreateUserAsync();
         var client = api.NewClient();
-        var before = DateTimeOffset.UtcNow;
         for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
             Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!, "wrong-password-123456")).StatusCode);
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
-        var after = DateTimeOffset.UtcNow;
 
         await using var db = api.NewContext();
         var stored = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct);
-        Assert.NotNull(stored.LockoutEnd);
-        // Identity's UserManager stamps the lockout from the wall clock, not the injected TimeProvider (#226 follow-up),
-        // so bracket it: exactly 15 minutes from the moment of the fifth failure.
-        Assert.InRange(stored.LockoutEnd!.Value, before + IdentityPolicy.LockoutDuration, after + IdentityPolicy.LockoutDuration);
+        // Stamped from the injected clock, not the wall clock (#261).
+        Assert.Equal(api.Time.GetUtcNow() + IdentityPolicy.LockoutDuration, stored.LockoutEnd);
+        Assert.Equal(0, stored.AccessFailedCount);
+    }
+
+    [Fact]
+    public async Task Lockout_ends_on_the_injected_clock()
+    {
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!, "wrong-password-123456")).StatusCode);
+
+        clock.Advance(IdentityPolicy.LockoutDuration - TimeSpan.FromTicks(1));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+        // Identity's boundary is inclusive: still locked at the instant the lockout ends.
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Lockout_end_is_ignored_when_lockout_is_off_for_the_account()
+    {
+        var user = await api.CreateUserAsync();
+        await using var scope = api.Services.CreateAsyncScope();
+        var users = Assert.IsType<DeskUserManager>(scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>());
+        var tracked = (await users.FindByIdAsync(user.Id.ToString()))!;
+        Assert.True((await users.SetLockoutEndDateAsync(tracked, api.Time.GetUtcNow().AddDays(1))).Succeeded);
+        Assert.True(await users.IsLockedOutAsync(tracked));
+
+        Assert.True((await users.SetLockoutEnabledAsync(tracked, false)).Succeeded);
+        Assert.False(await users.IsLockedOutAsync(tracked));
     }
 
     [Fact]
