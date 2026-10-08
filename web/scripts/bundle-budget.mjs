@@ -84,9 +84,10 @@ const main = initial.find((f) => /^main-[^/]*\.js$/.test(f));
 if (initial.length === 0 || !main) fail('index.html lists no initial scripts or no main-*.js; refusing to pass the budget.');
 
 // Static imports of the initial scripts load up front too, followed transitively and resolved against the importer
-// (#204): any file name or sub-path, not only `./chunk-*.js` at the root.
+// (#204): any file name or sub-path, not only `./chunk-*.js` at the root. Every script is followed, whatever its
+// extension: an inline module can import `./boot.mjs` (#266 N3).
 const files = [...new Set(initial)];
-const queue = files.filter((f) => f.endsWith('.js'));
+const queue = files.filter((f) => !f.endsWith('.css'));
 while (queue.length > 0) {
   const importer = queue.shift();
   for (const spec of staticImports(read(importer).toString('utf8'))) {

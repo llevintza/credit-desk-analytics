@@ -285,3 +285,15 @@ for (const [label, tag, files] of [
     assert.match(r.stderr, /over the 500 KB budget/);
   });
 }
+
+// #266 N3: an inline module can import a script that isn't .js; its own static imports load up front too.
+test('follows the static imports of a non-.js script an inline module imports', () => {
+  const r = run({
+    'index.html': page('<script src="main-A1.js" type="module"></script><script type="module">import"./boot-A1.mjs";</script>'),
+    'main-A1.js': 'void 0;',
+    'boot-A1.mjs': 'import"./chunk-BIG.js";',
+    'chunk-BIG.js': big(),
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /over the 500 KB budget/);
+});
