@@ -407,11 +407,16 @@ public sealed class PositionsTests(PostgresApiFactory api)
         var late = await cache.GetAsync(Ct);
         Assert.Equal(batch, late.ExpiresAt);
 
+        // Fresh up to the last tick before the batch, so a regression to <= or an early expiry fails here.
+        time.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        Assert.Same(late, await cache.GetAsync(Ct));
+
         // The batch reloads it, five minutes before the revalidate window would have.
-        time.Advance(TimeSpan.FromMinutes(5));
+        time.Advance(TimeSpan.FromTicks(1));
         var next = await cache.GetAsync(Ct);
         Assert.NotSame(late, next);
-        Assert.True(next.BatchEndsAt > batch);
+        Assert.Equal(BatchClock.NextBatchAfter(batch), next.BatchEndsAt);
+        Assert.Equal(batch + MetaCache.Revalidate, next.ExpiresAt);
     }
 
     [Fact]

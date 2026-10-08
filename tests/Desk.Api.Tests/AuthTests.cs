@@ -211,60 +211,73 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         var user = await api.CreateUserAsync();
         var client = api.NewClient();
+        var before = DateTimeOffset.UtcNow;
         for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
             Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!, "wrong-password-123456")).StatusCode);
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+        var after = DateTimeOffset.UtcNow;
 
         await using var db = api.NewContext();
         var stored = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct);
         Assert.NotNull(stored.LockoutEnd);
-        // Identity stamps the lockout from its own clock; either way it lasts 15 minutes.
-        Assert.True(stored.LockoutEnd > DateTimeOffset.UtcNow.AddMinutes(14) || stored.LockoutEnd > api.Time.GetUtcNow().AddMinutes(14));
+        // Identity's UserManager stamps the lockout from the wall clock, not the injected TimeProvider (#226 follow-up),
+        // so bracket it: exactly 15 minutes from the moment of the fifth failure.
+        Assert.InRange(stored.LockoutEnd!.Value, before + IdentityPolicy.LockoutDuration, after + IdentityPolicy.LockoutDuration);
     }
 
     [Fact]
     public async Task Session_slides_for_8_hours_of_idle_time()
     {
-        var (client, _, _) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var client = await SignedInAsync(host);
 
-        api.Time.Advance(TimeSpan.FromHours(7));
+        clock.Advance(TimeSpan.FromHours(7));
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
 
-        api.Time.Advance(TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Session_ends_after_24_hours_even_when_active()
     {
-        var (client, _, _) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var client = await SignedInAsync(host);
         // Stay active every 4 h: sliding expiry alone would keep the session alive forever.
         for (var i = 0; i < 5; i++)
         {
-            api.Time.Advance(TimeSpan.FromHours(4));
+            clock.Advance(TimeSpan.FromHours(4));
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
         }
 
-        api.Time.Advance(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Session_ends_when_the_account_expires()
     {
-        var user = await api.CreateUserAsync(expiresAt: api.Time.GetUtcNow().AddHours(1));
-        var client = api.NewClient();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var user = await api.CreateUserAsync(expiresAt: clock.GetUtcNow().AddHours(1));
+        var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        api.Time.Advance(TimeSpan.FromMinutes(61));
+        clock.Advance(TimeSpan.FromMinutes(61));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Disabling_ends_a_live_session_at_the_next_stamp_check()
     {
-        var (client, _, user) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
         await using (var scope = api.Services.CreateAsyncScope())
         {
             var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
@@ -274,7 +287,7 @@ public sealed class AuthTests(PostgresApiFactory api)
             await users.UpdateSecurityStampAsync(tracked);
         }
 
-        api.Time.Advance(AuthSetup.SecurityStampInterval + TimeSpan.FromSeconds(1));
+        clock.Advance(AuthSetup.SecurityStampInterval + TimeSpan.FromSeconds(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
@@ -358,5 +371,33 @@ public sealed class AuthTests(PostgresApiFactory api)
         Assert.Equal("GET /api/me", row.Endpoint);
         Assert.Equal(200, row.Status);
         Assert.True(row.Ms >= 0);
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_reads_the_fixed_start_instant()
+    {
+        // #226: no test may move the shared clock (PostgresApiFactory.DisposeAsync checks it again after every test ran).
+        Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task Own_clock_hosts_leave_the_shared_clock_where_it_was()
+    {
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        Assert.Equal(PostgresApiFactory.Start, clock.GetUtcNow());
+        var client = await SignedInAsync(host);
+
+        clock.Advance(AuthSetup.AbsoluteExpiry + TimeSpan.FromMinutes(1));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
+    }
+
+    private async Task<HttpClient> SignedInAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)
+    {
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
+        return client;
     }
 }
