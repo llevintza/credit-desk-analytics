@@ -34,6 +34,11 @@ public sealed class DeskSignInManager(
     /// triggers lockout hashes there and again in a caller that guards the locked case. Here the account is checked
     /// once, then either the stored hash is verified or the <see cref="TimingGuard"/> decoy is, never both. Calling
     /// the base after the pre-check would re-run it, and an expiry passing in between would skip the hash.
+    /// <para>
+    /// Unlike the base, this doesn't record Identity's <c>aspnetcore.identity.sign_in.check_password_attempts</c>
+    /// metric: its recorder is internal to <see cref="SignInManager{TUser}"/>. The base's logging is kept
+    /// (<see cref="SignInManager{TUser}.LockedOut"/> on the attempt that triggers lockout).
+    /// </para>
     /// </remarks>
     public override async Task<SignInResult> CheckPasswordSignInAsync(DeskUser user, string password, bool lockoutOnFailure)
     {
@@ -65,7 +70,7 @@ public sealed class DeskSignInManager(
             if (!counted.Succeeded)
                 return SignInResult.Failed;
             if (await UserManager.IsLockedOutAsync(user))
-                return SignInResult.LockedOut;
+                return await LockedOut(user);
         }
         return SignInResult.Failed;
     }

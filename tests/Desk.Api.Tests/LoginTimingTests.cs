@@ -309,6 +309,27 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task The_attempt_that_triggers_lockout_logs_it_as_the_base_does()
+    {
+        // #231: the base returns through LockedOut, which logs the lockout; the override must too.
+        var log = new CapturingLogger();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<ILogger<SignInManager<DeskUser>>>();
+            s.AddSingleton<ILogger<SignInManager<DeskUser>>>(log);
+        }));
+        var (email, password) = await ArrangeAsync(LoginPath.TriggersLockout);
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByEmailAsync(email!);
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, password!, lockoutOnFailure: true);
+
+        Assert.True(result.IsLockedOut);
+        Assert.Contains("UserLockedOut", log.EventNames);
+    }
+
+    [Fact]
     public async Task Without_lockout_on_failure_a_wrong_password_is_not_counted()
     {
         var user = await api.CreateUserAsync();
@@ -373,6 +394,21 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
             Assert.True(_waits.Count >= count, $"{_waits.Count} of {count} logins reached the floor.");
             return FloorWaits;
         }
+    }
+
+    /// <summary>Records the event name of every entry the sign-in manager logs, at any level.</summary>
+    private sealed class CapturingLogger : ILogger<SignInManager<DeskUser>>
+    {
+        private readonly ConcurrentQueue<string?> _events = new();
+
+        public string?[] EventNames => [.. _events];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            _events.Enqueue(eventId.Name);
     }
 
     /// <summary>The app's user manager over the same store, reporting that it does not support lockout.</summary>
