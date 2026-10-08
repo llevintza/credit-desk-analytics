@@ -732,6 +732,7 @@ ASPNETCORE_ENVIRONMENT=Development
 
 - One project, one database, Postgres 17.
 - Use the **direct** connection endpoint, not `-pooler`, for the app. The API keeps its own Npgsql pool, and migrations need session features.
+- The pool is capped explicitly: `Maximum Pool Size` = `DB_MAX_POOL_SIZE` (default 20; a non-positive or junk value falls back to 20), set on every connection string `IDataSourceRegistry` resolves (§5.1). Npgsql's own default of 100 is above what a small Neon compute accepts (`max_connections` scales with compute size). 20 covers the §7.2 request path (8 concurrent DB permits) plus background users (audit writer, DataProtection key reads), and two instances overlapping during a deploy (2 × 20) still leave room for migrations and manual sessions. Rationale: ADR-0002, *Connection budget*.
 - Connection string format: `Host=…;Database=…;Username=…;Password=…;SSL Mode=Require;Trust Server Certificate=false`. It's stored **only** in the Render dashboard as `DATABASE_URL` (`sync: false`).
 - **Expect autosuspend:** the first query after idle may take about 0.5–1 s extra. Cache-first reads keep this rare.
 

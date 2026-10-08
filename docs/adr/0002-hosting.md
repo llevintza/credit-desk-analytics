@@ -35,3 +35,18 @@ Option 3: one Render Docker web service (ASP.NET Core serves the built SPA from 
 - The SPA is unavailable while the free instance cold-starts (30–60 s). Accepted for about 60 internal users; switch the plan to `starter` for demo windows.
 - There's no CDN, but at a 59 kB initial transfer that doesn't matter.
 - Render has no native .NET runtime, so the service is Docker-based (`deploy/Dockerfile`).
+
+## Connection budget (#182)
+
+The app uses Neon's **direct** endpoint, so every app connection is a real Postgres backend counted against the compute's `max_connections`, which scales with compute size (Neon documents about 100 for the smallest computes at the time of writing; check the current table). Npgsql's default `Maximum Pool Size` of 100 could on its own use all of them.
+
+Since #176 there is one Npgsql pool per distinct connection string (README §5.1), and `DataSourceRegistry` caps each one at `DB_MAX_POOL_SIZE`, default **20**:
+
+| Consumer | Connections at peak |
+|---|---|
+| Request path, bounded by the README §7.2 global limiter | 8 |
+| Background: audit writer, DataProtection key reads, login/session checks | a few |
+| Headroom inside one instance | the rest of the 20 |
+| Deploy overlap (old and new instance) | 2 × 20 = 40 |
+
+That leaves room for the migrator, db-ops and a manual session on the smallest compute. Raise `DB_MAX_POOL_SIZE` only with a larger compute; a non-positive or junk value falls back to 20, so a typo can't lift the cap.
