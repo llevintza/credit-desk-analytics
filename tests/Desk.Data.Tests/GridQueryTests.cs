@@ -309,7 +309,8 @@ public sealed class GridQueryTests
     [Fact]
     public void Filters_are_capped_and_more_is_a_400_not_a_cut()
     {
-        var numeric = ColumnCatalog.PositionSnapshot.Where(c => GridQueryNormalizer.IsNumeric(c.Kind)).ToList();
+        var numeric = ColumnCatalog.PositionSnapshot.Where(c => GridQueryNormalizer.IsNumeric(c.Kind))
+            .OrderBy(c => c.Name, StringComparer.Ordinal).ToList(); // the normalizer walks keys in ordinal order
         Assert.True(numeric.Count > GridQueryNormalizer.MaxFilters);
         Dictionary<string, FilterSpec> Model(int n) => numeric.Take(n).ToDictionary(c => c.Name, _ => new FilterSpec("number", "notBlank"));
         Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: Model(GridQueryNormalizer.MaxFilters))).Filters.Count);
@@ -322,9 +323,21 @@ public sealed class GridQueryTests
         foreach (var c in numeric.Skip(GridQueryNormalizer.MaxFilters))
             dropped[c.Name] = new FilterSpec("number", "nope");
         Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: dropped)).Filters.Count);
-        // A combined filter as filter 51 is refused too.
-        dropped[numeric[^1].Name] = new FilterSpec("number", Operator: "AND", Conditions: [new(Type: "notBlank"), new(Type: "blank")]);
-        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: dropped)));
+        var empty = Model(GridQueryNormalizer.MaxFilters);
+        empty[numeric[^1].Name] = new FilterSpec("number", "nope", Conditions: []);
+        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: empty)).Filters.Count);
+        // Filter 51 is refused whatever its shape: combined, or single with an empty conditions list. Its key sorts
+        // after the other fifty, so it is the one that meets the cap.
+        foreach (var last in new[]
+        {
+            new FilterSpec("number", Operator: "AND", Conditions: [new(Type: "notBlank"), new(Type: "blank")]),
+            new FilterSpec("number", "notBlank", Conditions: []),
+        })
+        {
+            var full = Model(GridQueryNormalizer.MaxFilters);
+            full[numeric[^1].Name] = last;
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: full)));
+        }
     }
 
     [Fact]

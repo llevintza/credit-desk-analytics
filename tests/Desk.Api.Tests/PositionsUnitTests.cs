@@ -176,4 +176,19 @@ public sealed class PositionsUnitTests
         http.Request.Headers.Accept = "application/json, application/x-msgpack;q=0.9";
         Assert.True(PositionsEndpoints.WantsMsgPack(http.Request));
     }
+
+    [Fact]
+    public void Unavailable_tells_an_unseeded_database_from_an_invalid_catalog()
+    {
+        static string? Title(MetaSnapshot meta) =>
+            Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(PositionsEndpoints.Unavailable(meta, new GridRequest())).ProblemDetails.Title;
+        var catalog = ColumnCatalog.PositionSnapshot;
+        var now = DateTimeOffset.UnixEpoch;
+        // A usable catalog with no as-of dates yet, and an empty database: both are "not seeded".
+        Assert.Equal("No data loaded", Title(new MetaSnapshot(catalog, new GridQueryNormalizer(catalog), [], "v", [], now, now)));
+        Assert.Equal("No data loaded", Title(new MetaSnapshot([], null, [], "empty", [], now, now)));
+        // Catalog rows but no normalizer: the catalog was refused.
+        Assert.Equal("Column catalog invalid", Title(new MetaSnapshot(catalog, null, [], "v", [], now, now)));
+    }
 }
+

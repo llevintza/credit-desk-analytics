@@ -16,6 +16,7 @@ public sealed class MigrationTests
 
         Assert.Equal(SnapshotSortIndexes.SortColumns.Length, up.Count);
         Assert.All(up, sql => Assert.StartsWith("CREATE INDEX IF NOT EXISTS ix_snapshot_sort_", sql));
+        Assert.Equal(up.Count, down.Count); // else Assert.All(down, …) passes on an empty Down
         Assert.All(down, sql => Assert.StartsWith("DROP INDEX IF EXISTS core.ix_snapshot_sort_", sql));
         Assert.Equal(SnapshotSortIndexes.SortColumns, up.Select(sql => sql.Split(' ')[5]["ix_snapshot_sort_".Length..]));
     }
