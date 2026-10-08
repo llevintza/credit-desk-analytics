@@ -27,7 +27,7 @@ Not allowed (D3, D5): `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, 
 
 ## Permissions and hooks: `.claude/settings.json`
 
-Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claude/settings.json`). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical-cursorclijson-gen) plus the **rev 10 lease deny**:
+Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claude/settings.json`). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical--cursorclijson-gen) plus the **rev 10 lease deny**:
 
 | Block | Entries | Enforces |
 |---|---|---|
