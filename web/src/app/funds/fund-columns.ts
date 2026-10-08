@@ -1,6 +1,5 @@
 import type { ColDef } from 'ag-grid-community';
-import { formatCell } from '../core/format';
-import { NegativeStyle } from '../core/format';
+import { NegativeStyle, formatCell, fullPrecision } from '../core/format';
 import { FundPerformance, FundRow } from '../data-access/api.types';
 
 const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -39,6 +38,7 @@ export function fundColumns(months: string[], negatives: () => NegativeStyle): C
       width: 112,
       cellClass: 'num',
       valueFormatter: (p) => formatCell(p.data?.format === 'pct2' ? 'Pct' : 'Money', p.value, negatives()),
+      tooltip: (p) => fullPrecision(p.data?.format === 'pct2' ? 'Pct' : 'Money', p.value), // README §9.1
       cellClassRules: { neg: (p) => typeof p.value === 'number' && p.value < 0 },
     })),
   ];

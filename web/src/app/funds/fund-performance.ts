@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, u
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
 import type { GridOptions } from 'ag-grid-community';
-import { catchError, filter, map, of, startWith, switchMap } from 'rxjs';
+import { catchError, map, of, startWith, switchMap } from 'rxjs';
 import { ScopeService } from '../core/scope.service';
 import { ThemeService } from '../core/theme.service';
 import { FundPerformance as Perf, FundRange } from '../data-access/api.types';
@@ -15,7 +15,7 @@ registerGridModules();
 export const ranges: FundRange[] = ['QTD', 'YTD', '1Y', 'ITD', 'CUSTOM'];
 
 interface Query { fundId: number; range: FundRange; from: string; to: string; }
-type State = { kind: 'loading' } | { kind: 'ready'; perf: Perf } | { kind: 'error' };
+type State = { kind: 'loading' } | { kind: 'ready'; perf: Perf } | { kind: 'error' } | { kind: 'incomplete' };
 
 /**
  * P2 Fund Performance (README §6): balance and IRR by month-end for a range. The month columns are built from
@@ -48,10 +48,11 @@ export class FundPerformancePage {
     return q.range === 'CUSTOM' && !(q.from && q.to) ? null : q;
   });
 
+  // An incomplete query (CUSTOM without both months) is a state of its own: the previous response must not stay
+  // on screen under the new selection (README §6 P2: never show a stale range).
   protected readonly state = toSignal(
     toObservable(this.query).pipe(
-      filter((q): q is Query => q !== null),
-      switchMap((q) =>
+      switchMap((q) => q === null ? of<State>({ kind: this.fundId() === null ? 'loading' : 'incomplete' }) :
         this.api.fundPerformance(q.fundId, q.range, q.from && `${q.from}-01`, q.to && `${q.to}-01`).pipe(
           map((perf): State => ({ kind: 'ready', perf })),
           catchError(() => of<State>({ kind: 'error' })),
@@ -64,8 +65,10 @@ export class FundPerformancePage {
   /** What the grid shows for the current response: the data plus columns and rows derived from its months. */
   protected readonly view = computed(() => {
     const s = this.state();
+    // Read the negative style here so a change rebuilds the columns and the grid repaints the numbers.
+    const negatives = this.theme.negatives();
     if (s.kind !== 'ready') return null;
-    return { perf: s.perf, columns: fundColumns(s.perf.months, this.theme.negatives), rows: fundRows(s.perf) };
+    return { perf: s.perf, columns: fundColumns(s.perf.months, () => negatives), rows: fundRows(s.perf) };
   });
 
   protected readonly gridOptions: GridOptions = {

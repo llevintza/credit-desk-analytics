@@ -14,14 +14,15 @@
     }
   </div>
   @if (range() === 'CUSTOM') {
-    <label class="field">From <input type="month" data-testid="from" aria-label="From month" (change)="setMonth('from', $event)" /></label>
-    <label class="field">To <input type="month" data-testid="to" aria-label="To month" (change)="setMonth('to', $event)" /></label>
+    <label class="field">From <input type="month" data-testid="from" aria-label="From month" [value]="from()" (change)="setMonth('from', $event)" /></label>
+    <label class="field">To <input type="month" data-testid="to" aria-label="To month" [value]="to()" (change)="setMonth('to', $event)" /></label>
   }
 </section>
 
 @switch (state().kind) {
   @case ('error') { <div class="error-tile" role="alert">Could not load fund performance. Try another range or reload.</div> }
   @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading fund performance"></div> }
+  @case ('incomplete') { <p class="caption" role="status" data-testid="incomplete">Pick a from and a to month for the custom range.</p> }
 }
 
 @if (view(); as v) {

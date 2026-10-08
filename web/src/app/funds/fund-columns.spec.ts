@@ -35,6 +35,10 @@ describe('fund columns (README §6 P2)', () => {
     style = 'parens';
     expect(fmt({ value: -0.012, data: { format: 'pct2' } })).toBe('(1.20%)');
     expect(fmt({ value: null })).toBe('');
+    const tip = col.tooltip as (p: { value: unknown; data?: { format: string } }) => string;
+    expect(tip({ value: 0.062345, data: { format: 'pct2' } })).toBe('6.2345%');
+    expect(tip({ value: 100000000.4, data: { format: 'money0' } })).toBe('100000000.4');
+    expect(tip({ value: 1 })).toBe('1');
     const neg = (col.cellClassRules as Record<string, (p: { value: unknown }) => boolean>)['neg'];
     expect([neg({ value: -1 }), neg({ value: 1 }), neg({ value: null })]).toEqual([true, false, false]);
   });

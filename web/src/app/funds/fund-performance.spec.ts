@@ -82,6 +82,9 @@ describe('Fund performance page (README §6 P2)', () => {
     (q('range-CUSTOM') as HTMLButtonElement).click();
     await fixture.whenStable();
     http.expectNone((r) => r.url.includes('/performance'));
+    // The YTD data must not stay on screen under the CUSTOM selection.
+    expect(q('fund-grid')).toBeNull();
+    expect(q('incomplete')?.textContent).toContain('Pick a from and a to month');
     const set = (id: string, value: string) => {
       const input = q(id) as HTMLInputElement;
       input.value = value;
@@ -97,6 +100,29 @@ describe('Fund performance page (README §6 P2)', () => {
     req.flush(perf('CUSTOM', []));
     await fixture.whenStable();
     expect(q('caption')?.textContent?.replace(/\s+/g, ' ')).toContain('0 months — no data in this range');
+
+    // Leaving CUSTOM and coming back shows the months that are in effect, not blank pickers.
+    (q('range-YTD') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    perfReq(1).flush(perf('YTD', ['2026-01-31']));
+    (q('range-CUSTOM') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    expect((q('from') as HTMLInputElement).value).toBe('2001-01');
+    expect((q('to') as HTMLInputElement).value).toBe('2001-06');
+    perfReq(1).flush(perf('CUSTOM', []));
+  });
+
+  it('repaints numbers when the negative style changes', async () => {
+    const { fixture, http, perfReq } = await render();
+    loadScope(http);
+    await fixture.whenStable();
+    perfReq(1).flush(perf('YTD', ['2026-01-31']));
+    await fixture.whenStable();
+    const view = (fixture.componentInstance as unknown as { view: () => { columns: unknown[] } | null }).view;
+    const before = view()!.columns;
+    TestBed.inject((await import('../core/theme.service')).ThemeService).negatives.set('parens');
+    await fixture.whenStable();
+    expect(view()!.columns).not.toBe(before);
   });
 
   it('switches fund, and shows an error tile when a request fails', async () => {
