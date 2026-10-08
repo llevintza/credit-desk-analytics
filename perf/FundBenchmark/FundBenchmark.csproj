@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ADR-0011: P2 long format + edge pivot vs SQL array_agg vs a dynamic SQL pivot. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Data/Desk.Data.csproj" />
+  </ItemGroup>
+</Project>
