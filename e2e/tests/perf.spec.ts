@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { gridReady } from './helpers';
 
 /**
- * ADR-0009 and README §10 measurements (run with PERF=1; not part of the default e2e run):
+ * ADR-0009 and README §10 measurements (run with PERF=1; playwright.config.ts only collects this file when PERF
+ * is set, so the default e2e run neither lists nor skips it):
  *   PERF=1 BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… npx playwright test perf
  * Needs the API's per-user rate limit raised for the client-side run (it fetches every block back to back).
  */
