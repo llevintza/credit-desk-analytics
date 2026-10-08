@@ -89,6 +89,8 @@ public sealed class FundTests(PostgresApiFactory api)
     [InlineData("range=CUSTOM&from=2025-01-01")]
     [InlineData("range=CUSTOM&to=2025-01-01")]
     [InlineData("range=CUSTOM&from=2025-06-01&to=2025-01-01")]
+    [InlineData("range=CUSTOM&from=abc&to=2025-01-01")]
+    [InlineData("range=CUSTOM&from=2025-13-01&to=2026-01-01")]
     public async Task Bad_ranges_are_400(string query)
     {
         var (client, _, _) = await api.SignedInAsync();
