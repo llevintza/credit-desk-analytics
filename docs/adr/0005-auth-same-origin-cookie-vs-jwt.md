@@ -69,7 +69,8 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 
 **Antiforgery**
 - The SPA reads `XSRF-TOKEN` and echoes it in `X-XSRF-TOKEN` (Angular's defaults).
-- An endpoint filter validates every non-GET/HEAD/OPTIONS call under `/api`.
+- An endpoint filter validates every non-GET/HEAD/OPTIONS call under `/api`. A failure is a 400 titled `Missing or invalid antiforgery token`.
+- A stale or missing token (an open session across a deploy that renames the antiforgery cookie, #233) recovers once: on that 400 the SPA's `xsrfRefreshInterceptor` calls `GET /api/auth/antiforgery` and retries the unsafe request once. It never retries twice, and other 400s are not retried.
 - Login is exempt for three reasons:
   - it is JSON-only, so a cross-site form can't produce it without CORS, which we never enable;
   - it is limited to 5/min per IP;

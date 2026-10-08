@@ -10,6 +10,9 @@ namespace Desk.Api.Auth;
 /// </summary>
 public sealed class AntiforgeryFilter(IAntiforgery antiforgery) : IEndpointFilter
 {
+    /// <summary>The 400's ProblemDetails title. The SPA matches it to refresh the token and retry once (#233).</summary>
+    public const string ProblemTitle = "Missing or invalid antiforgery token";
+
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
     {
         var http = ctx.HttpContext;
@@ -18,7 +21,7 @@ public sealed class AntiforgeryFilter(IAntiforgery antiforgery) : IEndpointFilte
             && http.GetEndpoint()?.Metadata.GetMetadata<SkipAntiforgery>() is null
             && !await antiforgery.IsRequestValidAsync(http))
         {
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Missing or invalid antiforgery token",
+            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: ProblemTitle,
                 detail: $"Send the XSRF-TOKEN cookie value in the {AuthSetup.AntiforgeryHeaderName} header.");
         }
         return await next(ctx);
