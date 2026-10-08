@@ -236,7 +236,7 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | surveillance / pricing / market | ~60 MB total | ~60 MB |
 | deal, bond, reference, app | small | < 10 MB |
 | app.audit (90 days, `AUDIT_RETENTION_DAYS`) | 90 × audit rows/day × ~193 B (heap + PK + `IX_audit_at`) | ~17 MB per 1,000 rows/day; break-even with the 350 MB budget at ~4,500 rows/day (ADR-0022) |
-| **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
+| **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
 
