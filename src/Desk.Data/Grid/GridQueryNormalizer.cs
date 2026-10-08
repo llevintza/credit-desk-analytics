@@ -165,8 +165,9 @@ public sealed class GridQueryNormalizer
         else return null;
         if (decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
             return d / 1.000000000000000000000000000000000m; // drops trailing zeros: 1000, 1000.0 and 1e3 share a cache key
-        // A real number decimal can't hold is a filter we can't apply; dropping it would widen the result.
-        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+        // A real number decimal can't hold is a filter we can't apply; dropping it would widen the result. "NaN" and
+        // "Infinity" also parse as double but aren't numbers the user typed: they're dropped like any non-number.
+        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && !double.IsNaN(v) && text!.Any(char.IsAsciiDigit))
             throw new GridRequestException($"Filter value on {col.Name} is outside the supported range.");
         return null;
     }

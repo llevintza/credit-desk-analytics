@@ -341,7 +341,7 @@ public sealed class GridQueryTests
         Assert.Equal(2000000.20m, Assert.IsType<decimal>(money.ValueTo));
         Assert.Equal(150.5, Assert.IsType<double>(q.Filters.Single(f => f.Column.Name == "spread_bp").Conditions[0].Value));
         // Not a number: dropped, as for any other unusable number filter.
-        foreach (var bad in new[] { "\"lots\"", "true" })
+        foreach (var bad in new[] { "\"lots\"", "true", "\"NaN\"", "\"Infinity\"", "\"-Infinity\"" })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals", Json(bad)) })).Filters);
         // A real number beyond decimal's range can't be applied: dropping it would widen the result, so it's a 400.
         foreach (var huge in new[] { "1e40", "\"-1e40\"", "1e400" })
