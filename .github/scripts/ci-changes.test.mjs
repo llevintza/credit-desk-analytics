@@ -377,3 +377,29 @@ test("every solution project maps to the api job (or every flag)", () => {
   }
   assert.deepEqual(areasFor("perf/payload-size.mjs"), ["perf"]);
 });
+
+// Any job that needs a job that can be skipped must say how it handles the skip (R173-07):
+// without `!cancelled()` it is skipped silently whenever a needed job is skipped.
+test("ci.yml: every job that needs a skippable job has an explicit !cancelled() if", () => {
+  const SKIPPABLE = new Set(["changes", ...Object.values(JOB_IDS)]);
+  const ids = [...CI.slice(CI.indexOf("\njobs:")).matchAll(/^  ([a-z][\w-]*):$/gm)].map((m) => m[1]);
+  assert.ok(ids.length >= 11, ids.join(","));
+  let dependents = 0;
+  for (const id of ids) {
+    const block = jobBlock(id);
+    const m = /^    needs: (?:\[([^\]]*)\]|(\S+))$/m.exec(block);
+    if (!m) continue;
+    const needs = (m[1] ?? m[2]).split(",").map((s) => s.trim()).filter(Boolean);
+    const skippable = needs.filter((n) => SKIPPABLE.has(n));
+    if (!skippable.length) continue;
+    dependents++;
+    assert.ok(block.includes("!cancelled()"), `${id} needs [${skippable}] but has no !cancelled() if`);
+    for (const n of skippable.filter((x) => x !== "changes")) {
+      assert.ok(
+        block.includes(`contains(fromJSON('["success", "skipped"]'), needs.${n}.result)`),
+        `${id} must accept success or skipped (and nothing else) from ${n}`,
+      );
+    }
+  }
+  assert.ok(dependents >= 7, `checked ${dependents} dependent jobs`);
+});
