@@ -65,6 +65,7 @@ public sealed class FundTests(PostgresApiFactory api)
     [InlineData("range=MTD")]
     [InlineData("range=CUSTOM")]
     [InlineData("range=CUSTOM&from=2025-01-01")]
+    [InlineData("range=CUSTOM&to=2025-01-01")]
     [InlineData("range=CUSTOM&from=2025-06-01&to=2025-01-01")]
     public async Task Bad_ranges_are_400(string query)
     {
@@ -84,24 +85,43 @@ public sealed class FundTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task A_fund_in_the_catalogue_but_without_performance_rows_is_404()
+    public async Task A_fund_without_performance_history_is_404_without_an_etag_and_without_a_second_query()
     {
-        await using (var conn = new NpgsqlConnection(api.ConnectionString))
+        // A throwaway fund + portfolio of its own (never touches the seeded rows other tests read).
+        async Task Exec(string sql)
         {
+            await using var conn = new NpgsqlConnection(api.ConnectionString);
             await conn.OpenAsync(Ct);
-            // Temporarily hide fund 3's history (one statement each way, inside this test).
-            await using var hide = new NpgsqlCommand("CREATE TEMP TABLE keep AS SELECT * FROM core.fund_performance WHERE fund_id = 3; DELETE FROM core.fund_performance WHERE fund_id = 3;", conn);
-            await hide.ExecuteNonQueryAsync(Ct);
-            try
-            {
-                var (client, _, _) = await api.SignedInAsync();
-                Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/funds/3/performance?range=QTD&nocache=1", Ct)).StatusCode);
-            }
-            finally
-            {
-                await using var restore = new NpgsqlCommand("INSERT INTO core.fund_performance SELECT * FROM keep;", conn);
-                await restore.ExecuteNonQueryAsync(Ct);
-            }
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+        await Exec("INSERT INTO core.fund VALUES (99, 'Test Fund (no history)', DATE '2026-09-01', 'test'); INSERT INTO core.portfolio VALUES (99, 99, 'Test Portfolio', 'test', 'none');");
+        var (admin, xsrf, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
+        async Task ClearCache()
+        {
+            using var clear = new HttpRequestMessage(HttpMethod.Post, "/api/admin/cache/clear");
+            clear.Headers.Add("X-XSRF-TOKEN", xsrf);
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.SendAsync(clear, Ct)).StatusCode);
+        }
+        try
+        {
+            await ClearCache(); // the portfolio list is reference data: reload it
+            var first = await admin.GetAsync("/api/funds/99/performance?range=QTD", Ct);
+            Assert.Equal(HttpStatusCode.NotFound, first.StatusCode);
+            Assert.Null(first.Headers.ETag);
+
+            // "No data" is cached too (cache-first): the second request's only connection is its own audit write.
+            var me = (await admin.GetFromJsonAsync<Desk.Api.Auth.MeResponse>("/api/me", Ct))!.Email;
+            await api.WaitForAuditAsync(a => a.UserName == me && a.Endpoint == "GET /api/me");
+            var opened = api.ConnectionsOpened(api);
+            Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/funds/99/performance?range=YTD", Ct)).StatusCode);
+            await api.WaitForAuditAsync(a => a.UserName == me && a.Endpoint == "GET /api/funds/{fundId:int}/performance" && a.Status == 404, atLeast: 2);
+            Assert.Equal(opened + 1, api.ConnectionsOpened(api));
+        }
+        finally
+        {
+            await Exec("DELETE FROM core.portfolio WHERE portfolio_id = 99; DELETE FROM core.fund WHERE fund_id = 99;");
+            await ClearCache();
         }
     }
 

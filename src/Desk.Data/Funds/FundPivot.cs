@@ -19,11 +19,17 @@ public static class FundPivot
             [
                 new FundRow("Balance", "money0", [.. months.Select(m => (decimal?)m.Balance)]),
                 // IRR arrives as double precision; decimal keeps it exact on the wire (rounded only for display).
-                new FundRow("IRR", "pct2", [.. months.Select(m => double.IsFinite(m.IrrItd) ? (decimal?)m.IrrItd : null)]),
+                new FundRow("IRR", "pct2", [.. months.Select(m => ToDecimal(m.IrrItd))]),
             ]);
         Validate(result);
         return result;
     }
+
+    /// <summary>
+    /// double → decimal without throwing: NaN, infinities and values beyond decimal's range (~7.9e28, e.g. an IRR
+    /// annualised over a tiny first period) become null instead of failing the whole fund.
+    /// </summary>
+    internal static decimal? ToDecimal(double d) => double.IsFinite(d) && Math.Abs(d) < 7.9e28 ? (decimal)d : null;
 
     public static void Validate(FundPerformance p)
     {

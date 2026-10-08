@@ -90,6 +90,16 @@ public sealed class FundTests
         Assert.All(empty.Rows, r => Assert.Empty(r.Values));
     }
 
+    [Theory]
+    [InlineData(0.05, true)]
+    [InlineData(-1.5, true)]
+    [InlineData(1e30, false)]   // beyond decimal: null, not an OverflowException that fails the whole fund
+    [InlineData(-1e30, false)]
+    [InlineData(double.NaN, false)]
+    [InlineData(double.PositiveInfinity, false)]
+    public void Irr_converts_to_decimal_or_null(double value, bool converts) =>
+        Assert.Equal(converts, FundPivot.ToDecimal(value).HasValue);
+
     [Fact]
     public void A_row_that_does_not_line_up_with_the_months_is_an_invariant_violation()
     {

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Desk.Api.Audit;
 using Desk.Api.Positions;
 using Desk.Data.Funds;
 using Microsoft.Extensions.Caching.Memory;
@@ -23,6 +22,9 @@ public static class FundEndpoints
         return api;
     }
 
+    /// <summary>A cached span lookup: <c>null</c> Span means "this fund has no performance data".</summary>
+    private sealed record SpanEntry(FundSpan? Span);
+
     internal static async Task<IResult> PerformanceAsync(
         int fundId, string? range, DateOnly? from, DateOnly? to, HttpContext http,
         MetaCache metaCache, IPortfolioEntitlements entitlements, FundRepository funds, PositionsCache cache, CancellationToken ct)
@@ -32,7 +34,7 @@ public static class FundEndpoints
         var kind = PerformanceRange.Parse(rangeText);
         if (kind is null)
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unknown range", detail: "Use QTD, YTD, 1Y, ITD or CUSTOM.");
-        if (kind == RangeKind.Custom && (from is null || to is null || from > to))
+        if (kind == RangeKind.Custom && (from is not { } f || to is not { } t || f > t))
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid custom range", detail: "CUSTOM needs from <= to (yyyy-MM-dd).");
 
         // A fund is visible when the user is entitled to one of its portfolios; otherwise it doesn't exist (404).
@@ -41,45 +43,33 @@ public static class FundEndpoints
         if (!meta.Portfolios.Any(p => p.FundId == fundId && allowed.Contains(p.PortfolioId)))
             return NotFound(fundId);
 
+        // The fund's span (first/last month-end) changes only with a reseed: cached, including "no data", so
+        // neither a hit nor a 404 needs the database.
+        var dbStarted = Stopwatch.GetTimestamp();
+        var spanKey = $"fundspan:{meta.DataVersion}:{fundId}";
+        if (!cache.Cache.TryGetValue(spanKey, out SpanEntry? entry) || entry is null)
+        {
+            entry = new SpanEntry(await funds.SpanAsync(fundId, ct));
+            cache.Cache.Set(spanKey, entry, new MemoryCacheEntryOptions { Size = 128, AbsoluteExpiration = meta.BatchEndsAt });
+        }
+        if (entry.Span is not { } span)
+            return NotFound(fundId); // no ETag: there's nothing to revalidate
+
         var label = kind == RangeKind.Custom ? $"CUSTOM:{from:yyyy-MM-dd}:{to:yyyy-MM-dd}" : rangeText;
         var etag = $"W/\"fund:{fundId}:{meta.DataVersion}:{label}\"";
-        http.Response.Headers.ETag = etag;
-        http.Response.Headers.CacheControl = "private, no-cache";
-        var audit = http.Features.Get<AuditFeature>();
-        if (http.Request.Headers.IfNoneMatch.Contains(etag))
-        {
-            PositionsEndpoints.SetTiming(http, "HIT", 0, 0, started);
-            if (audit is not null) audit.Cache = "HIT";
-            return Results.StatusCode(StatusCodes.Status304NotModified);
-        }
+        if (CachedResponse.TryHit(http, cache, etag, "application/json", started) is { } hit)
+            return hit;
 
-        var key = $"fund:{etag}";
-        if (cache.Cache.TryGetValue(key, out byte[]? cached) && cached is not null)
-        {
-            PositionsEndpoints.SetTiming(http, "HIT", 0, 0, started);
-            if (audit is not null) audit.Cache = "HIT";
-            return Results.Bytes(cached, "application/json");
-        }
-
-        var dbStarted = Stopwatch.GetTimestamp();
-        if (await funds.SpanAsync(fundId, ct) is not { } span)
-            return NotFound(fundId);
         var (start, end) = PerformanceRange.Resolve(kind.Value, span.First, span.Last, from, to);
         // A range outside the fund's data (e.g. CUSTOM before inception) is empty arrays, not an error.
         var months = start <= end ? await funds.MonthsAsync(fundId, start, end, ct) : [];
         var dbMs = Stopwatch.GetElapsedTime(dbStarted).TotalMilliseconds;
 
         var serStarted = Stopwatch.GetTimestamp();
-        var result = FundPivot.Pivot(span, label.Split(':')[0], months.Count > 0 ? start : null, months.Count > 0 ? end : null, months);
+        var result = FundPivot.Pivot(span, kind == RangeKind.Custom ? "CUSTOM" : rangeText, months.Count > 0 ? start : null, months.Count > 0 ? end : null, months);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(result, DeskJsonContext.Default.FundPerformance);
-        cache.Cache.Set(key, bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = meta.BatchEndsAt });
-        PositionsEndpoints.SetTiming(http, "MISS", dbMs, Stopwatch.GetElapsedTime(serStarted).TotalMilliseconds, started);
-        if (audit is not null)
-        {
-            audit.Cache = "MISS";
-            audit.Rows = months.Count;
-        }
-        return Results.Bytes(bytes, "application/json");
+        return CachedResponse.Store(http, cache, etag, bytes, "application/json", meta.BatchEndsAt, dbMs,
+            Stopwatch.GetElapsedTime(serStarted).TotalMilliseconds, started, months.Count);
     }
 
     private static IResult NotFound(int fundId) =>
