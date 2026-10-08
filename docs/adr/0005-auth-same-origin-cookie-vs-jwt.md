@@ -82,7 +82,36 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 
 **Database touches (free tier)**
 - The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
-- Every `/api` request passes a chained limiter: the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+- Every `/api` request passes a chained limiter: the caller's token bucket, the caller's concurrency (amended in #127, below), then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+
+**Availability per user and for exports** (amended in #127)
+- **Per-user concurrency:** one request in flight per caller (`RATE_LIMIT_PER_USER_CONCURRENCY`, default 1), with a queue of 8 (`RATE_LIMIT_PER_USER_QUEUE`), then 429.
+  - It sits before the shared limiter. A request waiting for its caller's turn holds no database permit, so one busy user can't fill the shared 8.
+  - The queue is 8, not 1 or 2, because the SPA's first paint fans out about 5 requests at once (session, portfolios, presets, first blocks). Those queue behind each other rather than failing.
+- **Exports are capped separately**, not by the per-user limiter. Counted there, a running export would block its owner's grid for up to the export deadline.
+  - `ExportGate` allows one export per user and `EXPORT_GLOBAL_SLOTS` (default 2) in total, both without waiting. Either limit answers 429 with `Retry-After`.
+  - Exports can never take every database permit from interactive reads.
+- **Export deadline:** `EXPORT_TIMEOUT_SECONDS` (default 60) bounds the whole stream, including a slow reader's TCP backpressure. The command timeout doesn't bound reading a streamed result.
+  - Before any output, the export answers 503. Mid-stream, it aborts the connection, so a truncated download fails instead of ending like a complete CSV.
+  - On deadline or client cancel, the stream's connection is disposed and both export slots are released in `finally`.
+- **Cold meta load:** the four reference reads run one after another, so the request that loads the snapshot holds one connection under its one permit. In parallel, they held up to four connections under one permit.
+
+| Measurement (local, Release, seed 42 at scale 1.0, 2 rounds) | Before (`main` 7cbacc7) | After |
+|---|---|---|
+| Cold meta load, `db` p50 / p95 (200 loads per round) | 5.3 / 12.7 ms; 4.8 / 9.5 ms | 8.9 / 16.0 ms; 6.3 / 22.2 ms |
+| `GET /api/me` with a session, p50 / p95 (1,000 requests per round) | 1.60 / 3.34 ms; 1.61 / 2.79 ms | 1.53 / 2.01 ms; 1.49 / 2.79 ms |
+
+- The sequential cold load costs about 1.5–3.6 ms at p50. It happens at most once per revalidation (10 min) or after a cache clear, and buys one connection per permit.
+- The extra limiter on every request is within noise.
+
+```
+# local stack only (two local API processes on one local database; admin account created locally)
+BASE_URL=http://localhost:5183 DESK_EMAIL=… DESK_PASSWORD=… node perf/meta-cold-load.mjs 200
+cold meta loads: 200  db p50 5.30 ms  p95 12.70 ms  max 68.30 ms     # before, round 1
+BASE_URL=http://localhost:5184 DESK_EMAIL=… DESK_PASSWORD=… node perf/meta-cold-load.mjs 200
+cold meta loads: 200  db p50 8.90 ms  p95 16.00 ms  max 84.70 ms     # after, round 1
+BASE_URL=http://localhost:518x DESK_EMAIL=… DESK_PASSWORD=… node perf/auth-overhead.mjs 1000
+```
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
 - Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
 
