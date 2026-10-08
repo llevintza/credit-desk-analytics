@@ -368,7 +368,6 @@ public sealed class LimitsTests(PostgresApiFactory api)
         return login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
     }
 
-    /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
     // ---- #127: per-user concurrency, export cap and deadline, cold meta load ----
 
     [Fact]
@@ -567,6 +566,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(1, open.Max);
     }
 
+    /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
     private sealed class BlockingCommands : DbCommandInterceptor
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
