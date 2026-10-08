@@ -1,6 +1,6 @@
-# ADR-0022: Audit retention: 90-day default, purged after an audit write (not by a timer)
+# ADR-0022: Audit retention: 90-day default, purged after an audit write and on an idle timer
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-10-08 by #193 (an idle timer also runs the purge; see [Amendment](#amendment-2026-10-08-idle-timer-193))
 - **Date:** 2026-10-08
 - **Phase / PR:** follow-up to Phase 2 (#105), issue #114 (Helms ruling, 2026-10-07); must land before Phase 3 feature merges (#132)
 
@@ -322,12 +322,42 @@ README §1 targets about 60 internal users, and every authenticated `/api` reque
 - `AuditWriter` calls `AuditRetention.PurgeIfDueAsync` right after a successful insert. A purge is due on the first write after start, then once every 24 h. The due check and the claim are one compare-and-swap, so concurrent callers can't both purge. A row exactly `window` old is kept.
 - The purge deletes in time-range batches (c) of about 50,000 rows, oldest first, each its own statement and commit, for up to 5 s. If the budget runs out with rows left, it releases the slot, so the next audit write (within `AUDIT_FLUSH_SECONDS`) carries on. A backlog drains over a few writes, not a few days.
 - A failed purge is logged and never affects the batch of audit entries, which is already saved. The attempt counts, so a failing purge is retried the next interval, not on every write. Batches that committed before the failure stay deleted.
+- Amended by #193: `AuditPurgeTimer` also runs the same purge on a timer, so rows age out while nobody writes. See the amendment below.
 
 ## Consequences
 
-- No timer, no extra connection, and nothing wakes Neon. The purge piggybacks on an insert that was already happening.
-- Rows past the window can stay while the app is idle, until the next login. That's acceptable for a usage log. If audit retention ever becomes a compliance requirement with a hard deadline, revisit with option 3.
+- The write-triggered purge needs no extra connection and never wakes Neon: it piggybacks on an insert that was already happening. (Superseded in part by the amendment: the idle timer can wake Neon, at most once a day.)
+- Rows past the window could stay while the app was idle, until the next login. The amendment closes that gap while the instance is up; while Render has the instance asleep, it remains. If audit retention ever becomes a compliance requirement with a hard deadline, revisit with option 3.
 - Shortening the window takes effect at the next purge after a restart. `DELETE` frees space for reuse inside the table, but the table doesn't shrink on disk without `VACUUM FULL`, which we don't run.
 - Each statement handles at most about 50,000 rows (more only on ties at the edge), so its cost doesn't grow with the backlog. A single batch would have to slow down by more than 30× over the cold numbers above to reach the 10 s timeout. If one ever does, the batches before it stay committed and the rest is retried the next day. If purges keep timing out, lower `AuditRetention.DefaultBatchSize` (a code change), or delete in slices by hand through `db-ops`.
 - If `pg_database_size` approaches 350 MB, lower `AUDIT_RETENTION_DAYS` first (the purge drains the resulting backlog in batches, above). Then take the 90-day default back to Helms in #114: at the busy rate, 90 days doesn't fit the §10 budget.
 - Revisit with partitioning (option 4) if the audit volume grows past a few million rows.
+
+## Amendment 2026-10-08: idle timer (#193)
+
+Helms accepted the write-triggered purge for #114 AC3 and asked for a follow-up (#193): drain rows past the window even when there are no writes, in bounded batches.
+
+**Decision.** Keep the write-triggered purge and add option 1 on top of it, shaped so that it adds as little database traffic as possible:
+
+- `AuditPurgeTimer`, a `BackgroundService`, runs a `PeriodicTimer` on the injected `TimeProvider` every **`AUDIT_PURGE_CHECK_MINUTES`** minutes (default **60**; whole minutes from 1 to 1,440; any other value, such as 0, a negative number or a typo, keeps 60 and logs a warning, the `LimitsOptions` rule that junk never switches a safeguard off or into a tight loop).
+- Each tick calls the same `AuditRetention.PurgeIfDueAsync` gate the writer uses. The check is a clock read and a compare-and-swap: it opens no connection unless a purge is due. A purge is still due at most once per 24 h, whichever caller gets there first, so in active periods the writer purges while the database is awake and the timer's checks are no-ops.
+- The first tick comes one check interval after start, never at start. A Render cold start, which any anonymous request can trigger, never wakes Neon by itself.
+- The timer's purge uses the same time-range batches (c): each batch is one `DELETE … WHERE at <= edge` of about 50,000 rows, its own statement and commit, so no lock is held across batches and there is no one huge transaction (the failure mode in CR finding R172-02). It has no 5 s budget: it holds up no write, so it drains a cold backlog in one tick, batch by batch. Cancellation (shutdown) stops it between or inside batches; committed batches stay deleted.
+- A failed timer purge is logged as a warning and releases the 24 h slot, so the next check retries it, not the next day. No exception escapes `ExecuteAsync`, so a failing purge never stops the host (an unhandled `BackgroundService` exception stops the host by default since .NET 6). A failed write-triggered purge still keeps the slot (the decision above), so it can't be retried on every flush.
+- The timer runs only `SELECT` and `DELETE`. It never runs DDL, migrations or seeding.
+
+**Cost.** The SQL is the same as measured above; only the trigger is new. The extra database traffic is one purge a day at most, and only on a day without a write-triggered purge, in a process that stays up for at least one check interval. Neon suspends a compute after 5 minutes idle, so the timer adds at most about 5 compute minutes a day (about 2.5 hours a month). This isn't a keep-awake pinger: it never runs more than once a day, and a check that isn't due doesn't touch the database.
+
+**Tests** (`tests/Desk.Api.Tests`, `FakeTimeProvider`, Testcontainers Postgres 17 on an isolated database):
+
+- `AuditRetentionTests.A_cold_backlog_drains_in_batches_on_a_timer_tick_with_no_writes`: 7 rows past the window, batch size 2; one tick, no audit write, deletes all 7 in 4 `DELETE` statements (2 + 2 + 2 + 1), counted by a command interceptor, and keeps the recent row.
+- `AuditRetentionTests.While_nobody_writes_the_timer_purges_once_a_day_and_checks_without_the_database`: after a purge, 23 hourly checks run no `DELETE` and leave an aged row in place; the 24th purges it with one statement.
+- `AuditPurgeTimerTests.The_check_interval_defaults_to_60_minutes_and_ignores_junk`: null, empty, 0, negative, text and 1,441 keep 60 (with a warning for each set value); 1, 15 and 1,440 are used.
+- `AuditPurgeTimerTests.A_failed_purge_is_logged_and_retried_at_the_next_tick`: nothing runs at start; with the database down, the first tick logs a warning and the next tick retries; the service stops cleanly.
+- `AuditPurgeTimerTests.A_cancelled_check_is_quiet`: a cancelled check logs nothing.
+
+**Consequences.**
+
+- On the Render free tier the instance sleeps after about 15 minutes without traffic, so the timer only fires in a process that stays up for a full check interval. While Render has the instance asleep, nothing runs and nothing is added to the table either; the first login after it wakes triggers the write purge, as before.
+- `AUDIT_PURGE_CHECK_MINUTES` sets how often the timer checks, not how often it purges (still 24 h). A check that lands a moment before the 24 h mark finds the purge not due, so a timer purge can be up to one check interval late.
+

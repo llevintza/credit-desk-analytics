@@ -521,7 +521,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
-- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted at most once every 24 h, in batches of about 50,000 (each its own statement and commit): right after an audit insert when one is due (the first insert after each start, then every 24 h), and, so idle periods drain too, by a timer that checks every `AUDIT_PURGE_CHECK_MINUTES` minutes (default **60**; whole minutes, 1 to 1,440; any other value keeps 60 and logs a warning). A check only reads the clock; the timer touches the database only when a purge is due, never at start, so a cold start doesn't wake Neon. A failed timer purge is logged and retried at the next check (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
@@ -980,7 +980,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |
