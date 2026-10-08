@@ -86,9 +86,21 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
 - Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
 
-**Behind Render's TLS proxy**
-- `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` (render.yaml) trusts one hop of `X-Forwarded-For/Proto`.
-- The app therefore sees https (HSTS, Secure cookies, antiforgery) and the real client IP (per-IP login limit).
+**Behind Cloudflare and Render's TLS proxy** (corrected in #116)
+- A request travels client → Cloudflare edge → Render's balancer (10.0.0.0/8) → app.
+- `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` (render.yaml) makes the app trust `X-Forwarded-Proto`, so it sees https (HSTS, Secure cookies, antiforgery).
+- **Correction:** the original text said this also gave the real client IP. It didn't. Trusting one hop of `X-Forwarded-For` yields the address that connected to Render, which is a **Cloudflare edge** shared by many clients. With the setting off, it yields Render's balancer. Either way, one client could exhaust the 5/min login window for everyone behind that address (R105-M1).
+- The client IP now comes from `ClientAddress` (`src/Desk.Api/Limits/ClientAddress.cs`), and the host no longer rewrites the remote address from `X-Forwarded-For`:
+  - Headers are believed only if the socket peer is Render's network. Otherwise the peer is the client.
+  - The rightmost `X-Forwarded-For` entry is the hop Render saw. If it is in Cloudflare's published ranges, the client is `CF-Connecting-IP`. Cloudflare always writes that header and overwrites any value a client sends.
+  - **Without `CF-Connecting-IP`, the key is the edge.** `True-Client-IP` and the entries left of the edge in `X-Forwarded-For` are not used: unless the zone enables them, a client can write them and Cloudflare passes them through. Believing them would let a caller rotate its key, or pin a victim's (R160-01). Keying on the edge fails closed: it brings back the shared window, but the caller can't choose its key.
+  - If that hop is not Cloudflare, it is the client, and any `CF-*` header or `X-Forwarded-For` prefix it sent is ignored.
+- **Rejected: `ForwardedHeadersOptions` with `ForwardLimit = 2` and `KnownNetworks` set to Render plus Cloudflare.**
+  - It gives the same answer when Cloudflare appends the client to `X-Forwarded-For`.
+  - It can't use `CF-Connecting-IP`, which is Cloudflare's own statement of the client.
+  - It hides the socket peer from the rest of the app.
+  - The explicit resolver is a pure function, unit-tested chain by chain.
+- The Cloudflare ranges are a constant, checked against cloudflare.com/ips on 2026-10-08. If Cloudflare adds a range that isn't in the list, requests through it can't be spoofed, but they fall back to keying on the edge, which is the #116 shared window, until the list is updated. A scheduled check keeps the list current (#161).
 
 **Swagger UI and the CSP (#94)**
 - `/openapi/v1.json` and `/swagger` are admin-only.
@@ -104,5 +116,5 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - No token ever reaches JavaScript, and there is no refresh-token code to get wrong.
 - The cost is a CSRF defence on every state-changing endpoint. New endpoints get it automatically from the `/api` group filter.
 - Disabling an account takes effect within 5 minutes (the stamp interval), not instantly. This is accepted for an invite-only demo.
-- The per-IP login limit depends on the forwarded-headers setting. Without it, every client shares the proxy's IP. The setting lives in render.yaml.
+- The per-IP login limit and the anonymous token bucket key on the client IP that `ClientAddress` resolves. Off the proxy (`ASPNETCORE_FORWARDEDHEADERS_ENABLED` unset, as in local, compose and CI), that is the socket peer. On Render, it is Cloudflare's view of the client, believed only through the Render → Cloudflare hops.
 - Revisit if the API ever serves a second origin or a non-browser client (then bearer tokens for that client), or for SSO (README §16).
