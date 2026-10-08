@@ -38,6 +38,8 @@ public static class AuthSetup
             .AddEntityFrameworkStores<AppDbContext>()
             .AddClaimsPrincipalFactory<DeskClaimsFactory>()
             .AddSignInManager<DeskSignInManager>();
+        // Scoped like the hasher it verifies through, so a test's counting hasher sees the decoy checks too.
+        services.AddScoped<TimingGuard>();
 
         services.AddAuthentication(IdentityConstants.ApplicationScheme)
             .AddCookie(IdentityConstants.ApplicationScheme, ConfigureCookie)

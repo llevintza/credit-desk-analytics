@@ -84,7 +84,7 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 - The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
 - Every `/api` request passes a chained limiter: the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
-- Failed logins for unknown, locked, disabled or expired accounts still run one PBKDF2 verification, so response time doesn't reveal which emails exist.
+- Every failed login runs exactly one PBKDF2 verification, so response time doesn't reveal which emails exist or what state an account is in (corrected in #118, R105-F2): an unknown email, a wrong, empty or missing password, a locked, disabled or expired account, an account with no stored password, and the attempt that triggers lockout (which used to hash twice). `DeskSignInManager.CheckPasswordSignInAsync` checks the account once, then verifies either the stored hash or `TimingGuard`'s decoy, never both. The decoy is a v3 hash with the configured iteration count, verified through the app's own `IPasswordHasher`, so it costs the same as a real check. `LoginTimingTests` counts the verifications per path.
 
 **Behind Cloudflare and Render's TLS proxy** (corrected in #116)
 - A request travels client → Cloudflare edge → Render's balancer (10.0.0.0/8) → app.
