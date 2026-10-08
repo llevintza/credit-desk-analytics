@@ -197,8 +197,9 @@ describe('Positions page', () => {
     await ready();
     const applied = grid.applyColumnState.mock.calls[0][0];
     expect(applied.state.slice(0, 3)).toEqual([
-      { colId: 'deal_name', hide: false, sort: null, pinned: 'left' }, // Risk lists Deal: unsorted
-      ...['class', 'cusip'].map((colId) => ({ colId, hide: false, pinned: 'left' })),
+      { colId: 'deal_name', hide: false, sort: null, pinned: 'left' }, // Risk lists deal_name, unsorted
+      { colId: 'class', hide: false, pinned: 'left' },
+      { colId: 'cusip', hide: false, pinned: 'left' },
     ]);
     expect(applied.defaultState).toEqual({ hide: true, sort: null }); // the previous sort never leaks into the next view
     expect(query.view.columns).toEqual(['deal_name', 'dv01']);

@@ -42,9 +42,12 @@ describe('presets', () => {
       api.applyColumnState(presetColumnState({ columnState: [{ colId: 'cs01', hide: false, sort: 'asc' }] }));
       expect(api.getColumnState().filter((c) => c.sort).map((c) => [c.colId, c.sort])).toEqual([['cs01', 'asc']]);
 
-      // ...including its sort, sort order and width on an identity column, which stays pinned.
+      // ...including a sort and width on an identity column, which stays pinned.
       api.applyColumnState(presetColumnState({
-        columnState: [{ colId: 'deal_name', hide: false, sort: 'asc', sortIndex: 0, width: 222 }, { colId: 'dv01', hide: false, sort: 'desc', sortIndex: 1 }],
+        columnState: [
+          { colId: 'deal_name', hide: false, sort: 'asc', sortIndex: 0, width: 222 },
+          { colId: 'dv01', hide: false, sort: 'desc', sortIndex: 1 },
+        ],
       }));
       const saved = api.getColumnState();
       expect(saved.filter((c) => c.sort).map((c) => [c.colId, c.sort, c.sortIndex])).toEqual([['deal_name', 'asc', 0], ['dv01', 'desc', 1]]);
