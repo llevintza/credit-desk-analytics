@@ -25,17 +25,35 @@ public sealed class ApiCollection : ICollectionFixture<PostgresApiFactory>
 /// <summary>
 /// The API in Production mode on a migrated Testcontainers Postgres 17 (README §11), with a fake clock.
 /// Shared by every API integration test class; each test uses its own accounts, so they don't interfere.
+/// The shared clock never moves (#226): xUnit orders tests by UniqueID, which reshuffles whenever tests are added
+/// or removed, so a shared clock that tests advance makes results and coverage depend on test order.
+/// <see cref="FakeTimeProvider"/> cannot go back in time, so it can't be reset between tests either. Tests that
+/// advance time get their own host and clock from <see cref="WithOwnClock"/>.
 /// Limits are raised here so unrelated tests never trip them; the limit tests build their own host with
 /// the real numbers via <see cref="WithSettings"/>.
 /// </summary>
 public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    public const string Password = "Correct-horse-battery-9";
+    /// <summary>
+    /// The test accounts' password: generated per run (the app's own generator, so it meets the Identity policy),
+    /// never a literal in the repository (#118 N3).
+    /// </summary>
+    public static readonly string Password = PasswordGenerator.Generate();
 
     private readonly PostgreSqlContainer _pg =
         new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
 
-    public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+    /// <summary>The instant the shared clock reads for the whole run, and where every <see cref="WithOwnClock"/> clock starts.</summary>
+    public static readonly DateTimeOffset Start = new(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+
+    private readonly TimeProvider _time = new FrozenClock(new FakeTimeProvider(Start));
+
+    /// <summary>
+    /// The shared host's clock, read-only on purpose: advance time on a <see cref="WithOwnClock"/> host instead.
+    /// It's a <see cref="FrozenClock"/>, so casting it (or the host's <see cref="TimeProvider"/>) to
+    /// <see cref="FakeTimeProvider"/> throws inside the test that tries (#262).
+    /// </summary>
+    public TimeProvider Time => _time;
 
     public string ConnectionString => _pg.GetConnectionString();
 
@@ -54,10 +72,39 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         if (code != 0) throw new InvalidOperationException($"seed failed ({code}): {output}");
     }
 
-    public override async ValueTask DisposeAsync()
+    public override ValueTask DisposeAsync() => TeardownAsync(_time, () => base.DisposeAsync(), _pg.DisposeAsync);
+
+    /// <summary>
+    /// Order-independent guard: whichever test moved the shared clock, the collection fails here (#226). The clock
+    /// is read before anything is torn down, and every disposal still runs, so a teardown error can neither skip
+    /// the check nor hide it: each failure is reported on its own (#262).
+    /// </summary>
+    internal static async ValueTask TeardownAsync(TimeProvider clock, params Func<ValueTask>[] disposals)
     {
-        await base.DisposeAsync();
-        await _pg.DisposeAsync();
+        var now = clock.GetUtcNow();
+        var errors = new List<Exception>();
+        if (now != Start)
+            errors.Add(new InvalidOperationException($"A test moved the shared api-postgres clock to {now:O}; advance time on api.WithOwnClock() instead (#226)."));
+        foreach (var dispose in disposals)
+        {
+            try { await dispose(); }
+            catch (Exception e) { errors.Add(e); }
+        }
+        if (errors.Count > 0) throw new AggregateException(errors);
+    }
+
+    /// <summary>
+    /// Hides the shared <see cref="FakeTimeProvider"/> behind a plain <see cref="TimeProvider"/>, so no public path
+    /// hands out the fake and nobody can cast their way to <c>Advance</c> (#262). Every virtual member forwards.
+    /// </summary>
+    private sealed class FrozenClock(TimeProvider inner) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(callback, state, dueTime, period);
     }
 
     public AppDbContext NewContext() => new(new DbContextOptionsBuilder<AppDbContext>()
@@ -78,8 +125,26 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         builder.ConfigureTestServices(s =>
         {
             s.RemoveAll<TimeProvider>();
-            s.AddSingleton<TimeProvider>(Time);
+            s.AddSingleton<TimeProvider>(_time);
+            // The fake clock never advances by itself: without this every failed login would wait on it forever.
+            // The floor's own tests put the production value back (LoginTimingTests).
+            s.AddSingleton(new LoginFloorOptions(TimeSpan.Zero, TimeSpan.Zero));
         });
+    }
+
+    /// <summary>
+    /// A separate host on the same database with its own fake clock, starting at <see cref="Start"/>. Tests that
+    /// advance time use this, so the shared clock stays put whatever order the tests run in.
+    /// </summary>
+    public (WebApplicationFactory<Program> Host, FakeTimeProvider Clock) WithOwnClock()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var host = WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(clock);
+        }));
+        return (host, clock);
     }
 
     /// <summary>A separate host (own limiters, own counters) on the same database and clock.</summary>
@@ -95,8 +160,9 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         // https: the session cookie is Secure (__Host- prefix), so the cookie container only sends it over https.
         factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
 
-    public async Task<DeskUser> CreateUserAsync(string role = Roles.Viewer, DateTimeOffset? expiresAt = null, string password = Password)
+    public async Task<DeskUser> CreateUserAsync(string role = Roles.Viewer, DateTimeOffset? expiresAt = null, string? password = null)
     {
+        password ??= Password;
         await using var scope = Services.CreateAsyncScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
         var email = $"{role}-{Guid.NewGuid():N}@example.com";
@@ -107,11 +173,11 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         return user;
     }
 
-    public static Task<HttpResponseMessage> PostLoginAsync(HttpClient client, string email, string password = Password) =>
-        client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password), TestContext.Current.CancellationToken);
+    public static Task<HttpResponseMessage> PostLoginAsync(HttpClient client, string email, string? password = null) =>
+        client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password ?? Password), TestContext.Current.CancellationToken);
 
     /// <summary>Logs in and returns the XSRF token the SPA would echo in <c>X-XSRF-TOKEN</c>.</summary>
-    public static async Task<string> LoginAsync(HttpClient client, string email, string password = Password)
+    public static async Task<string> LoginAsync(HttpClient client, string email, string? password = null)
     {
         var res = await PostLoginAsync(client, email, password);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);

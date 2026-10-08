@@ -12,6 +12,11 @@ updates:
       # Lift when Angular and typescript-eslint support TS 7 and TS 7.1 ships the compiler API. See closed #101.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+  # perf/ measurement scripts (#130 N6): parse-bench.mjs depends on @msgpack/msgpack.
+  - package-ecosystem: npm
+    directory: /perf
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directories:
       - /
@@ -24,6 +29,7 @@ updates:
       - /deploy/ci-images/gitleaks
       - /deploy/ci-images/actionlint
       - /deploy/ci-images/shellcheck
+      - /deploy/ci-images/k6
     schedule:
       interval: weekly
     ignore:

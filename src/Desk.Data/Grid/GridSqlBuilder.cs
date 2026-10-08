@@ -23,7 +23,15 @@ public static class GridSqlBuilder
     /// a 2.43 s summary. The <c>OFFSET 0</c> keeps Postgres from flattening the LATERAL back into the expressions;
     /// with it the same summary takes 96 ms (ADR-0006).
     /// </summary>
-    internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightColumn + "::float8 AS weight_f8 OFFSET 0) w";
+    internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightExpression + " AS weight_f8 OFFSET 0) w";
+
+    /// <summary>
+    /// Weighted averages weigh by the size of a position, <c>ABS(market_value)</c> (#131, README §8 and §6 P1). A signed weight is
+    /// right only while every position is long: a short (or any negative value) would cancel longs in the denominator
+    /// and could flip its sign, giving a meaningless average instead of <c>null</c>. Zero weights still count for
+    /// nothing, and no weight at all gives <c>null</c>.
+    /// </summary>
+    internal const string WeightExpression = "abs(" + WeightColumn + ")::float8";
 
     /// <param name="includeSummary">
     /// False when the caller already holds this filter's totals (they don't depend on paging or sort): the batch is
@@ -76,7 +84,7 @@ public static class GridSqlBuilder
     }
 
     /// <summary>
-    /// SUM for additive measures; market-value-weighted average otherwise. Rows where the measure is NULL don't
+    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightExpression"/>). Rows where the measure is NULL don't
     /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
     internal static string Aggregate(ColumnDef c) => c.Aggregation switch
@@ -99,7 +107,7 @@ public static class GridSqlBuilder
             // Quick filter: every token must appear in one of the text columns (like AG Grid's client-side quick filter).
             var haystack = $"concat_ws(' ', {string.Join(", ", catalog.Where(c => c.Kind == ColumnKind.Text).Select(c => Quote(c.Name)))})";
             foreach (var token in q.QuickTokens)
-                clauses.Add($"{haystack} ILIKE {Add(p, $"%{EscapeLike(token)}%")}");
+                clauses.Add($"{haystack} ILIKE {Like(Add(p, $"%{EscapeLike(token)}%"))}");
         }
         return string.Join(" AND ", clauses);
     }
@@ -113,12 +121,12 @@ public static class GridSqlBuilder
             (_, FilterOp.NotBlank) => $"{name} IS NOT NULL",
             (FilterKind.Set, _) => SetCondition(col, c.Values!, p),
 
-            (FilterKind.Text, FilterOp.Contains) => $"{name} ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}%")}",
-            (FilterKind.Text, FilterOp.NotContains) => $"({name} IS NULL OR {name} NOT ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}%")})",
-            (FilterKind.Text, FilterOp.StartsWith) => $"{name} ILIKE {Add(p, $"{EscapeLike((string)c.Value!)}%")}",
-            (FilterKind.Text, FilterOp.EndsWith) => $"{name} ILIKE {Add(p, $"%{EscapeLike((string)c.Value!)}")}",
-            (FilterKind.Text, FilterOp.Equals) => $"{name} ILIKE {Add(p, EscapeLike((string)c.Value!))}",
-            (FilterKind.Text, _) => $"({name} IS NULL OR {name} NOT ILIKE {Add(p, EscapeLike((string)c.Value!))})",
+            (FilterKind.Text, FilterOp.Contains) => $"{name} ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}%"))}",
+            (FilterKind.Text, FilterOp.NotContains) => $"({name} IS NULL OR {name} NOT ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}%"))})",
+            (FilterKind.Text, FilterOp.StartsWith) => $"{name} ILIKE {Like(Add(p, $"{EscapeLike((string)c.Value!)}%"))}",
+            (FilterKind.Text, FilterOp.EndsWith) => $"{name} ILIKE {Like(Add(p, $"%{EscapeLike((string)c.Value!)}"))}",
+            (FilterKind.Text, FilterOp.Equals) => $"{name} ILIKE {Like(Add(p, EscapeLike((string)c.Value!)))}",
+            (FilterKind.Text, _) => $"({name} IS NULL OR {name} NOT ILIKE {Like(Add(p, EscapeLike((string)c.Value!)))})",
 
             // Number and date filters share comparison operators; AG Grid's inRange is exclusive at both ends.
             (_, FilterOp.Equals) => $"{name} = {Add(p, c.Value!)}",
@@ -156,9 +164,18 @@ public static class GridSqlBuilder
         return "@" + name;
     }
 
-    /// <summary>Catalog names are snake_case already; quoting keeps reserved words (e.g. <c>class</c>) safe.</summary>
-    internal static string Quote(string identifier) => $"\"{identifier}\"";
+    /// <summary>
+    /// Catalog names are snake_case already (the API's meta cache refuses any other on load); quoting keeps reserved words
+    /// (e.g. <c>class</c>) safe, and an embedded quote is doubled so no name can end the identifier early.
+    /// </summary>
+    internal static string Quote(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";
 
-    /// <summary>LIKE wildcards in user text match literally (Postgres' default LIKE escape is backslash).</summary>
+    /// <summary>
+    /// A LIKE pattern parameter with its escape character stated, not left to the server's default (#130 N1), so
+    /// <see cref="EscapeLike"/>'s backslashes always mean "literal".
+    /// </summary>
+    private static string Like(string parameter) => parameter + " ESCAPE '\\'";
+
+    /// <summary>LIKE wildcards in user text match literally (the escape character is backslash, see <see cref="Like"/>).</summary>
     internal static string EscapeLike(string s) => s.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 }

@@ -29,14 +29,14 @@
   --text: #1b2028;
   --muted: #5b6573;
   --accent: #1f62d6;
-  --up: #11804d;
+  --up: #0f7344;
   --down: #c62f27;
   --warn: #8a6100;
 }
 
 /* Colorblind-safe up/down (README §9.1): blue/orange instead of green/red. */
 :root[data-palette='colorblind'] { --up: #4c9aff; --down: #ff9d3c; }
-:root[data-theme='light'][data-palette='colorblind'] { --up: #1559c4; --down: #b25600; }
+:root[data-theme='light'][data-palette='colorblind'] { --up: #1559c4; --down: #a14e00; }
 
 html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(--text); font: 13px/1.4 var(--font-ui); }
 .num { font-variant-numeric: tabular-nums; }
@@ -49,4 +49,7 @@ button { cursor: pointer; background: var(--surface-3); }
 button:disabled { opacity: 0.6; cursor: default; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}

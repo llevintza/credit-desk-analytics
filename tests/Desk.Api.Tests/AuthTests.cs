@@ -6,7 +6,9 @@ using Desk.Data.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
@@ -74,6 +76,87 @@ public sealed class AuthTests(PostgresApiFactory api)
         Assert.True(res.Headers.Contains("Strict-Transport-Security"));
     }
 
+    [Fact]
+    public async Task Behind_the_proxy_the_antiforgery_cookie_is_host_prefixed_and_always_secure()
+    {
+        // Render: the proxy sends X-Forwarded-Proto: https. Cookies are carried by hand, as a browser would on https.
+        await using var host = api.WithSettings(("FORWARDEDHEADERS_ENABLED", "true"));
+        var client = host.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            { BaseAddress = new Uri("http://desk.example.test"), HandleCookies = false, AllowAutoRedirect = false });
+        var user = await api.CreateUserAsync();
+
+        using var login = Forwarded(HttpMethod.Post, "/api/auth/login");
+        login.Content = JsonContent.Create(new LoginRequest(user.Email, PostgresApiFactory.Password));
+        var res = await client.SendAsync(login, Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var af = SetCookie(res, AuthSetup.AntiforgeryCookieName);
+        Assert.Contains("secure", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("path=/", af, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("domain=", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(SetCookieOrNull(res, AuthSetup.PlainHttpAntiforgeryCookieName));
+
+        // The token validates against the __Host- cookie.
+        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: true)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Off_the_proxy_plain_http_keeps_the_plain_antiforgery_cookie_and_it_validates()
+    {
+        // Local compose and the CI e2e/budgets stacks: Production over plain http://localhost:8080, no proxy setting.
+        var client = api.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+            { BaseAddress = new Uri("http://localhost"), HandleCookies = false, AllowAutoRedirect = false });
+        var user = await api.CreateUserAsync();
+
+        var res = await PostgresApiFactory.PostLoginAsync(client, user.Email!);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var af = SetCookie(res, AuthSetup.PlainHttpAntiforgeryCookieName);
+        Assert.DoesNotContain("secure", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(SetCookieOrNull(res, AuthSetup.AntiforgeryCookieName));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: false)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("Production", "true", true)]   // Render
+    [InlineData("Production", null, false)]    // local compose, CI e2e and budgets
+    [InlineData("Production", "false", false)]
+    [InlineData("Development", "true", false)] // the dev proxy serves plain HTTP
+    [InlineData("Development", null, false)]
+    public void The_https_only_antiforgery_cookie_is_for_the_proxy_outside_development(string environment, string? forwarded, bool httpsOnly)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection([new("FORWARDEDHEADERS_ENABLED", forwarded)]).Build();
+        var env = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environment };
+        Assert.Equal(httpsOnly, AuthSetup.HttpsOnly(config, env));
+    }
+
+    private static HttpRequestMessage Forwarded(HttpMethod method, string path)
+    {
+        var req = new HttpRequestMessage(method, path);
+        req.Headers.Add("X-Forwarded-Proto", "https");
+        return req;
+    }
+
+    private static string? SetCookieOrNull(HttpResponseMessage res, string name) =>
+        res.Headers.GetValues("Set-Cookie").SingleOrDefault(c => c.StartsWith(name + "=", StringComparison.Ordinal));
+
+    private static string SetCookie(HttpResponseMessage res, string name) =>
+        SetCookieOrNull(res, name) ?? throw new Xunit.Sdk.XunitException($"No {name} cookie was set.");
+
+    /// <summary>Sends every cookie the login set, plus the XSRF token in the header, to the logout endpoint.</summary>
+    private static Task<HttpResponseMessage> LogoutAsync(HttpClient client, HttpResponseMessage login, bool forwardedHttps)
+    {
+        var req = forwardedHttps ? Forwarded(HttpMethod.Post, "/api/auth/logout") : new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+        req.Headers.Add("Cookie", string.Join("; ", login.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0])));
+        req.Headers.Add(AuthSetup.AntiforgeryHeaderName, PostgresApiFactory.XsrfToken(login));
+        return client.SendAsync(req, Ct);
+    }
+
     [Theory]
     [InlineData("wrong-password-123456")]
     [InlineData("")]
@@ -129,60 +212,73 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         var user = await api.CreateUserAsync();
         var client = api.NewClient();
+        var before = DateTimeOffset.UtcNow;
         for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
             Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!, "wrong-password-123456")).StatusCode);
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(client, user.Email!)).StatusCode);
+        var after = DateTimeOffset.UtcNow;
 
         await using var db = api.NewContext();
         var stored = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct);
         Assert.NotNull(stored.LockoutEnd);
-        // Identity stamps the lockout from its own clock; either way it lasts 15 minutes.
-        Assert.True(stored.LockoutEnd > DateTimeOffset.UtcNow.AddMinutes(14) || stored.LockoutEnd > api.Time.GetUtcNow().AddMinutes(14));
+        // Identity's UserManager stamps the lockout from the wall clock, not the injected TimeProvider (#226 follow-up),
+        // so bracket it: exactly 15 minutes from the moment of the fifth failure.
+        Assert.InRange(stored.LockoutEnd!.Value, before + IdentityPolicy.LockoutDuration, after + IdentityPolicy.LockoutDuration);
     }
 
     [Fact]
     public async Task Session_slides_for_8_hours_of_idle_time()
     {
-        var (client, _, _) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var client = await SignedInAsync(host);
 
-        api.Time.Advance(TimeSpan.FromHours(7));
+        clock.Advance(TimeSpan.FromHours(7));
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
 
-        api.Time.Advance(TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Session_ends_after_24_hours_even_when_active()
     {
-        var (client, _, _) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var client = await SignedInAsync(host);
         // Stay active every 4 h: sliding expiry alone would keep the session alive forever.
         for (var i = 0; i < 5; i++)
         {
-            api.Time.Advance(TimeSpan.FromHours(4));
+            clock.Advance(TimeSpan.FromHours(4));
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
         }
 
-        api.Time.Advance(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Session_ends_when_the_account_expires()
     {
-        var user = await api.CreateUserAsync(expiresAt: api.Time.GetUtcNow().AddHours(1));
-        var client = api.NewClient();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var user = await api.CreateUserAsync(expiresAt: clock.GetUtcNow().AddHours(1));
+        var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        api.Time.Advance(TimeSpan.FromMinutes(61));
+        clock.Advance(TimeSpan.FromMinutes(61));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Disabling_ends_a_live_session_at_the_next_stamp_check()
     {
-        var (client, _, user) = await api.SignedInAsync();
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
         await using (var scope = api.Services.CreateAsyncScope())
         {
             var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
@@ -192,7 +288,7 @@ public sealed class AuthTests(PostgresApiFactory api)
             await users.UpdateSecurityStampAsync(tracked);
         }
 
-        api.Time.Advance(AuthSetup.SecurityStampInterval + TimeSpan.FromSeconds(1));
+        clock.Advance(AuthSetup.SecurityStampInterval + TimeSpan.FromSeconds(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
@@ -203,6 +299,10 @@ public sealed class AuthTests(PostgresApiFactory api)
 
         var without = await client.PostAsync("/api/auth/logout", null, Ct);
         Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        // The SPA's XSRF refresh (#233) tells this 400 from the others by its type (#282); the title is its fallback.
+        var problem = (await without.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!;
+        Assert.Equal("urn:desk:problem:antiforgery", problem.Type);
+        Assert.Equal("Missing or invalid antiforgery token", problem.Title);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
 
         using var forged = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
@@ -276,5 +376,85 @@ public sealed class AuthTests(PostgresApiFactory api)
         Assert.Equal("GET /api/me", row.Endpoint);
         Assert.Equal(200, row.Status);
         Assert.True(row.Ms >= 0);
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_reads_the_fixed_start_instant()
+    {
+        // #226: no test may move the shared clock (PostgresApiFactory.DisposeAsync checks it again after every test ran).
+        Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_cannot_be_cast_to_the_fake()
+    {
+        // #262: neither the fixture's clock nor the host's TimeProvider is a FakeTimeProvider anyone could Advance.
+        Assert.Throws<InvalidCastException>(() => (FakeTimeProvider)api.Time);
+        Assert.Throws<InvalidCastException>(() => (FakeTimeProvider)api.Services.GetRequiredService<TimeProvider>());
+        Assert.Same(api.Time, api.Services.GetRequiredService<TimeProvider>());
+    }
+
+    [Fact]
+    public void Shared_fixture_clock_forwards_to_a_clock_that_never_moves()
+    {
+        var time = api.Time;
+        var reference = new FakeTimeProvider(PostgresApiFactory.Start);
+        Assert.Equal(reference.TimestampFrequency, time.TimestampFrequency);
+        Assert.Equal(reference.LocalTimeZone, time.LocalTimeZone);
+        var before = time.GetTimestamp();
+        var fired = false;
+        using (time.CreateTimer(_ => fired = true, null, TimeSpan.Zero, Timeout.InfiniteTimeSpan))
+            Assert.True(fired); // a fake timer due now fires on creation; it can't move the clock
+        Assert.Equal(before, time.GetTimestamp());
+        Assert.Equal(PostgresApiFactory.Start, time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task Fixture_teardown_reports_a_moved_clock_even_when_a_disposal_throws()
+    {
+        // #262: the clock is read before teardown and every disposal still runs, so neither failure hides the other.
+        var clock = new FakeTimeProvider(PostgresApiFactory.Start);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var ran = new List<string>();
+        var error = await Assert.ThrowsAsync<AggregateException>(async () => await PostgresApiFactory.TeardownAsync(clock,
+            () => { ran.Add("host"); throw new IOException("host teardown failed"); },
+            () => { ran.Add("db"); clock.Advance(TimeSpan.FromMinutes(1)); return ValueTask.CompletedTask; }));
+        Assert.Equal(["host", "db"], ran);
+        Assert.Collection(error.InnerExceptions,
+            e => Assert.Contains("moved the shared api-postgres clock to 2026-10-07T12:01:00", Assert.IsType<InvalidOperationException>(e).Message),
+            e => Assert.Equal("host teardown failed", Assert.IsType<IOException>(e).Message));
+    }
+
+    [Fact]
+    public async Task Fixture_teardown_passes_on_an_unmoved_clock_and_reports_teardown_errors_alone()
+    {
+        var clock = new FakeTimeProvider(PostgresApiFactory.Start);
+        var ran = 0;
+        await PostgresApiFactory.TeardownAsync(clock, () => { ran++; return ValueTask.CompletedTask; });
+        Assert.Equal(1, ran);
+        var error = await Assert.ThrowsAsync<AggregateException>(async () => await PostgresApiFactory.TeardownAsync(clock,
+            () => throw new IOException("db teardown failed")));
+        Assert.IsType<IOException>(Assert.Single(error.InnerExceptions));
+    }
+
+    [Fact]
+    public async Task Own_clock_hosts_leave_the_shared_clock_where_it_was()
+    {
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        Assert.Equal(PostgresApiFactory.Start, clock.GetUtcNow());
+        var client = await SignedInAsync(host);
+
+        clock.Advance(AuthSetup.AbsoluteExpiry + TimeSpan.FromMinutes(1));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
+    }
+
+    private async Task<HttpClient> SignedInAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)
+    {
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
+        return client;
     }
 }

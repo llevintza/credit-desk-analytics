@@ -35,7 +35,7 @@ Every merge to `main` should go live with the database schema and seed data in s
 ## Decision
 
 Option 2:
-- `deploy.yml` runs after a green CI on `main`, in the `production` environment, under the non-cancelling `production` concurrency group.
+- `deploy.yml` runs after a green CI on `main`, in the `production` environment, under the non-cancelling `production` concurrency group. Since #207 the group sits on the `preflight` and `release` jobs rather than the workflow, so a non-tip Deploy stops at the `gate` job without entering the queue, and CI on `main` runs in a per-SHA group so no push is dropped.
 - `db-ops.yml` provides guarded manual operations.
 - Render `autoDeploy: false`.
 - `start.sh` never migrates.

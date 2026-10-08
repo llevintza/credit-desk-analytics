@@ -29,6 +29,8 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
 
    Tech Coordinator merges and starts the next phase.
 
+   Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
+
    - Fix [blocking] comments on the same branch and push. Don't resolve a reviewer thread you haven't fixed.
    - **Tech Coordinator merges. Never merge a PR yourself, including your own.** A Claude `blocking=0` marker, self-resolved threads, or green checks without coverage are not the gate and do not authorize a merge or the next phase.
    - **After a merge, wait for Tech Coordinator to start the next phase.** Don't start it yourself.
@@ -73,7 +75,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 - **Angular:** OnPush + signals; `switchMap` for supersedable queries; `takeUntilDestroyed` for manual subscriptions; no mutation of bound data; `@for` tracks a stable id. Detail: `web/AGENTS.md`.
 - **AG Grid Community only.** Don't import or enable Enterprise modules.
 - **Respect the free tiers:** no keep-awake pingers; health probes never touch the DB; cache-first reads; rate limits stay on in every environment except unit tests.
-- **Never run DDL or seeding from the app at startup.** Never run `--force` seeding or the load benchmark against production or Neon. Run the grid benchmarks and k6 only against a local stack (compose or `dotnet run`), never against Render, Neon or production. Run e2e, `perf/payload-size.mjs` and k6 only against a local stack (`BASE_URL=http://localhost:8080`) with a throwaway account you created locally with Desk.UserAdmin; never against the Render URL or with a real account's login.
+- **Never run DDL or seeding from the app at startup.** Never run `--force` seeding or the load benchmark against production or Neon. Run the grid benchmarks and k6 only against a local stack (compose or `dotnet run`), never against Render, Neon or production. Run e2e, `perf/payload-size.mjs`, `perf/LastBlockCheck` and k6 only against a local stack (`BASE_URL=http://localhost:8080`) with a throwaway account you created locally with Desk.UserAdmin; never against the Render URL or with a real account's login.
 
 ## Commands (keep them current; area commands are in the area files)
 
@@ -88,6 +90,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 | Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
 | E2E (phase 4) | `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build`, migrate, seed `--scale 0.2`, create a viewer with Desk.UserAdmin, then `cd e2e && npm ci && npx playwright install chromium && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test` (CI `e2e` job; `PERF=1 … npx playwright test perf` for ADR-0009 numbers) (local compose/CI stack only; create the viewer with Desk.UserAdmin against the local or test database, never Render, Neon or production) |
 | Payload budget (phase 3) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs` (CI `budgets` job; exit 1 over the Risk budget) |
+| Last block + summary vs SQL (#43 AC4) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… DATABASE_URL=… dotnet run -c Release --project perf/LastBlockCheck` (CI `budgets` job; exit 1 on any mismatch) |
 | Grid benchmarks (ADR-0006/7/8) | `DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out`, then `(cd perf && npm ci) && node perf/parse-bench.mjs perf/out` |
 | API latency p95 (k6) | `docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=… -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js` (local stack only: raise RATE_LIMIT_PER_USER_PER_MIN / RATE_LIMIT_PER_USER_BURST in that local process's environment for the run; never on Render, in render.yaml or the Render dashboard) |
 
@@ -103,6 +106,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
   3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+- Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.
 - README §17 Status is updated. Nothing secret is in the diff.

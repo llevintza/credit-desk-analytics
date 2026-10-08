@@ -32,7 +32,7 @@ Re-rendering the whole tree on every async event (zone.js) is wasted work. It al
 | Testing timers | `vi.useFakeTimers()` works directly (the debounce test) | `fakeAsync` | `fakeAsync` |
 
 **Measured outcome of the chosen setup:**
-- The initial bundle is **91 KB Brotli**: `scripts/bundle-budget.mjs`, run as part of `npm run build`.
+- The initial bundle is **103 KB Brotli** at the quality the API serves (`CompressionLevel.Fastest` = q1; 91 KB at q4 before #203): `scripts/bundle-budget.mjs`, run as part of `npm run build`.
 - The positions page paints its first rows in **167 ms** warm (ADR-0009).
 - The 300 ms quick-filter debounce and the `switchMap` cancellation are unit-tested with plain Vitest fake timers (`positions-query.spec.ts`).
 
@@ -40,7 +40,7 @@ Re-rendering the whole tree on every async event (zone.js) is wasted work. It al
 
 - **Zoneless change detection, signals for state, OnPush on every component.**
   - Streams over time stay RxJS (`debounceTime`, `distinctUntilChanged`, `switchMap` in `PositionsQuery`; `retry` in `HealthService`).
-  - They are bridged with `toSignal`, and the services' own subscriptions use `takeUntilDestroyed`.
+  - They are bridged with `toSignal`, and every manual subscription (services and components) uses `takeUntilDestroyed`. The one unpiped `subscribe` is the inner one in `HealthService.state()`'s `new Observable` factory: it is not a manual subscription, its teardown unsubscribes it when the `toSignal` consumer goes away.
 - **AG Grid is driven through its API** (`setGridOption`, `applyColumnState`, `purgeInfiniteCache`) from `effect()`s, never by re-binding large inputs. Bound data is never mutated: new arrays and objects are set.
 
 ## Consequences

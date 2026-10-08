@@ -63,4 +63,8 @@ export interface FundPerformance {
 }
 
 /** What the status bar shows about the last data request (README §9.2). */
-export interface RequestInfo { ms: number; cache: 'HIT' | 'MISS' | null; bytes: number | null; serverMs: number | null; }
+export interface RequestInfo {
+  ms: number; cache: 'HIT' | 'MISS' | null; bytes: number | null; serverMs: number | null;
+  /** True when overlapping blocks make `bytes` approximate (the status bar shows "≈", #221); absent means exact. */
+  bytesApprox?: boolean;
+}

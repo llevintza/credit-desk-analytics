@@ -18,16 +18,17 @@ public interface IDataSourceRegistry
     ValueTask<NpgsqlConnection> OpenAsync(string source, CancellationToken ct);
 }
 
-public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounter counter) : IDataSourceRegistry, IAsyncDisposable
+public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounter counter) : IDataSourceRegistry, IAsyncDisposable, IDisposable
 {
     // Keyed by the normalized connection string, so two sources pointing at one database share a pool.
     private readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> _byConnectionString = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _sourceToConnectionString = new(StringComparer.Ordinal);
+    private readonly int _maxPoolSize = MaxPoolSizeFrom(config);
 
     public NpgsqlDataSource Get(string source)
     {
         // Resolved on first use, not at startup: the app boots (and /health answers) without a database.
-        var cs = _sourceToConnectionString.GetOrAdd(source, s => WithCommandTimeout(ConnectionStrings.Resolve(config, s)));
+        var cs = _sourceToConnectionString.GetOrAdd(source, s => Normalize(ConnectionStrings.Resolve(config, s), _maxPoolSize));
         return _byConnectionString.GetOrAdd(cs, c => new Lazy<NpgsqlDataSource>(() => NpgsqlDataSource.Create(c))).Value;
     }
 
@@ -38,9 +39,34 @@ public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounte
         return conn;
     }
 
-    /// <summary>README §7.2: no data query runs longer than 10 s.</summary>
-    internal static string WithCommandTimeout(string cs) =>
-        new NpgsqlConnectionStringBuilder(cs) { CommandTimeout = ServiceCollectionExtensions.CommandTimeoutSeconds }.ConnectionString;
+    /// <summary>Npgsql's own default is 100, more than a small Neon compute's <c>max_connections</c> allows (README §13.1).</summary>
+    public const int DefaultMaxPoolSize = 20;
+
+    /// <summary>
+    /// README §7.2: no data query runs longer than 10 s. README §13.1: every pool is capped explicitly
+    /// (<c>DB_MAX_POOL_SIZE</c>), so the app can't open more connections than the Neon compute accepts.
+    /// </summary>
+    internal static string Normalize(string cs, int maxPoolSize)
+    {
+        var parsed = new NpgsqlConnectionStringBuilder(cs);
+        parsed.Remove("Command Timeout");
+        parsed.Remove("Maximum Pool Size");
+        // Rebuild in a fixed key order: Remove + re-add reuses the freed slot, so the output order (part of the
+        // pool key) would otherwise depend on where the keys were, and one database could get two pools.
+        var canonical = new NpgsqlConnectionStringBuilder();
+        foreach (var key in parsed.Keys.Cast<string>().Order(StringComparer.OrdinalIgnoreCase))
+            canonical[key] = parsed[key];
+        canonical.CommandTimeout = ServiceCollectionExtensions.CommandTimeoutSeconds;
+        canonical.MaxPoolSize = maxPoolSize;
+        return canonical.ConnectionString;
+    }
+
+    /// <summary>Never above Npgsql's own default: the cap exists to lower it (README §13.1).</summary>
+    public const int MaxAllowedPoolSize = 100;
+
+    // A typo must not lift the cap: anything outside 1–100 falls back to the default (as LimitsOptions, plus a ceiling).
+    internal static int MaxPoolSizeFrom(IConfiguration config) =>
+        int.TryParse(config["DB_MAX_POOL_SIZE"], out var v) && v is > 0 and <= MaxAllowedPoolSize ? v : DefaultMaxPoolSize;
 
     internal int DistinctDataSources => _byConnectionString.Count;
 
@@ -48,5 +74,15 @@ public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounte
     {
         foreach (var lazy in _byConnectionString.Values.Where(l => l.IsValueCreated))
             await lazy.Value.DisposeAsync();
+    }
+
+    /// <summary>
+    /// For containers disposed synchronously (the CLI tools): EF's pooled factory resolves the registry when it is
+    /// built, so the registry can be owned by such a container even if no connection was ever opened.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var lazy in _byConnectionString.Values.Where(l => l.IsValueCreated))
+            lazy.Value.Dispose();
     }
 }

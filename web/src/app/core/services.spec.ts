@@ -137,6 +137,21 @@ describe('ScopeService', () => {
     http.expectOne('/api/meta/portfolios').flush([]);
   });
 
+  it('cancels an in-flight load on reset: a late response cannot restore the previous user\'s scope', () => {
+    const http = setup();
+    const scope = TestBed.inject(ScopeService);
+    scope.load();
+    const stale = [http.expectOne('/api/meta/as-of'), http.expectOne('/api/meta/portfolios')];
+    scope.reset(); // sign-out while the previous user's load is in flight
+    expect(stale.map((r) => r.cancelled)).toEqual([true, true]);
+    expect([scope.dates(), scope.portfolios(), scope.asOf()]).toEqual([[], [], null]);
+
+    scope.load(); // the next user's load goes out and lands
+    http.expectOne('/api/meta/as-of').flush({ latest: '2026-10-05', dates: ['2026-10-05'] });
+    http.expectOne('/api/meta/portfolios').flush([portfolios[2]]);
+    expect([scope.dates(), scope.portfolios()]).toEqual([['2026-10-05'], [portfolios[2]]]);
+  });
+
   it('toggles portfolios and whole funds', () => {
     setup();
     const scope = TestBed.inject(ScopeService);

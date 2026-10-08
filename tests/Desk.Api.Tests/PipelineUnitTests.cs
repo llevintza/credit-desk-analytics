@@ -112,7 +112,7 @@ public sealed class PipelineUnitTests
     public async Task The_audit_writer_stops_when_the_queue_completes()
     {
         var queue = new AuditQueue();
-        var writer = new AuditWriter(queue, new ServiceCollection().BuildServiceProvider(), new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), NullLogger<AuditWriter>.Instance);
+        var writer = new AuditWriter(queue, new ServiceCollection().BuildServiceProvider(), new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), AuditTests.Retention(), NullLogger<AuditWriter>.Instance);
         await writer.StartAsync(Ct);
         queue.Complete();
         await writer.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5), Ct);

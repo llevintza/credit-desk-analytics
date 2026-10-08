@@ -79,6 +79,7 @@
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
+            "isolate": true,
             "coverage": true,
             "coverageInclude": ["src/**/*.ts"],
             "coverageExclude": ["src/**/*.spec.ts"],

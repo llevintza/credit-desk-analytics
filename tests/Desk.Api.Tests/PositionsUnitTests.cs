@@ -5,6 +5,7 @@ using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
@@ -127,10 +128,32 @@ public sealed class PositionsUnitTests
     public void Positions_cache_size_defaults_to_64_mb(string? value, int expectedMb)
     {
         using var cache = new PositionsCache(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build());
+            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build(), TimeProvider.System);
         Assert.Equal(expectedMb * 1024L * 1024L, cache.SizeLimitBytes);
         cache.Cache.Set("k", new byte[] { 1 }, new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions { Size = 1 });
         cache.Clear();
+        Assert.False(cache.Cache.TryGetValue("k", out _));
+    }
+
+    /// <summary>
+    /// Entries expire at the batch end, an instant on the app's clock, so the cache must use that clock too. Run with
+    /// the fake clock both far behind and far ahead of the real one, so it fails on a wall-clock cache whatever the
+    /// date the suite runs on.
+    /// </summary>
+    [Theory]
+    [InlineData(2001)]
+    [InlineData(2201)]
+    public void Positions_cache_expires_on_the_injected_clock(int year)
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(year, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        using var cache = new PositionsCache(new ConfigurationBuilder().Build(), time);
+        var batchEnd = time.GetUtcNow().AddHours(1);
+        cache.Cache.Set("k", new byte[] { 1 }, new MemoryCacheEntryOptions { Size = 1, AbsoluteExpiration = batchEnd });
+
+        Assert.True(cache.Cache.TryGetValue("k", out _));
+        time.Advance(TimeSpan.FromMinutes(59));
+        Assert.True(cache.Cache.TryGetValue("k", out _));
+        time.Advance(TimeSpan.FromMinutes(1));
         Assert.False(cache.Cache.TryGetValue("k", out _));
     }
 
@@ -148,7 +171,7 @@ public sealed class PositionsUnitTests
     [Fact]
     public async Task Cached_responses_hit_store_and_answer_304_with_or_without_an_audit_feature()
     {
-        using var cache = new PositionsCache(new ConfigurationBuilder().Build());
+        using var cache = new PositionsCache(new ConfigurationBuilder().Build(), TimeProvider.System);
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
         Assert.Null(CachedResponse.TryHit(http, cache, "W/\"k\"", "application/json", 0));
         Assert.Equal("W/\"k\"", http.Response.Headers.ETag.ToString());
@@ -189,4 +212,19 @@ public sealed class PositionsUnitTests
         http.Request.Headers.Accept = "application/json, application/x-msgpack;q=0.9";
         Assert.True(PositionsEndpoints.WantsMsgPack(http.Request));
     }
+
+    [Fact]
+    public void Unavailable_tells_an_unseeded_database_from_an_invalid_catalog()
+    {
+        static string? Title(MetaSnapshot meta) =>
+            Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(PositionsEndpoints.Unavailable(meta, new GridRequest())).ProblemDetails.Title;
+        var catalog = ColumnCatalog.PositionSnapshot;
+        var now = DateTimeOffset.UnixEpoch;
+        // A usable catalog with no as-of dates yet, and an empty database: both are "not seeded".
+        Assert.Equal("No data loaded", Title(new MetaSnapshot(catalog, new GridQueryNormalizer(catalog), [], "v", [], now, now)));
+        Assert.Equal("No data loaded", Title(new MetaSnapshot([], null, [], "empty", [], now, now)));
+        // Catalog rows but no normalizer: the catalog was refused.
+        Assert.Equal("Column catalog invalid", Title(new MetaSnapshot(catalog, null, [], "v", [], now, now)));
+    }
 }
+

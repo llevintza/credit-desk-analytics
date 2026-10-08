@@ -62,7 +62,7 @@ public sealed class PositionsTests(PostgresApiFactory api)
         var summary = doc.GetProperty("summary");
         Assert.Equal(await ScalarAsync<decimal>($"SELECT sum(market_value) FROM core.position_snapshot WHERE {where}"), summary.GetProperty("market_value").GetDecimal());
         Assert.Equal(await ScalarAsync<decimal>($"SELECT sum(dv01) FROM core.position_snapshot WHERE {where}"), summary.GetProperty("dv01").GetDecimal());
-        var wavg = await ScalarAsync<double>($"SELECT sum(spread_bp * market_value::float8) / sum(market_value::float8) FROM core.position_snapshot WHERE {where}");
+        var wavg = await ScalarAsync<double>($"SELECT sum(spread_bp * abs(market_value)::float8) / nullif(sum(abs(market_value)::float8) FILTER (WHERE spread_bp IS NOT NULL), 0) FROM core.position_snapshot WHERE {where}");
         Assert.Equal(wavg, summary.GetProperty("spread_bp").GetDouble(), 6);
         Assert.False(summary.TryGetProperty("deal_name", out _)); // text columns have no aggregate
 
@@ -285,9 +285,42 @@ public sealed class PositionsTests(PostgresApiFactory api)
         var values = Enumerable.Range(0, GridQueryNormalizer.MaxSetValues + 1).Select(i => $"v{i}").ToArray();
         var res = await client.SendAsync(Query(xsrf, new { filterModel = new { cusip = new { filterType = "set", values } } }), Ct);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Equal("Filter too large", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+        Assert.Equal("Filter can't be applied", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
         var export = await client.SendAsync(Query(xsrf, new { filterModel = new { cusip = new { filterType = "set", values } } }, path: "/api/positions/export"), Ct);
         Assert.Equal(HttpStatusCode.BadRequest, export.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_overlong_search_or_a_partly_invalid_combined_filter_is_400_not_silently_widened()
+    {
+        // #130 N7: each of these used to be dropped, which returned every row instead of the filtered ones.
+        var (client, xsrf, _) = await api.SignedInAsync();
+        foreach (object filterModel in new object[]
+        {
+            new { deal_name = new { filterType = "text", type = "contains", filter = new string('x', GridQueryNormalizer.MaxTextLength + 1) } },
+            new { dv01 = new { filterType = "number", @operator = "OR", conditions = new object[] { new { type = "lessThan", filter = 1 }, new { type = "nope" } } } },
+        })
+        {
+            var res = await client.SendAsync(Query(xsrf, new { filterModel }), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+            Assert.Equal("Filter can't be applied", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+        }
+    }
+
+    [Fact]
+    public async Task Like_wildcards_in_a_search_match_literally_on_postgres()
+    {
+        // #130 N1: the explicit ESCAPE '\' runs on the server; a literal "%" or "_" in a search isn't a wildcard.
+        var (client, xsrf, _) = await api.SignedInAsync();
+        async Task<int> Count(string text) => (await ReadJson(await client.SendAsync(Query(xsrf, new
+        {
+            columns = new[] { "deal_name" },
+            filterModel = new { deal_name = new { filterType = "text", type = "contains", filter = text } },
+        }), Ct))).GetProperty("rowCount").GetInt32();
+        Assert.True(await Count("a") > 0);
+        Assert.Equal(0, await Count("%"));
+        Assert.Equal(0, await Count("_"));
+        Assert.Equal(0, await Count("\\%"));
     }
 
     [Fact]
@@ -356,6 +389,34 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.True(reloaded.ExpiresAt <= reloaded.BatchEndsAt);
         time.Advance(MetaCache.Revalidate);
         Assert.NotSame(reloaded, await cache.GetAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Meta_snapshot_expires_at_the_batch_when_it_comes_before_the_revalidate_window()
+    {
+        // Pinned clocks on both sides of the batch, so neither depends on where the shared clock or the wall clock is.
+        var batch = BatchClock.NextBatchAfter(new DateTimeOffset(2026, 10, 7, 0, 0, 0, TimeSpan.Zero));
+        var repo = api.Services.GetRequiredService<MetaRepository>();
+
+        var early = await new MetaCache(repo, new Microsoft.Extensions.Time.Testing.FakeTimeProvider(batch.AddHours(-1))).GetAsync(Ct);
+        Assert.Equal(batch.AddHours(-1) + MetaCache.Revalidate, early.ExpiresAt);
+        Assert.Equal(batch, early.BatchEndsAt);
+
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(batch.AddMinutes(-5));
+        var cache = new MetaCache(repo, time);
+        var late = await cache.GetAsync(Ct);
+        Assert.Equal(batch, late.ExpiresAt);
+
+        // Fresh up to the last tick before the batch, so a regression to <= or an early expiry fails here.
+        time.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        Assert.Same(late, await cache.GetAsync(Ct));
+
+        // The batch reloads it, five minutes before the revalidate window would have.
+        time.Advance(TimeSpan.FromTicks(1));
+        var next = await cache.GetAsync(Ct);
+        Assert.NotSame(late, next);
+        Assert.Equal(BatchClock.NextBatchAfter(batch), next.BatchEndsAt);
+        Assert.Equal(batch + MetaCache.Revalidate, next.ExpiresAt);
     }
 
     [Fact]

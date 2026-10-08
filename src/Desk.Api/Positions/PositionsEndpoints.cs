@@ -148,15 +148,18 @@ public static class PositionsEndpoints
         }
         catch (GridRequestException e)
         {
-            return new Resolved(null, Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Filter too large", detail: e.Message));
+            return new Resolved(null, Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Filter can't be applied", detail: e.Message));
         }
     }
 
-    private static IResult Unavailable(MetaSnapshot meta, GridRequest request) => meta.HasData
+    internal static IResult Unavailable(MetaSnapshot meta, GridRequest request) => meta.HasData
         ? Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unknown as-of date",
             detail: $"No positions for {request.AsOf:yyyy-MM-dd}. See GET /api/meta/as-of.")
-        : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "No data loaded",
-            detail: "The database has not been seeded yet.");
+        : meta.Catalog.Count > 0 && meta.Normalizer is null
+            ? Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Column catalog invalid",
+                detail: "The column catalog can't be used; see the server log.")
+            : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "No data loaded",
+                detail: "The database has not been seeded yet.");
 
     internal static bool WantsMsgPack(HttpRequest request) =>
         request.Headers.Accept.ToString().Contains(ColumnarSerializer.MsgPackContentType, StringComparison.OrdinalIgnoreCase);
