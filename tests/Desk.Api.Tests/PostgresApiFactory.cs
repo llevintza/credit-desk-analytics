@@ -25,6 +25,10 @@ public sealed class ApiCollection : ICollectionFixture<PostgresApiFactory>
 /// <summary>
 /// The API in Production mode on a migrated Testcontainers Postgres 17 (README §11), with a fake clock.
 /// Shared by every API integration test class; each test uses its own accounts, so they don't interfere.
+/// The shared clock never moves (#226): xUnit orders tests by UniqueID, which reshuffles whenever tests are added
+/// or removed, so a shared clock that tests advance makes results and coverage depend on test order.
+/// <see cref="FakeTimeProvider"/> cannot go back in time, so it can't be reset between tests either. Tests that
+/// advance time get their own host and clock from <see cref="WithOwnClock"/>.
 /// Limits are raised here so unrelated tests never trip them; the limit tests build their own host with
 /// the real numbers via <see cref="WithSettings"/>.
 /// </summary>
@@ -39,7 +43,13 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     private readonly PostgreSqlContainer _pg =
         new PostgreSqlBuilder("postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24").Build();
 
-    public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+    /// <summary>The instant the shared clock reads for the whole run, and where every <see cref="WithOwnClock"/> clock starts.</summary>
+    public static readonly DateTimeOffset Start = new(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+
+    private readonly FakeTimeProvider _time = new(Start);
+
+    /// <summary>The shared host's clock, read-only on purpose: advance time on a <see cref="WithOwnClock"/> host instead.</summary>
+    public TimeProvider Time => _time;
 
     public string ConnectionString => _pg.GetConnectionString();
 
@@ -62,6 +72,9 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     {
         await base.DisposeAsync();
         await _pg.DisposeAsync();
+        // Order-independent guard: whichever test moved the shared clock, the collection fails here.
+        if (_time.GetUtcNow() != Start)
+            throw new InvalidOperationException($"A test moved the shared api-postgres clock to {_time.GetUtcNow():O}; advance time on api.WithOwnClock() instead (#226).");
     }
 
     public AppDbContext NewContext() => new(new DbContextOptionsBuilder<AppDbContext>()
@@ -82,11 +95,26 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         builder.ConfigureTestServices(s =>
         {
             s.RemoveAll<TimeProvider>();
-            s.AddSingleton<TimeProvider>(Time);
+            s.AddSingleton<TimeProvider>(_time);
             // The fake clock never advances by itself: without this every failed login would wait on it forever.
             // The floor's own tests put the production value back (LoginTimingTests).
             s.AddSingleton(new LoginFloorOptions(TimeSpan.Zero, TimeSpan.Zero));
         });
+    }
+
+    /// <summary>
+    /// A separate host on the same database with its own fake clock, starting at <see cref="Start"/>. Tests that
+    /// advance time use this, so the shared clock stays put whatever order the tests run in.
+    /// </summary>
+    public (WebApplicationFactory<Program> Host, FakeTimeProvider Clock) WithOwnClock()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var host = WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(clock);
+        }));
+        return (host, clock);
     }
 
     /// <summary>A separate host (own limiters, own counters) on the same database and clock.</summary>
