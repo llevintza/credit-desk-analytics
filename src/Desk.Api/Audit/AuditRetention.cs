@@ -48,25 +48,31 @@ public sealed class AuditRetention
     /// <summary>
     /// When a purge is due (the first call after start, then once per <see cref="PurgeInterval"/>), deletes rows
     /// older than the window and returns how many; otherwise returns <c>null</c> without touching the database.
-    /// Deletes run in batches of <see cref="BatchSize"/> (oldest first, each its own statement and commit) until
-    /// one comes back short or <see cref="PurgeBudget"/> runs out. Out of budget, the slot is released, so the
-    /// next audit write carries on with the backlog. The slot is claimed before the first delete, so a failing
-    /// purge is retried next interval, not on every write; batches that committed before a failure stay deleted.
+    /// Deletes run in batches of about <see cref="BatchSize"/> rows, oldest first, each its own statement and
+    /// commit, until the backlog is gone or <see cref="PurgeBudget"/> runs out. Out of budget, the slot is
+    /// released, so the next audit write carries on with the backlog. The slot is claimed before the first delete,
+    /// so a failing purge is retried next interval, not on every write; batches that committed stay deleted.
+    /// A batch is a time range on <c>IX_audit_at</c>: the <c>at</c> of the BatchSize-th oldest row (an index scan),
+    /// then <c>DELETE … WHERE at &lt;= edge</c>. An <c>id IN (SELECT … LIMIT n)</c> delete would hash-join a scan of
+    /// the whole table for every batch (ADR-0022). Ties at the edge make a batch a few rows larger, never smaller.
     /// </summary>
     public async Task<int?> PurgeIfDueAsync(AppDbContext db, CancellationToken ct)
     {
         if (!TryClaim(out var now, out var previous)) return null;
         var cutoff = now - Window;
         var total = 0;
-        int deleted;
+        DateTimeOffset? edge;
         do
         {
-            deleted = await db.Audit.Where(a => a.At < cutoff).OrderBy(a => a.At).Take(BatchSize).ExecuteDeleteAsync(ct);
-            total += deleted;
+            edge = await db.Audit.Where(a => a.At < cutoff).OrderBy(a => a.At).Skip(BatchSize - 1)
+                .Select(a => (DateTimeOffset?)a.At).FirstOrDefaultAsync(ct);
+            total += edge is { } e
+                ? await db.Audit.Where(a => a.At <= e).ExecuteDeleteAsync(ct)
+                : await db.Audit.Where(a => a.At < cutoff).ExecuteDeleteAsync(ct); // the last, short batch
         }
-        while (deleted == BatchSize && _time.GetUtcNow() - now < PurgeBudget);
+        while (edge is not null && _time.GetUtcNow() - now < PurgeBudget);
 
-        if (deleted == BatchSize) // out of budget with rows left: let the next write continue
+        if (edge is not null) // out of budget, maybe with rows left: let the next write continue
             Interlocked.CompareExchange(ref _lastAttemptTicks, previous, now.UtcTicks);
         return total;
     }

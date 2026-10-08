@@ -88,6 +88,21 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Rows_tied_at_a_batch_edge_go_in_the_same_batch()
+    {
+        var cs = await IsolatedDatabaseAsync();
+        var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        var retention = new AuditRetention(new ConfigurationBuilder().Build(), new FakeTimeProvider(now), NullLogger<AuditRetention>.Instance) { BatchSize = 2 };
+        var tied = now - TimeSpan.FromDays(95);
+        var marker = await InsertAsync(cs, now - TimeSpan.FromDays(99), tied, tied, tied, now - TimeSpan.FromDays(89));
+
+        await using (var db = Context(cs))
+            Assert.Equal(4, await retention.PurgeIfDueAsync(db, Ct)); // the edge is the tied time: all three go
+
+        Assert.Equal([now - TimeSpan.FromDays(89)], await RemainingAsync(marker, cs));
+    }
+
+    [Fact]
     public async Task Out_of_budget_the_next_write_carries_on_with_the_backlog()
     {
         var cs = await IsolatedDatabaseAsync();
