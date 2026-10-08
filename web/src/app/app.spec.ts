@@ -22,7 +22,18 @@ describe('App', () => {
     await fixture.whenStable();
     expect(bar()).toContain('API ready');
     expect(bar()).toContain('build abcdef1');
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid=maintenance]')).toBeNull();
     http.verify();
+  });
+
+  it('shows the maintenance banner when /health says so', async () => {
+    const fixture = TestBed.createComponent(App);
+    const http = TestBed.inject(HttpTestingController);
+    await fixture.whenStable();
+    http.expectOne('/health').flush({ status: 'ok', version: 'abcdef1234', maintenance: true });
+    await fixture.whenStable();
+    const banner = (fixture.nativeElement as HTMLElement).querySelector('[data-testid=maintenance]');
+    expect(banner?.textContent).toContain('Down for maintenance');
   });
 
   it('shows "unreachable" when /health fails', async () => {

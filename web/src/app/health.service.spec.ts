@@ -24,8 +24,19 @@ describe('HealthService', () => {
     http.expectOne('/health').flush({ status: 'ok', version: 'deadbeefcafebabe' });
     expect(states).toEqual([
       { kind: 'waking' },
-      { kind: 'ready', version: 'deadbeefcafebabe' },
+      { kind: 'ready', version: 'deadbeefcafebabe', maintenance: false },
     ]);
+    sub.unsubscribe();
+  });
+
+  it('reports maintenance mode from /health', () => {
+    const svc = TestBed.inject(HealthService);
+    const http = TestBed.inject(HttpTestingController);
+    const states: ApiState[] = [];
+    const sub = svc.state().subscribe((s) => states.push(s));
+
+    http.expectOne('/health').flush({ status: 'ok', version: 'v', maintenance: true });
+    expect(states[states.length - 1]).toEqual({ kind: 'ready', version: 'v', maintenance: true });
     sub.unsubscribe();
   });
 

@@ -2,10 +2,10 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of, startWith } from 'rxjs';
 
-export interface Health { status: string; version: string; }
+export interface Health { status: string; version: string; maintenance?: boolean; }
 export type ApiState =
   | { kind: 'waking' }
-  | { kind: 'ready'; version: string }
+  | { kind: 'ready'; version: string; maintenance: boolean }
   | { kind: 'unreachable' };
 
 /** Reads the static /health probe (never touches the database). */
@@ -15,7 +15,7 @@ export class HealthService {
 
   state(): Observable<ApiState> {
     return this.http.get<Health>('/health').pipe(
-      map((h): ApiState => ({ kind: 'ready', version: h.version })),
+      map((h): ApiState => ({ kind: 'ready', version: h.version, maintenance: h.maintenance === true })),
       catchError(() => of<ApiState>({ kind: 'unreachable' })),
       startWith<ApiState>({ kind: 'waking' }),
     );
