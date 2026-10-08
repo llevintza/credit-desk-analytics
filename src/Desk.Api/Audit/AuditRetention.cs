@@ -7,6 +7,8 @@ namespace Desk.Api.Audit;
 /// Retention for <c>app.audit</c> (ADR-0022, #114): rows older than <c>AUDIT_RETENTION_DAYS</c> (default 90) are
 /// deleted at most once per <see cref="PurgeInterval"/>. <see cref="AuditWriter"/> runs the purge right after an
 /// insert, so it only ever runs while the database is already awake: it never wakes Neon on its own.
+/// Safe to call concurrently: the due check and the claim of the slot are one compare-and-swap, so two callers
+/// can't both purge in the same interval.
 /// </summary>
 public sealed class AuditRetention
 {
@@ -16,7 +18,7 @@ public sealed class AuditRetention
     public static readonly TimeSpan PurgeInterval = TimeSpan.FromHours(24);
 
     private readonly TimeProvider _time;
-    private DateTimeOffset _lastAttempt = DateTimeOffset.MinValue;
+    private long _lastAttemptTicks = DateTimeOffset.MinValue.UtcTicks;
 
     public AuditRetention(IConfiguration config, TimeProvider time, ILogger<AuditRetention> logger)
     {
@@ -37,18 +39,23 @@ public sealed class AuditRetention
     /// <summary>Rows with <c>at</c> older than now minus this window are purged.</summary>
     public TimeSpan Window { get; }
 
-    /// <summary>True on the first write after start, then once per <see cref="PurgeInterval"/>.</summary>
-    public bool IsDue => _time.GetUtcNow() - _lastAttempt >= PurgeInterval;
-
     /// <summary>
-    /// Deletes rows older than the window: one <c>DELETE … WHERE at &lt; @cutoff</c> on <c>IX_audit_at</c>.
-    /// The attempt is recorded first, so a failing purge is retried next interval, not on every write.
+    /// When a purge is due (the first call after start, then once per <see cref="PurgeInterval"/>), deletes rows
+    /// older than the window and returns how many; otherwise returns <c>null</c> without touching the database.
+    /// The slot is claimed before the delete, so a failing purge is retried next interval, not on every write.
     /// </summary>
-    public async Task<int> PurgeAsync(AppDbContext db, CancellationToken ct)
+    public async Task<int?> PurgeIfDueAsync(AppDbContext db, CancellationToken ct)
     {
-        var now = _time.GetUtcNow();
-        _lastAttempt = now;
+        if (!TryClaim(out var now)) return null;
         var cutoff = now - Window;
         return await db.Audit.Where(a => a.At < cutoff).ExecuteDeleteAsync(ct);
+    }
+
+    private bool TryClaim(out DateTimeOffset now)
+    {
+        now = _time.GetUtcNow();
+        var last = Interlocked.Read(ref _lastAttemptTicks);
+        return now.UtcTicks - last >= PurgeInterval.Ticks
+            && Interlocked.CompareExchange(ref _lastAttemptTicks, now.UtcTicks, last) == last;
     }
 }

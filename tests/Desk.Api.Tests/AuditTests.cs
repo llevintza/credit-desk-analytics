@@ -48,29 +48,48 @@ public sealed class AuditTests
         await using var sp = DeadDatabase();
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero));
         var retention = Retention(time: time);
-        Assert.True(retention.IsDue); // the first write after start purges
-
         await using var db = await sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync(TestContext.Current.CancellationToken);
-        await Assert.ThrowsAnyAsync<Exception>(() => retention.PurgeAsync(db, TestContext.Current.CancellationToken));
-        Assert.False(retention.IsDue);
+
+        // The first call after start purges (and fails here); the next calls don't touch the database.
+        await Assert.ThrowsAnyAsync<Exception>(() => retention.PurgeIfDueAsync(db, TestContext.Current.CancellationToken));
+        Assert.Null(await retention.PurgeIfDueAsync(db, TestContext.Current.CancellationToken));
 
         time.Advance(AuditRetention.PurgeInterval - TimeSpan.FromSeconds(1));
-        Assert.False(retention.IsDue);
+        Assert.Null(await retention.PurgeIfDueAsync(db, TestContext.Current.CancellationToken));
         time.Advance(TimeSpan.FromSeconds(1));
-        Assert.True(retention.IsDue);
+        await Assert.ThrowsAnyAsync<Exception>(() => retention.PurgeIfDueAsync(db, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Concurrent_callers_claim_one_purge_per_interval()
+    {
+        await using var sp = DeadDatabase();
+        var retention = Retention();
+        var contexts = sp.GetRequiredService<IDbContextFactory<AppDbContext>>();
+
+        var calls = Enumerable.Range(0, 16).Select(_ => Task.Run(async () =>
+        {
+            await using var db = await contexts.CreateDbContextAsync(TestContext.Current.CancellationToken);
+            try { return await retention.PurgeIfDueAsync(db, TestContext.Current.CancellationToken) is null ? "skipped" : "purged"; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return "purged"; } // reached the (dead) database
+        }, TestContext.Current.CancellationToken));
+
+        var outcomes = await Task.WhenAll(calls);
+        Assert.Single(outcomes, o => o == "purged");
     }
 
     [Fact]
     public async Task The_writer_logs_a_failed_or_cancelled_purge_instead_of_throwing()
     {
         await using var sp = DeadDatabase();
-        var retention = Retention();
-        var writer = new AuditWriter(new AuditQueue(), sp, Flush(0), retention, NullLogger<AuditWriter>.Instance);
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero));
+        var writer = new AuditWriter(new AuditQueue(), sp, Flush(0), Retention(time: time), NullLogger<AuditWriter>.Instance);
         await using var db = await sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync(TestContext.Current.CancellationToken);
 
         await writer.PurgeAsync(db, TestContext.Current.CancellationToken); // connection refused: logged
+        time.Advance(AuditRetention.PurgeInterval);
         await writer.PurgeAsync(db, new CancellationToken(canceled: true)); // shutting down: quiet
-        Assert.False(retention.IsDue);
+        await writer.PurgeAsync(db, TestContext.Current.CancellationToken); // not due: no-op
     }
 
     [Theory]

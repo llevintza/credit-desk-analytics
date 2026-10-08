@@ -45,7 +45,7 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
             now);
 
         await using (var db = api.NewContext())
-            Assert.True(await retention.PurgeAsync(db, Ct) >= 2);
+            Assert.True(await retention.PurgeIfDueAsync(db, Ct) >= 2);
 
         Assert.Equal([now - window, now - window + TimeSpan.FromSeconds(1), now], await RemainingAsync(marker));
     }

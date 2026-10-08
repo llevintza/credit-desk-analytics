@@ -9,7 +9,7 @@ namespace Desk.Api.Audit;
 /// The factory is resolved on the first write, not at startup: the app must boot without a database.
 /// Writes are coalesced: after the first entry arrives the writer waits <c>AUDIT_FLUSH_SECONDS</c> (default 30) or
 /// until a full batch, so an active session costs one insert per interval, not one per request.
-/// After an insert, the writer runs the <see cref="AuditRetention"/> purge when it is due (at most once a day).
+/// After an insert, the writer runs the <see cref="AuditRetention"/> purge when it is due (first write after start, then once every 24 h).
 /// </summary>
 public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, IConfiguration config, AuditRetention retention, ILogger<AuditWriter> logger) : BackgroundService
 {
@@ -56,8 +56,7 @@ public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, ICo
             await using var db = await contexts.CreateDbContextAsync(ct);
             db.Audit.AddRange(batch);
             await db.SaveChangesAsync(ct);
-            if (retention.IsDue)
-                await PurgeAsync(db, ct);
+            await PurgeAsync(db, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -77,8 +76,8 @@ public sealed class AuditWriter(AuditQueue queue, IServiceProvider services, ICo
     {
         try
         {
-            var deleted = await retention.PurgeAsync(db, ct);
-            logger.LogInformation("Purged {Count} audit entries older than {Days} days.", deleted, retention.Window.TotalDays);
+            if (await retention.PurgeIfDueAsync(db, ct) is { } deleted)
+                logger.LogInformation("Purged {Count} audit entries older than {Days} days.", deleted, retention.Window.TotalDays);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
