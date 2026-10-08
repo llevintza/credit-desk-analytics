@@ -82,7 +82,8 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 
 **Database touches (free tier)**
 - The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
-- Every `/api` request passes a chained limiter: the caller's token bucket, the caller's concurrency (amended in #127, below), then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+- Every `/api` request passes a chained limiter: the caller's concurrency (amended in #127, below), the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+  - Concurrency comes before the token bucket because a spent token is never given back. The middleware tries a synchronous acquire before it queues, so with the bucket first, a request that queues behind its own user would pay two tokens.
 
 **Availability per user and for exports** (amended in #127)
 - **Per-user concurrency:** one request in flight per caller (`RATE_LIMIT_PER_USER_CONCURRENCY`, default 1), with a queue of 8 (`RATE_LIMIT_PER_USER_QUEUE`), then 429.

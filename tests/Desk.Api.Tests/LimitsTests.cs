@@ -408,6 +408,33 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await queued).StatusCode);
     }
 
+    [Fact]
+    public async Task A_request_queued_behind_its_own_user_spends_one_token()
+    {
+        // No refill during the test: 4 tokens are all this user gets.
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "1");
+            b.UseSetting("RATE_LIMIT_PER_USER_BURST", "4");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, admin.Email!);
+
+        var running = client.GetAsync("/api/health/db", Ct);   // holds the user's one permit
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var second = client.GetAsync("/api/me", Ct);           // both queue behind it
+        var third = client.GetAsync("/api/me", Ct);
+        await Task.Delay(100, Ct);
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await second).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
+    }
+
     private static HttpRequestMessage Export(string xsrf, params string[] columns)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns }) };

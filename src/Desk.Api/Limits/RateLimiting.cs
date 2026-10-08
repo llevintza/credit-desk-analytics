@@ -24,10 +24,12 @@ public static class RateLimiting
             o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             o.OnRejected = OnRejectedAsync;
 
-            // Every /api request passes all three: the caller's token bucket, the caller's concurrency (one in flight,
-            // a small queue), then one shared concurrency limiter sized to the DB connection budget. Applying them to
-            // the whole group means no endpoint can forget to opt in. A request waiting for its caller's turn holds no
-            // database permit, so one busy user can't fill the shared ones.
+            // Every /api request passes all three, in this order: the caller's concurrency (one in flight, a small
+            // queue), the caller's token bucket, then one shared concurrency limiter sized to the DB connection budget.
+            // Applying them to the whole group means no endpoint can forget to opt in. A request waiting for its
+            // caller's turn holds no database permit, so one busy user can't fill the shared ones. Concurrency comes
+            // first because a token is never given back: the middleware tries a synchronous acquire before it queues,
+            // and a token spent on that failed attempt would charge a queued request twice.
             var perUser = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
@@ -59,7 +61,7 @@ public static class RateLimiting
                         QueueLimit = limits.GlobalQueue,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     }));
-            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUser, perUserConcurrency, database);
+            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database);
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
             {
