@@ -157,10 +157,10 @@ for (var j = 0; j < sumColumns.Length; j++)
     }
 }
 results.Add(($"last block Sum-column cells ({sumColumns.Length} columns)", $"{cells - cellMismatches:N0} equal",
-    $"{cells:N0} cells, {cellMismatches} differ, {missingColumns} columns missing",
+    $"{cells:N0} cells, {cellMismatches:N0} differ, {missingColumns} columns missing",
     cells > 0 && cellMismatches == 0 && missingColumns == 0));
 results.Add(($"aligned last block ids (rows {alignedStart + 1:N0}–{rowCount:N0})", $"{alignedIds.Length} ids, last {alignedIds.LastOrDefault()}",
-    $"{rowCount - alignedStart} ids, last {sqlIds.LastOrDefault()}",
+    $"{sqlIds.TakeLast(rowCount - alignedStart).Count()} ids, last {sqlIds.LastOrDefault()}",
     alignedIds.Length == rowCount - alignedStart && alignedIds.SequenceEqual(sqlIds.TakeLast(alignedIds.Length))));
 
 // Every SUM in the summary against an independent SUM.
