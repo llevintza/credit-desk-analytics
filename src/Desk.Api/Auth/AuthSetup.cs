@@ -43,7 +43,7 @@ public static class AuthSetup
     /// proxy setting, so they stay on the plain-HTTP antiforgery cookie.
     /// </summary>
     public static bool HttpsOnly(IConfiguration config, IHostEnvironment env) =>
-        !env.IsDevelopment() && ClientAddress.BehindProxy(config);
+        !env.IsDevelopment() && ClientAddress.From(config).BehindProxy;
 
     /// <param name="services">The app's services.</param>
     /// <param name="httpsOnly"><see cref="HttpsOnly"/>: issue the <c>__Host-</c>, always-Secure antiforgery cookie.</param>
