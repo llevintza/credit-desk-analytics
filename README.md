@@ -562,7 +562,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan`, #192), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
