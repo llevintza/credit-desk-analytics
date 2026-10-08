@@ -29,8 +29,9 @@ Constraints:
 
 And for the delete itself:
 
-- **(a) one `DELETE … WHERE at < @cutoff`** (EF `ExecuteDelete`, on `IX_audit_at`), or
-- **(b) batched deletes** (`LIMIT n` loops) to bound each statement under the 10 s timeout.
+- **(a) one `DELETE … WHERE at < @cutoff`** (EF `ExecuteDelete`, on `IX_audit_at`);
+- **(b) batches by row count**: EF's `OrderBy(at).Take(n).ExecuteDelete()`, which emits `DELETE … WHERE id IN (SELECT id … ORDER BY at LIMIT n)`;
+- **(c) batches by time range** (chosen): read the `at` of the n-th oldest row past the cutoff (`ORDER BY at OFFSET n-1 LIMIT 1`), then `DELETE … WHERE at <= edge`. Loop until the backlog is gone or a time budget runs out.
 
 ## Evaluation
 
@@ -44,65 +45,88 @@ And for the delete itself:
 
 The one gap in option 2 is real but harmless. While nobody uses the app, no rows are added, and rows past the window stay until the next login. That login writes an audit row, which triggers the purge within `AUDIT_FLUSH_SECONDS`. Storage can't grow while the app is idle, and nobody reads the table then either.
 
-**Delete cost and table size (measured).** `perf/audit-retention.sql` builds a copy of `app.audit` (same columns, PK and `IX_audit_at`). It fills the copy with 120 days at 10,000 rows a day, a busy demo: about 7 requests a minute around the clock. Then it times the exact purge statement with `EXPLAIN ANALYZE`. Postgres 17 (the pinned test image), Apple M5, two runs:
+**Delete cost and table size (measured).** `perf/audit-retention.sql` builds a copy of `app.audit` (same columns, PK and `IX_audit_at`). It fills the copy with 120 days at 10,000 rows a day, a busy demo: about 7 requests a minute around the clock. Then it times each statement with `EXPLAIN ANALYZE`. `perf/audit-retention.sh` runs it **warm** (one pass; every buffer a `shared hit`), then **cold**: before each step, it restarts Postgres and drops the Docker VM's page cache. The macOS host can still cache the VM's disk, so read the cold numbers as a lower bound. On a box with a real cold read (x86, local disk), Code Reviewer measured the one-statement backlog at **2,633 ms**. Neon's pageserver reads are slower again, and the purge runs right after a cold start. Postgres 17 (the pinned test image), Apple M5, three runs of the script:
 
-| Case | Rows deleted | Run 1 | Run 2 |
+| Case (ms) | Rows | Warm, runs 1 / 2 / 3 | Cold, runs 1 / 2 / 3 |
 |---|---|---|---|
-| Steady state: one daily purge (oldest day) | 10,000 | 2.1 ms | 3.8 ms |
-| Backlog: first purge, 30 days past a 90-day window | 300,000 | 87 ms | 161 ms |
-| Nothing to delete (the purge right after a purge) | 0 | 15 ms | 24 ms |
+| Daily purge (oldest day), one statement | 10,000 | 2.8 / 3.6 / 3.6 | 12 / 28 / 17 |
+| Backlog, **(a) one statement**, 30 days past a 90-day window | 300,000 | 189 / 120 / 228 | 348 / 1,328 / 575 (2,633 on x86, by Code Reviewer) |
+| Backlog, **(b) one `id IN (… LIMIT)` batch** | 50,000 | 275 / 244 / 286 | 409 / 927 / 495 |
+| Backlog, **(c) one time-range batch** (edge + delete) | 50,000 | 23 / 20 / 19 | 60 / 152 / 277 |
+| Nothing to delete, (c) (edge + delete) | 0 | 20 / 25 / 20 | n/a |
 
 | Table size | Rows | Total (heap + PK + `IX_audit_at`) |
 |---|---|---|
 | 120 days | 1,200,000 | 208 MB (181.6 bytes/row) |
-| 90 days, after the purge and `VACUUM` | 900,000 | 174 MB (space is reused, not returned) |
+| 90 days, after the purge and `VACUUM` | 900,000 | 174 MB (about 193 bytes/row; space is reused, not returned) |
 
-So the delete is an index range scan. Even a 30-day backlog is about two orders of magnitude under the 10 s timeout on a laptop, which leaves room for Neon's slower, cold storage. One statement (a) is enough, and batching (b) would add a loop for no measured benefit.
+What the numbers say:
 
-The size numbers matter for the window. At the busy-demo rate, 90 days costs about **160 MB of the 0.5 GB** Neon budget. At a realistic demo rate (1,000 rows a day) it is about 16 MB. If the real rate approaches the busy case, Leo can shorten the window with `AUDIT_RETENTION_DAYS` (an environment change, no code change).
+- **(a) is fine warm but has no bound.** Its cost grows with the backlog, cold it is seconds, and a statement that passes the 10 s timeout rolls back completely. Retried 24 h later at the same or larger size, it never makes progress. Shortening the window, the lever this ADR recommends for the size budget, is exactly what creates a large backlog: 90 → 30 days at the busy rate is 600,000 rows.
+- **(b) bounds the rows but not the work.** Postgres plans `id IN (SELECT … LIMIT 50000)` as a hash semi join over a **sequential scan of the whole table** (1.2M rows). Each 50,000-row batch costs about as much as (a) deleting 300,000 rows, and the cost grows with the table, not the batch.
+- **(c) bounds both.** The edge query is an index-only scan of n entries, and the delete is an index range scan of the same n rows: 10 to 40 times cheaper than (b) per batch. A 300,000-row backlog is six batches, each a fraction of a second even cold, and each commits on its own, so a failure keeps the progress made.
 
 **How to reproduce** (local throwaway container only, trust auth, nothing persisted; never Neon or production):
 
 ```
-docker run -d --name audit-retention-bench -e POSTGRES_HOST_AUTH_METHOD=trust -v "$PWD/perf":/perf:ro postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
-docker exec audit-retention-bench psql -U postgres -X -q -f /perf/audit-retention.sql            # -v rows_per_day=N to change the volume
-docker rm -f audit-retention-bench
+perf/audit-retention.sh            # or: perf/audit-retention.sh <rows_per_day>
 ```
 
+Run 3, trimmed to the plan lines:
+
 ```
+===== warm (rows_per_day=10000)
 --- size with 120 days
-  rows   | total  | bytes_per_row
----------+--------+---------------
  1200000 | 208 MB |         181.6
-
 --- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
- Delete on audit (actual time=2.013..2.013 rows=0 loops=1)
-   ->  Index Scan using "IX_audit_at" on audit (actual time=0.007..0.707 rows=10000 loops=1)
- Execution Time: 2.112 ms
-
---- backlog: first purge with a 90-day window (deletes 30 days)
- Delete on audit (actual time=87.019..87.019 rows=0 loops=1)
-   ->  Index Scan using "IX_audit_at" on audit (actual time=0.034..19.905 rows=300000 loops=1)
- Execution Time: 87.052 ms
-
---- nothing to delete (the purge right after a purge)
- Execution Time: 14.983 ms
-
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.023..1.427 rows=10000 loops=1)
+ Execution Time: 3.582 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.055..43.487 rows=300000 loops=1)
+ Execution Time: 228.213 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=0.011..5.775 rows=50000 loops=1)
+ Execution Time: 7.146 ms
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.010..3.798 rows=50000 loops=1)
+ Execution Time: 11.615 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+   ->  Hash Semi Join (actual time=256.752..273.197 rows=50000 loops=1)
+         ->  Seq Scan on audit a (actual time=0.057..84.590 rows=1200000 loops=1)
+ Execution Time: 285.930 ms
+--- the 90-day purge, then the purge right after it (nothing to delete: the edge query finds no row)
+ Execution Time: 19.078 ms
+ Execution Time: 1.281 ms
 --- size with 90 days (after the purge and a vacuum; space is reused, not returned to the OS)
-  rows  | total
---------+--------
  900000 | 174 MB
+===== cold (rows_per_day=10000)
+--- steady state: one daily purge (deletes the oldest day: 119 -> 120 days ago)
+ Execution Time: 17.015 ms
+--- backlog, one statement: 30 days past a 90-day window (300,000 rows)
+   ->  Index Scan using "IX_audit_at" on audit (actual time=0.399..421.993 rows=300000 loops=1)
+ Execution Time: 574.770 ms
+--- backlog, first 50,000-row batch: the edge (index scan), then a time-range delete (AuditRetention.PurgeIfDueAsync)
+   ->  Index Only Scan using "IX_audit_at" on audit a (actual time=0.571..209.498 rows=50000 loops=1)
+ Execution Time: 212.446 ms
+   ->  Index Scan using "IX_audit_at" on audit a (actual time=0.025..7.724 rows=50000 loops=1)
+ Execution Time: 64.913 ms
+--- for comparison, not used: the same batch as id IN (SELECT ... LIMIT), which EF emits for OrderBy.Take.ExecuteDelete
+         ->  Seq Scan on audit a (actual time=0.105..200.860 rows=1200000 loops=1)
+ Execution Time: 494.723 ms
 ```
+
+The size numbers matter for the window. At the busy-demo rate, 90 days costs about **160 MB of the 0.5 GB** Neon budget. At a realistic demo rate (1,000 rows a day) it is about 16 MB. If the real rate approaches the busy case, Leo can shorten the window with `AUDIT_RETENTION_DAYS` (an environment change, no code change).
 
 ## Decision
 
 - Keep audit rows for **`AUDIT_RETENTION_DAYS`** days. The default is **90**. Valid values are whole days from 1 to 36,500. Any other value logs a warning at start and keeps 90.
-- `AuditWriter` runs `AuditRetention.PurgeAsync` right after a successful insert, when it's due: on the first write after start, then at most once every 24 h. The purge is one `DELETE FROM app.audit WHERE at < now - window`. A row exactly `window` old is kept.
-- A failed purge is logged and never affects the batch, which is already saved. The attempt counts, so a failing purge is retried the next interval, not on every write.
+- `AuditWriter` calls `AuditRetention.PurgeIfDueAsync` right after a successful insert. A purge is due on the first write after start, then once every 24 h. The due check and the claim are one compare-and-swap, so concurrent callers can't both purge. A row exactly `window` old is kept.
+- The purge deletes in time-range batches (c) of about 50,000 rows, oldest first, each its own statement and commit, for up to 5 s. If the budget runs out with rows left, it releases the slot, so the next audit write (within `AUDIT_FLUSH_SECONDS`) carries on. A backlog drains over a few writes, not a few days.
+- A failed purge is logged and never affects the batch of audit entries, which is already saved. The attempt counts, so a failing purge is retried the next interval, not on every write. Batches that committed before the failure stay deleted.
 
 ## Consequences
 
 - No timer, no extra connection, and nothing wakes Neon. The purge piggybacks on an insert that was already happening.
 - Rows past the window can stay while the app is idle, until the next login. That's acceptable for a usage log. If audit retention ever becomes a compliance requirement with a hard deadline, revisit with option 3.
 - Shortening the window takes effect at the next purge after a restart. `DELETE` frees space for reuse inside the table, but the table doesn't shrink on disk without `VACUUM FULL`, which we don't run.
-- Revisit with partitioning (option 4) if the audit volume grows past a few million rows, or if a backlog purge approaches the 10 s command timeout.
+- Each statement handles at most about 50,000 rows (more only on ties at the edge), so its cost doesn't grow with the backlog. A single batch would have to slow down by more than 30× over the cold numbers above to reach the 10 s timeout. If one ever does, the batches before it stay committed and the rest is retried the next day. If purges keep timing out, lower the batch size or delete in slices by hand through `db-ops`.
+- Revisit with partitioning (option 4) if the audit volume grows past a few million rows.
