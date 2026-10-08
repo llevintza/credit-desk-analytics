@@ -73,5 +73,5 @@ export function miss(data) {
 
 export function hit(data) {
   const res = post(data, { columns: risk, sortModel: [{ colId: 'market_value', sort: 'desc' }] });
-  check(res, { 'X-Cache present': (r) => r.headers['X-Cache'] !== undefined });
+  check(res, { 'HIT': (r) => r.headers['X-Cache'] === 'HIT' }); // a request that misses fails checks: rate==1.0
 }
