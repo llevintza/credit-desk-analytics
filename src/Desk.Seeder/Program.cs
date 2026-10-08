@@ -7,7 +7,7 @@ using Microsoft.Extensions.Configuration;
 // (refused before TRUNCATE), 3 unexpected error (53100 disk full gets its own message), 130 cancelled.
 SeedOptions options;
 try { options = SeedOptions.Parse(args); }
-catch (Exception e) when (e is ArgumentException or FormatException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
+catch (Exception e) when (e is ArgumentException or FormatException or OverflowException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
 
 string connectionString;
 try { connectionString = ConnectionStrings.Resolve(new ConfigurationBuilder().AddEnvironmentVariables().Build(), ConnectionStrings.App); }
