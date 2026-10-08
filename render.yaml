@@ -17,7 +17,16 @@ services:
         sync: false
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
+      # Render terminates TLS: trust X-Forwarded-For/Proto from its proxy (one hop) so the app sees https and the
+      # real client IP (Secure cookies, antiforgery, HSTS, per-IP login limit). ADR-0005.
+      - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED
+        value: "true"
       - key: MAINTENANCE_MODE
         value: "false"
+      # README §7.2 limits; the code defaults match, listed here so they can be tuned in the dashboard.
+      - key: RATE_LIMIT_PER_USER_PER_MIN
+        value: "60"
+      - key: RATE_LIMIT_GLOBAL_CONCURRENCY
+        value: "8"
       - key: DEMO_ACCOUNTS_JSON
         sync: false
