@@ -22,6 +22,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Desk.Seeder.Tests" />
     <InternalsVisibleTo Include="Desk.Data.Tests" />
+    <InternalsVisibleTo Include="Desk.Api.Tests" />
   </ItemGroup>
 
 </Project>
