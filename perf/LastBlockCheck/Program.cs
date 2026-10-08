@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Desk.Data;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
@@ -97,15 +98,23 @@ await using (var cmd = db.CreateCommand("SELECT position_id FROM core.position_s
 results.Add(($"last block ids (rows {lastStart:N0}–{rowCount - 1:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
     $"{sqlIds.Count} ids, last {sqlIds.LastOrDefault()}", apiIds.SequenceEqual(sqlIds) && apiIds.Length == rowCount - lastStart));
 
-// Every SUM in the summary against an independent SUM. Column names come from the server's own catalog, quoted.
+// Every SUM in the summary against an independent SUM. Column names come from the compiled ColumnCatalog allowlist
+// (compile-time constants, never client input); the shape guard keeps them safe to quote.
 var summary = first.GetProperty("summary");
-foreach (var column in ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.Sum && columns.Contains(c.Name)))
+var sumColumns = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.Sum && columns.Contains(c.Name)).ToArray();
+foreach (var column in sumColumns)
 {
+    if (!Regex.IsMatch(column.Name, "^[a-z][a-z0-9_]*$")) throw new InvalidOperationException(column.Name);
     // A missing key or a JSON null is a FAIL row, not an exception.
     decimal? api = summary.TryGetProperty(column.Name, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
     var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof");
     results.Add(($"SUM({column.Name})", Show(api), Show(sql), api is not null && api == sql));
 }
+// The loop above must not pass by comparing nothing: the Sum columns the API served equal the ones compared.
+var expected = sumColumns.Select(c => c.Name).ToHashSet();
+var served = summary.EnumerateObject().Select(p => p.Name)
+    .Where(n => ColumnCatalog.PositionSnapshot.Any(c => c.Name == n && c.Aggregation == Aggregation.Sum)).ToHashSet();
+results.Add(("SUM columns compared", $"{served.Count}", $"{expected.Count}", expected.Count > 0 && expected.SetEquals(served)));
 
 Console.WriteLine($"### Last block and summary at {rowCount:N0} rows (as of {asOf:yyyy-MM-dd}, Risk preset, market value desc)");
 Console.WriteLine();
