@@ -241,9 +241,10 @@ The seeder **MUST** print the final size (`pg_database_size`) and **fail** above
 
 **Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
 
-**Measured (phase 1, scale 1.0, SEED=42):**
-- **1,563,791 rows** across 20 tables, loaded in **about 8–10 s** locally.
-- `DB_SIZE_MB=271`.
+**Measured (phase 1, scale 1.0, SEED=42, Postgres 17, linux-x64):**
+- **1,563,791 rows** across 20 tables.
+- First `--if-changed` on an empty migrated DB: `DB_SIZE_MB=270`, `ELAPSED_S=11.1` (generate+load 10.5 s).
+- Forced reseed: `DB_SIZE_MB=271`, `ELAPSED_S=11.5`; peak `pg_database_size` during the transaction **533.8 MB**.
 - The snapshot is **202 columns**.
 - The total book is about $6.9B market value across 20,001 positions.
 
