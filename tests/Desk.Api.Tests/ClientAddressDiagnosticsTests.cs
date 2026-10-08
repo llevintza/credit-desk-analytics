@@ -274,6 +274,7 @@ public sealed class ClientAddressDiagnosticsTests
     [InlineData("100.70.1.2", "100.70.1.2")]
     [InlineData("203.0.113.77", "203.0.113.0/24 (public)")]
     [InlineData("2001:db8:1234:5678::9", "2001:db8:1234::/48 (public)")]
+    [InlineData("2002:cb00:7107::1", "2002:cb00:7100::/40 (public)")]
     public void A_private_peer_is_logged_whole_and_a_public_one_cut_to_its_network(string? peer, string logged) =>
         Assert.Equal(logged, ClientAddressDiagnostics.Redact(peer is null ? null : IPAddress.Parse(peer)));
 

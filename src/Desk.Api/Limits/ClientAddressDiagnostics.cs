@@ -30,6 +30,8 @@ public sealed class ClientAddressDiagnostics(
 {
     internal static readonly TimeSpan FallbackInterval = TimeSpan.FromMinutes(10);
 
+    private static readonly IPNetwork SixToFour = IPNetwork.Parse("2002::/16");
+
     private readonly byte[] _hashKey = RandomNumberGenerator.GetBytes(32);
     private int _rejected;
     // One throttle per Source, so a steady fallback of one kind can't mask another (R175-05). Monotonic: elapsed
@@ -126,7 +128,7 @@ public sealed class ClientAddressDiagnostics(
         : ClientAddress.In(ClientAddress.Private, ip) ? "private"
         : "public";
 
-    /// <summary>A private peer is infrastructure and logged whole; a public one is cut to its /24 or /48.</summary>
+    /// <summary>A private peer is infrastructure and logged whole; a public one is cut to its /24 or /48 (/40 for 6to4).</summary>
     internal static string Redact(IPAddress? ip)
     {
         if (ip is null)
@@ -134,7 +136,9 @@ public sealed class ClientAddressDiagnostics(
         var address = ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
         if (ClientAddress.In(ClientAddress.Private, address))
             return address.ToString();
-        return $"{Network(address, address.AddressFamily == AddressFamily.InterNetwork ? 24 : 48)} (public)";
+        // 6to4 (2002::/16) embeds the IPv4 address in bits 16-48: cut to /40, the /24 of that address (R175-07).
+        var prefix = address.AddressFamily == AddressFamily.InterNetwork ? 24 : SixToFour.Contains(address) ? 40 : 48;
+        return $"{Network(address, prefix)} (public)";
     }
 
     private static IPNetwork Network(IPAddress address, int prefix)
