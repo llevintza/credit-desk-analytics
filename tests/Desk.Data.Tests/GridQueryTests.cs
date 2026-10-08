@@ -48,6 +48,17 @@ public sealed class GridQueryTests
     }
 
     [Fact]
+    public void Portfolio_scope_is_part_of_both_cache_keys()
+    {
+        // Positions blocks (CanonicalKey) and the shared totals (SummaryKey) are cached per key: two grants must never
+        // share an entry (#126, R168-01).
+        var one = Normalizer.Normalize(new GridRequest(), AsOf, [1]);
+        var two = Normalizer.Normalize(new GridRequest(), AsOf, [2]);
+        Assert.NotEqual(one.CanonicalKey, two.CanonicalKey);
+        Assert.NotEqual(one.SummaryKey, two.SummaryKey);
+    }
+
+    [Fact]
     public void Unknown_or_malicious_sort_ids_are_dropped_and_position_id_breaks_ties_in_the_first_keys_direction()
     {
         var q = Normalize(new GridRequest(SortModel:
