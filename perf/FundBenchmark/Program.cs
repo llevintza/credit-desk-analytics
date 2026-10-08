@@ -1,4 +1,4 @@
-// Usage (a seeded database; read-only):
+// Usage (a seeded database; read-only). Local compose stack only (never Render/Neon/production):
 //   DATABASE_URL=... dotnet run -c Release --project perf/FundBenchmark -- [iterations=500]
 // ADR-0011: three ways to turn core.fund_performance (long: one row per month-end) into the P2 shape
 // (months + one array per measure), for every fund's ITD range.
