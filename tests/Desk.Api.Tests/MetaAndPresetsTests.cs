@@ -91,6 +91,24 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Every_preset_response_carries_server_timing()
+    {
+        // #44 / #130 N9-timing: Server-Timing on every data endpoint, success or not.
+        var (client, xsrf, _) = await api.SignedInAsync();
+        foreach (var req in new[]
+        {
+            Send(HttpMethod.Get, "/api/presets/positions", null),
+            Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "Timed", state = new { columns = new[] { "dv01" } } }),
+            Send(HttpMethod.Delete, "/api/presets/positions?name=Timed", xsrf),
+            Send(HttpMethod.Get, "/api/presets/nope", null),
+        })
+        {
+            var res = await client.SendAsync(req, Ct);
+            Assert.Matches(@"^db;dur=\d+\.\d, ser;dur=0\.0, total;dur=\d+\.\d$", res.Headers.GetValues("Server-Timing").Single());
+        }
+    }
+
+    [Fact]
     public async Task Presets_are_per_user()
     {
         var (alice, xsrf, _) = await api.SignedInAsync();
@@ -243,6 +261,50 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var query = await SendWithCookie(client, cookie, HttpMethod.Post, "/api/positions/query", xsrf, new { });
         Assert.Equal(HttpStatusCode.ServiceUnavailable, query.StatusCode);
         Assert.Equal("No data loaded", (await query.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+    }
+
+    /// <summary>Captures log levels (the meta cache logs a count, never the names themselves).</summary>
+    private sealed class Levels : Microsoft.Extensions.Logging.ILogger<MetaCache>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
+    public async Task A_catalog_name_that_is_not_snake_case_keeps_the_grid_unavailable()
+    {
+        // #130 N2: catalog names become quoted SQL identifiers. A separate database, so the seeded catalog is untouched.
+        var other = new NpgsqlConnectionStringBuilder(api.ConnectionString) { Database = $"catalog_{Guid.NewGuid():N}" }.ConnectionString;
+        await using (var conn = new NpgsqlConnection(api.ConnectionString))
+        {
+            await conn.OpenAsync(Ct);
+            await using var cmd = new NpgsqlCommand($"CREATE DATABASE \"{new NpgsqlConnectionStringBuilder(other).Database}\"", conn);
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(other, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options;
+        await using (var db = new AppDbContext(options))
+        {
+            await db.Database.MigrateAsync(Ct);
+            db.ColumnCatalog.AddRange(
+                new ColumnCatalogEntry { Name = "position_id", Ordinal = 1, Group = "keys", Kind = "Key", Aggregation = "None", Header = "Position" },
+                new ColumnCatalogEntry { Name = "deal\" OR 1=1 --", Ordinal = 2, Group = "keys", Kind = "Text", Aggregation = "None", Header = "Deal" });
+            await db.SaveChangesAsync(Ct);
+        }
+        var repo = new MetaRepository(
+            new Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory<AppDbContext>(options),
+            new Desk.Data.Sources.DataSourceRegistry(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DATABASE_URL"] = other }).Build(), new Desk.Data.DbConnectionCounter()));
+        var log = new Levels();
+        var snapshot = await new MetaCache(repo, new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow), log).GetAsync(Ct);
+
+        Assert.Null(snapshot.Normalizer);
+        Assert.False(snapshot.HasData);
+        var (level, message) = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, level);
+        Assert.DoesNotContain("OR 1=1", message);
     }
 
     private static Task<HttpResponseMessage> SendWithCookie(HttpClient client, string cookie, HttpMethod method, string path, string? xsrf = null, object? body = null)
