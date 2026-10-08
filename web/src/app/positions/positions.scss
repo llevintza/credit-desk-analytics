@@ -1,0 +1,11 @@
+:host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.quick { width: 260px; }
+.spacer { flex: 1; }
+.grid { flex: 1; min-height: 0; }
+.error-tile { margin: 8px; padding: 8px 12px; border: 1px solid var(--down); color: var(--down); background: var(--surface-2); }
+.skeleton { flex: 1; margin: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); opacity: 0.6; }
+:host ::ng-deep .neg { color: var(--down); }
+:host ::ng-deep .summary-row { font-weight: 600; background: var(--surface-3); }
+:host ::ng-deep .num, :host ::ng-deep .ag-header-cell { font-variant-numeric: tabular-nums; }
