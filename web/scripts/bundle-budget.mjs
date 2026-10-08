@@ -3,7 +3,7 @@
 // this measures what the browser downloads: Brotli at the quality the API serves (BROTLI_QUALITY) of every script and
 // stylesheet the built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
 // Fails closed (#145): anything that would leave the budget unchecked exits 1 instead of passing.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix, resolve, sep } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 
@@ -18,12 +18,14 @@ const fail = (message) => {
   process.exit(1);
 };
 
-// index.html paths may not leave the dist dir (`../…`); only files the build emitted are measured.
+// index.html paths may not leave the dist dir (`../…`); only files the build emitted are measured, and a directory
+// (`import"./lib/"`) fails with a message rather than an EISDIR stack trace (#266 N5).
 const root = resolve(dir);
 const read = (file) => {
   const path = resolve(root, file);
   if (!path.startsWith(root + sep)) fail(`${file} resolves outside ${root}; refusing to read it.`);
   if (!existsSync(path)) fail(`${path} is referenced by the initial load but missing.`);
+  if (!statSync(path).isFile()) fail(`${path} is referenced by the initial load but is not a file.`);
   return readFileSync(path);
 };
 

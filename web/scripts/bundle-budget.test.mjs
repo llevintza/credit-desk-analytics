@@ -328,3 +328,10 @@ test('fails closed on an @import of a file that is not .css', () => {
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /@import "theme-A1\.php" in styles-A1\.css is not a \.css file/);
 });
+
+// #266 N5: a specifier that names a directory fails with a message, not an EISDIR stack trace.
+test('fails closed on an import of a directory', () => {
+  const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': 'import"./lib/";', 'lib/x.js': 'void 0;' });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /^FAIL: .*lib is referenced by the initial load but is not a file\.$/m);
+});
