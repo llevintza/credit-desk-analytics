@@ -333,7 +333,8 @@ Accept: application/json            (or application/x-msgpack, see ADR-0007)
 - **Whitelist:** column ids, sort ids and filter ids are resolved through the column catalog. Unknown ids are **dropped**, never concatenated into SQL. Every value is a parameter.
 - `position_id` is always included (the row id) and always appended to `ORDER BY` as a **deterministic tie-breaker** (otherwise offset paging duplicates or skips rows).
 - Block size is clamped to ≤ 500 rows, and displayed columns to ≤ 250.
-- **One round trip:** the page query and the totals query (`COUNT(*)` + per-column aggregates from the catalog: SUM, or market-value-weighted average) are sent together (`QueryMultipleAsync` or a single batch).
+- **One round trip:** the page query and the totals query (`COUNT(*)` + per-column aggregates from the catalog: SUM, or |market value|-weighted average) are sent together (`QueryMultipleAsync` or a single batch).
+- **Weighting rule:** weights are `ABS(market_value)`; see §8 (#131).
 - **Paging:** `OFFSET … FETCH` by default. ADR-0008 evaluates keyset paging, which the Infinite Row Model's random-access jumps make harder, and records the measured trade-off at deep offsets.
 - **Caching:** the key is (as-of, canonicalized query JSON, user's portfolio entitlements). Entries live until the next as-of date. Support `If-None-Match` → **304**.
 - The `CancellationToken` flows to Npgsql, so scrolling past a block cancels its query. The command timeout is 10 s.
@@ -554,7 +555,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages are weighted by market value, with a documented rule for zero or NULL weights (returns `null`, never `NaN`).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
