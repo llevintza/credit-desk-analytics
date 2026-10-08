@@ -25,8 +25,9 @@ public sealed class DeskSignInManager(
         user.IsActiveAt(time.GetUtcNow()) && await base.CanSignInAsync(user);
 
     /// <summary>
-    /// Identity's check with exactly one PBKDF2 verification on every path, so the response time doesn't reveal
-    /// whether an account exists or what state it is in (R105-F2).
+    /// Identity's check with exactly one PBKDF2 verification on every path (R105-F2): the same hashing work, whether
+    /// the account exists or what state it is in. The DB work still differs (a wrong password writes the failure
+    /// count), so <see cref="LoginFloor"/> pads every failed login to the same response time (#230).
     /// </summary>
     /// <remarks>
     /// The base method returns before hashing for a disabled, expired or locked account, and the attempt that
