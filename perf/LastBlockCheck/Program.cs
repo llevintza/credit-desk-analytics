@@ -69,6 +69,11 @@ var lastStart = Math.Max(0, rowCount - Block);
 var last = await QueryAsync(lastStart);
 // position_id is always the first column of a block.
 long[] apiIds = [.. last.GetProperty("data")[0].EnumerateArray().Select(v => v.GetInt64())];
+// The block AG Grid's infinite model really requests when scrolled to the end: [floor((rowCount-1)/Block)*Block, rowCount),
+// an OFFSET at the exact block boundary with endRow past rowCount (1 row at 20,001 rows).
+var alignedStart = (rowCount - 1) / Block * Block;
+var aligned = await QueryAsync(alignedStart);
+long[] alignedIds = [.. aligned.GetProperty("data")[0].EnumerateArray().Select(v => v.GetInt64())];
 
 await using var db = NpgsqlDataSource.Create(ConnectionStrings.Resolve(config, ConnectionStrings.Core));
 // DBNull (e.g. sum() over all-NULL values) comes back as null, so it shows as a FAIL row instead of a crash.
@@ -104,8 +109,11 @@ await using (var cmd = db.CreateCommand("SELECT position_id FROM core.position_s
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct)) sqlIds.Add(reader.GetInt64(0));
 }
-results.Add(($"last block ids (rows {lastStart:N0}–{rowCount - 1:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
+results.Add(($"last block ids (rows {lastStart + 1:N0}–{rowCount:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
     $"{sqlIds.Count} ids, last {sqlIds.LastOrDefault()}", apiIds.SequenceEqual(sqlIds) && apiIds.Length == rowCount - lastStart));
+results.Add(($"aligned last block ids (rows {alignedStart + 1:N0}–{rowCount:N0})", $"{alignedIds.Length} ids, last {alignedIds.LastOrDefault()}",
+    $"{rowCount - alignedStart} ids, last {sqlIds.LastOrDefault()}",
+    alignedIds.Length == rowCount - alignedStart && alignedIds.SequenceEqual(sqlIds.TakeLast(alignedIds.Length))));
 
 // Every SUM in the summary against an independent SUM. Column names come from the compiled ColumnCatalog allowlist
 // (compile-time constants, never client input); the shape guard keeps them safe to quote.
