@@ -38,6 +38,21 @@ The page query alone: 200 rows × the Risk columns, sort `market_value DESC`, wi
 | `(as_of_date, market_value DESC NULLS LAST, position_id)` | 203 | 0.6 ms, but ascending fell back to a seq scan (17.5 ms) |
 | `(as_of_date, market_value, position_id)` with the tie-breaker in the first key's direction and default NULL placement | — | **0.18 ms DESC (backward scan), 0.35 ms ASC** |
 
+**All four sort indexes** (#133, carrying #48 AC1). Seed 42, scale 1.0 (20,001 rows on 2026-10-06), Postgres 17, local. First block (200 rows) of the unfiltered Risk view across every portfolio, in the exact shape `GridSqlBuilder.Build` emits. Each plan is the second of two runs, so the cache is warm. "Before" drops the index in a transaction that is rolled back.
+
+| Index | Direction | Before: plan | Before: buffers / ms | After: plan | After: buffers / ms |
+|---|---|---|---:|---|---:|
+| `ix_snapshot_sort_market_value` | DESC | seq scan + top-N heapsort | 8,064 / 29.8 | Index Scan Backward | 204 / 0.16 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 18.7 | Index Scan | 199 / 0.14 |
+| `ix_snapshot_sort_spread_bp` | DESC | seq scan + top-N heapsort | 8,064 / 17.8 | Index Scan Backward | 205 / 0.15 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 20.8 | Index Scan | 204 / 0.21 |
+| `ix_snapshot_sort_dv01` | DESC | seq scan + top-N heapsort | 8,064 / 20.9 | Index Scan Backward | 205 / 0.17 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 18.6 | Index Scan | 200 / 0.15 |
+| `ix_snapshot_sort_deal_name` | DESC | seq scan + top-N heapsort | 8,064 / 18.0 | Index Scan Backward | 205 / 0.16 |
+| | ASC | seq scan + top-N heapsort | 8,064 / 22.9 | Index Scan | 204 / 0.19 |
+
+- The planner uses every index for the first block in both directions, so none is dropped (#133's rule: an index with no plan using it at production-shaped volume would be removed).
+- The full plan text is in the #133 PR body.
 - One btree serves both directions, at ~1.6 MB per index at scale 1.0.
 - Beyond about 10k rows the planner switches OFFSET to a parallel seq scan + sort, which is why the last block (14.8 ms) is cheaper than the middle (24.4 ms).
 - With all four indexes the database is 278 MB, under the 350 MB budget.
@@ -46,7 +61,8 @@ The page query alone: 200 rows × the Risk columns, sort `market_value DESC`, wi
 
 ```
 DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200
-docker exec <pg> psql -U desk -d creditdesk -c "EXPLAIN (ANALYZE, BUFFERS) SELECT … ORDER BY market_value DESC, position_id DESC OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY"
+# local stack only; every index, both directions, before and after:
+docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-sort-indexes.sql
 ```
 
 ## Decision
