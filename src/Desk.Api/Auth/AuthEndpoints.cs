@@ -57,6 +57,7 @@ public static class AuthEndpoints
         IAntiforgery antiforgery,
         AuditQueue audit,
         TimingGuard guard,
+        AppDbContext db,
         TimeProvider time,
         CancellationToken ct)
     {
@@ -64,7 +65,7 @@ public static class AuthEndpoints
         var email = request.Email?.Trim() ?? "";
 
         var password = request.Password ?? "";
-        var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, ct);
+        var user = email.Length == 0 ? null : await demo.FindOrCreateAsync(email, signIn.UserManager, db, ct);
 
         // Exactly one PBKDF2 verification per attempt on every path (R105-F2), so the response time doesn't tell an
         // attacker which emails are real accounts: the decoy here for an unknown email, and DeskSignInManager for the
