@@ -185,7 +185,10 @@ public sealed class GridQueryNormalizer
         };
         if (op is null) return null;
         if (op is FilterOp.Blank or FilterOp.NotBlank) return new GridCondition(FilterKind.Text, op.Value);
-        if (spec.Filter is not { ValueKind: JsonValueKind.String } s || s.GetString() is not { Length: > 0 } text)
+        if (spec.Filter is not { ValueKind: JsonValueKind.String } s)
+            return null;
+        var text = s.GetString()!; // never null for a JSON string
+        if (text.Length == 0)
             return null;
         // A long search is a real filter: dropping it would widen the result (#130 N7).
         return text.Length <= MaxTextLength

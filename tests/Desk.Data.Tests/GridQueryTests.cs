@@ -201,7 +201,7 @@ public sealed class GridQueryTests
     [Fact]
     public void Text_filters_drop_unknown_types_and_non_strings_and_refuse_overlong_values()
     {
-        foreach (var spec in new FilterSpec[] { new("text", "regex", Json("\"x\"")), new("text", "contains", Json("5")) })
+        foreach (var spec in new FilterSpec[] { new("text", "regex", Json("\"x\"")), new("text", "contains", Json("5")), new("text", "contains") })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["deal_name"] = spec })).Filters);
         // A long search is a real filter: dropping it would widen the result, so it's a 400 (#130 N7).
         Assert.Single(Normalize(new GridRequest(FilterModel: new()
@@ -324,6 +324,7 @@ public sealed class GridQueryTests
         // Not a number (or beyond decimal's range): dropped, as for any other unusable number filter.
         foreach (var bad in new[] { "\"lots\"", "1e40", "true" })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals", Json(bad)) })).Filters);
+        Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals") })).Filters); // no value
     }
 
     [Fact]

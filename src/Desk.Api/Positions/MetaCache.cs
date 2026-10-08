@@ -29,6 +29,8 @@ public sealed record MetaSnapshot(
 /// </summary>
 public sealed partial class MetaCache(MetaRepository repo, TimeProvider time, ILogger<MetaCache>? logger = null)
 {
+    private readonly ILogger _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<MetaCache>.Instance;
+
     public static readonly TimeSpan Revalidate = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan RetryEmpty = TimeSpan.FromSeconds(30);
 
@@ -64,7 +66,7 @@ public sealed partial class MetaCache(MetaRepository repo, TimeProvider time, IL
             // with, so the grid stays unavailable instead of building SQL from it (#130 N2).
             var unsafeNames = columns.Where(c => !SafeName().IsMatch(c.Name)).Select(c => c.Name).ToList();
             if (unsafeNames.Count > 0)
-                logger?.LogError("Column catalog has {Count} names that aren't snake_case identifiers; the grid is unavailable until it's fixed", unsafeNames.Count);
+                _logger.LogError("Column catalog has {Count} names that aren't snake_case identifiers; the grid is unavailable until it's fixed", unsafeNames.Count);
             var normalizer = unsafeNames.Count == 0 && columns.Any(c => c.Name == GridQueryNormalizer.RowIdColumn) ? new GridQueryNormalizer(columns) : null;
             var snapshot = new MetaSnapshot(columns, normalizer, await dates, await version, await portfolios, now, batchEnd);
             _current = snapshot with { ExpiresAt = Min(now + (snapshot.HasData ? Revalidate : RetryEmpty), batchEnd) };
