@@ -4,19 +4,26 @@ import { watchConsole } from './helpers';
 test.describe('P2 fund performance (README §6 acceptance)', () => {
   test('flipping ranges quickly never shows a stale range', async ({ page }) => {
     const errors = watchConsole(page);
+    // Hold back the ranges that get superseded, so their responses would land after ITD's if anything let them.
+    await page.route(/\/performance\?.*range=(QTD|1Y)/, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue().catch(() => undefined); // the SPA may have cancelled it meanwhile
+    });
     await page.goto('/funds');
     await expect(page.getByTestId('caption')).toContainText('YTD');
-    const completed: string[] = [];
-    page.on('requestfinished', (r) => { if (r.url().includes('/performance')) completed.push(new URL(r.url()).searchParams.get('range') ?? ''); });
+    const settled: string[] = [];
+    const track = (r: { url(): string }) => { if (r.url().includes('/performance')) settled.push(new URL(r.url()).searchParams.get('range') ?? ''); };
+    page.on('requestfinished', track);
+    page.on('requestfailed', track);
 
-    for (const range of ['QTD', '1Y', 'ITD', 'QTD', 'ITD']) await page.getByTestId(`range-${range}`).click();
+    for (const range of ['QTD', '1Y', 'ITD']) await page.getByTestId(`range-${range}`).click();
     await expect(page.getByTestId('caption')).toContainText('ITD');
-    await page.waitForTimeout(800); // nothing older lands afterwards
+    // Every delayed request has settled (answered or cancelled); ITD is still what's on screen.
+    await expect.poll(() => [...settled].sort(), { timeout: 5000 }).toEqual(['1Y', 'ITD', 'QTD']);
     await expect(page.getByTestId('caption')).toContainText('ITD');
     const months = Number(/(\d+) months?/.exec((await page.getByTestId('caption').innerText()))![1]);
     // One column per month plus the pinned label (virtualised, so read the grid's ARIA column count).
     await expect(page.locator('[data-testid=fund-grid] [aria-colcount]').first()).toHaveAttribute('aria-colcount', String(months + 1));
-    expect(completed.at(-1)).toBe('ITD');
     expect(errors).toEqual([]);
   });
 
