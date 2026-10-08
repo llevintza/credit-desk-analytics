@@ -49,7 +49,7 @@ public sealed class AuditPurgeTimerTests
     }
 
     [Fact]
-    public async Task A_failed_purge_is_logged_and_retried_at_the_next_tick()
+    public async Task A_failed_purge_is_retried_at_the_next_tick_at_most_twice_then_the_next_day()
     {
         await using var sp = DeadDatabase();
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero));
@@ -59,14 +59,31 @@ public sealed class AuditPurgeTimerTests
         await timer.StartAsync(Ct);
         Assert.Empty(logger.Lines); // nothing at start: a cold start never touches the database
 
-        time.Advance(timer.CheckEvery); // first tick: due, the database is down
-        await WaitForAsync(() => logger.Failures == 1);
-        time.Advance(timer.CheckEvery); // next tick: retried, not a day later
-        await WaitForAsync(() => logger.Failures == 2);
+        // The first tick is due and the database is down; the next two ticks retry it (MaxQuickRetries = 2).
+        for (var attempt = 1; attempt <= 1 + AuditPurgeTimer.MaxQuickRetries; attempt++)
+        {
+            await TickAsync(timer, time);
+            Assert.Equal(attempt, logger.Failures);
+        }
+
+        // The third failure keeps the 24 h slot: the next 23 hourly checks don't try again.
+        for (var h = 1; h < 24; h++) await TickAsync(timer, time);
+        Assert.Equal(3, logger.Failures);
+
+        await TickAsync(timer, time); // 24 h after the third failure: the daily retry
+        Assert.Equal(4, logger.Failures);
 
         await timer.StopAsync(Ct);
         Assert.True(timer.ExecuteTask!.IsCompletedSuccessfully); // the failures never escaped to the host
         Assert.All(logger.Lines, l => Assert.Equal(LogLevel.Warning, l.Level));
+    }
+
+    /// <summary>Advances one check interval and waits until the timer has run that check.</summary>
+    internal static async Task TickAsync(AuditPurgeTimer timer, FakeTimeProvider time)
+    {
+        var checks = timer.Checks;
+        time.Advance(timer.CheckEvery);
+        await WaitForAsync(() => timer.Checks == checks + 1);
     }
 
     [Fact]
