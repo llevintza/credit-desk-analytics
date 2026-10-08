@@ -94,9 +94,10 @@ public sealed class ClientAddressDiagnostics(
         var chain = ClientAddress.ForwardedFor(headers);
         logger.Log(
             level,
-            "{What}: Path={Path} Policy={Policy} Source={Source} Peer={Peer} PeerIsRender={PeerIsRender} ForwardedForLines={ForwardedForLines} ForwardedForHops={ForwardedForHops} ForwardedForShape={ForwardedForShape} CfConnectingIp={CfConnectingIp} TrueClientIp={TrueClientIp} Key={Key} Suppressed={Suppressed}",
+            "{What}: Route={Route} Policy={Policy} Source={Source} Peer={Peer} PeerIsRender={PeerIsRender} ForwardedForLines={ForwardedForLines} ForwardedForHops={ForwardedForHops} ForwardedForShape={ForwardedForShape} CfConnectingIp={CfConnectingIp} TrueClientIp={TrueClientIp} Key={Key} Suppressed={Suppressed}",
             what,
-            http.Request.Path.Value,
+            // The route template, never the raw path: that is the caller's text, of any length (R175-04).
+            (http.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "(unmatched)",
             policy,
             source,
             Redact(peer),

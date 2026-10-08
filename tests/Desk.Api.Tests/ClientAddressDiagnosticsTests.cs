@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Routing.Patterns;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -68,14 +70,15 @@ public sealed class ClientAddressDiagnosticsTests
     {
         var diagnostics = Diagnostics();
         var http = Request(diagnostics, RenderLb, $"{Spoof}, {Client}, {CfEdge}", Client);
-        http.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(new EnableRateLimitingAttribute(RateLimiting.LoginPolicy)), "login"));
+        http.SetEndpoint(new RouteEndpoint(_ => Task.CompletedTask, RoutePatternFactory.Parse("/api/auth/login"), 0,
+            new EndpointMetadataCollection(new EnableRateLimitingAttribute(RateLimiting.LoginPolicy)), "login"));
         diagnostics.Rejected(http);
         diagnostics.Rejected(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}", Client));
 
         var line = Assert.Single(_log.Lines);
         Assert.Equal(LogLevel.Warning, line.Level);
         Assert.StartsWith("First rate-limited request:", line.Text);
-        Assert.Contains("Path=/api/auth/login", line.Text);
+        Assert.Contains("Route=/api/auth/login", line.Text);
         Assert.Contains("Policy=login", line.Text);
         Assert.Contains("Source=CfConnectingIp", line.Text);
         Assert.Contains($"Peer={RenderLb}", line.Text);
@@ -101,6 +104,7 @@ public sealed class ClientAddressDiagnosticsTests
         diagnostics.Rejected(http);
 
         var text = Assert.Single(_log.Lines).Text;
+        Assert.Contains("Route=(unmatched)", text);
         Assert.Contains("Policy=global", text);
         Assert.Contains("Source=UntrustedPeer", text);
         Assert.Contains("Peer=none", text);

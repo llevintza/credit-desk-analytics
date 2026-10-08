@@ -146,6 +146,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var lines = logs.Lines.Where(l => l.Category == typeof(ClientAddressDiagnostics).FullName).Select(l => l.Text).ToList();
         Assert.Contains(lines, l => l.StartsWith("Client address resolver: BehindProxy=True", StringComparison.Ordinal) && l.Contains("ForwardedHeaders=XForwardedProto", StringComparison.Ordinal));
         var rejected = Assert.Single(lines, l => l.StartsWith("First rate-limited request:", StringComparison.Ordinal));
+        Assert.Contains("Route=/api/auth/login", rejected);
         Assert.Contains("Policy=login", rejected);
         Assert.Contains("Source=CfConnectingIp", rejected);
         Assert.Contains("ForwardedForShape=public>cf", rejected);
