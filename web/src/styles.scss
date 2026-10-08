@@ -1,16 +1,52 @@
-/* Design tokens (README §9.1): dark-first, dense, numbers in tabular figures. Light theme lands with the shell in phase 4. */
+/* Design tokens (README §9.1): dark-first, dense, numbers in tabular figures. Inter is self-hosted (CSP 'self'). */
+@use '@fontsource-variable/inter/index.css';
+
 :root {
   color-scheme: dark;
   --surface-1: #0f1318;
   --surface-2: #161b22;
   --surface-3: #212833;
+  --zebra: #12171d;
+  --hover: #1d2530;
   --line: #2a313c;
   --text: #d7dde5;
   --muted: #8b95a3;
+  --accent: #4c8dff;
   --up: #3fb37f;
-  --down: #e5534b;
+  --down: #f0625a;
   --warn: #d4a72c;
-  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-ui: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --surface-1: #ffffff;
+  --surface-2: #f4f6f8;
+  --surface-3: #e7ebf0;
+  --zebra: #f8f9fb;
+  --hover: #eaf1fe;
+  --line: #d3d9e1;
+  --text: #1b2028;
+  --muted: #5b6573;
+  --accent: #1f62d6;
+  --up: #11804d;
+  --down: #c62f27;
+  --warn: #8a6100;
+}
+
+/* Colorblind-safe up/down (README §9.1): blue/orange instead of green/red. */
+:root[data-palette='colorblind'] { --up: #4c9aff; --down: #ff9d3c; }
+:root[data-theme='light'][data-palette='colorblind'] { --up: #1559c4; --down: #b25600; }
+
 html, body { margin: 0; height: 100%; background: var(--surface-1); color: var(--text); font: 13px/1.4 var(--font-ui); }
 .num { font-variant-numeric: tabular-nums; }
+
+button, input, select {
+  font: inherit; color: var(--text); background: var(--surface-1);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px;
+}
+button { cursor: pointer; background: var(--surface-3); }
+button:disabled { opacity: 0.6; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

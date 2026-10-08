@@ -942,8 +942,8 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage |
-| 3 Positions API | phase-3/positions-api | In review |
-| 4 Shell + Positions UI | n/a | Not started |
+| 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
+| 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |

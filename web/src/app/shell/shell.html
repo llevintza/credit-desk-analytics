@@ -1,0 +1,78 @@
+<header class="topbar">
+  <span class="brand">Credit Desk Analytics</span>
+
+  <label class="field">
+    <span class="sr-only">As-of date</span>
+    <select data-testid="as-of" aria-label="As-of date" (change)="setAsOf($event)">
+      @for (d of scope.dates(); track d; let first = $first) {
+        <option [value]="d" [selected]="d === scope.asOf()">{{ d }} · {{ first ? 'today' : 'prior day' }}</option>
+      }
+    </select>
+  </label>
+  <span class="chip" data-testid="freshness" title="Data refreshes once a day after the overnight batch">
+    Data as of 06:30 ET · overnight batch
+  </span>
+
+  <details class="menu" data-testid="portfolios">
+    <summary aria-label="Funds and portfolios">{{ portfolioLabel() }}</summary>
+    <div class="dropdown" role="group" aria-label="Funds and portfolios">
+      @for (f of scope.funds(); track f.fundId) {
+        <button type="button" class="fund" (click)="scope.toggleFund(f.fundId)">{{ f.fundName }}</button>
+        @for (p of f.portfolios; track p.portfolioId) {
+          <label class="check">
+            <input type="checkbox" [checked]="scope.selected().includes(p.portfolioId)" (change)="scope.toggle(p.portfolioId)" />
+            {{ p.name }}
+          </label>
+        }
+      }
+    </div>
+  </details>
+
+  <span class="spacer"></span>
+
+  <button type="button" class="icon" data-testid="theme-toggle" (click)="theme.toggleTheme()"
+          [attr.aria-label]="theme.theme() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'">
+    {{ theme.theme() === 'dark' ? '☀' : '☾' }}
+  </button>
+  <details class="menu user" data-testid="user-menu">
+    <summary aria-label="Account">{{ auth.me()?.email }}</summary>
+    <div class="dropdown right">
+      <div class="muted">Role: {{ auth.me()?.roles?.join(', ') }}</div>
+      @if (expiry(); as e) { <div class="muted" data-testid="expiry">Access until {{ e }}</div> }
+      <label class="check"><input type="checkbox" [checked]="theme.palette() === 'colorblind'"
+        (change)="theme.palette.set(theme.palette() === 'colorblind' ? 'standard' : 'colorblind')" /> Colorblind-safe colours</label>
+      <label class="check"><input type="checkbox" [checked]="theme.negatives() === 'parens'"
+        (change)="theme.negatives.set(theme.negatives() === 'parens' ? 'minus' : 'parens')" /> Negatives in (parentheses)</label>
+      <button type="button" (click)="logout()">Sign out</button>
+    </div>
+  </details>
+</header>
+
+<nav class="nav" aria-label="Pages">
+  @for (n of nav(); track n.path) {
+    <a [routerLink]="['/', n.path]" routerLinkActive="active" [attr.aria-keyshortcuts]="'Alt+' + n.key">
+      {{ n.label }} <kbd>Alt+{{ n.key }}</kbd>
+    </a>
+  }
+</nav>
+
+<main class="content">
+  @if (apiLabel() === 'Maintenance') {
+    <div class="banner" role="status" data-testid="maintenance">Down for maintenance: data is unavailable for now. Please try again later.</div>
+  }
+  <router-outlet />
+</main>
+
+<footer class="statusbar" data-testid="statusbar">
+  <span data-testid="api-state" [class]="apiLabel() === 'Ready' ? 'ok' : apiLabel() === 'Unreachable' ? 'err' : 'warn'">API {{ apiLabel() }}</span>
+  @if (status.totalRows() !== null) {
+    <span class="num" data-testid="rows">Rows {{ status.visibleRows() ?? 0 }} visible / {{ status.totalRows() }} total</span>
+  }
+  @if (last(); as l) {
+    <span class="num" data-testid="last-request">{{ l.ms }} ms</span>
+    @if (l.cache) { <span data-testid="x-cache">X-Cache {{ l.cache }}</span> }
+    @if (l.bytes !== null) { <span class="num">{{ (l.bytes / 1024).toFixed(1) }} KB</span> }
+  }
+  <span class="spacer"></span>
+  @if (version(); as v) { <span class="num muted">build {{ v }}</span> }
+</footer>

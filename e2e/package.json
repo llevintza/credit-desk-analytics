@@ -1,0 +1,11 @@
+{
+  "name": "credit-desk-e2e",
+  "private": true,
+  "description": "Playwright e2e, screenshots and first-paint measurement (README §11, §10).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

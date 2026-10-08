@@ -1,0 +1,41 @@
+<section class="toolbar" aria-label="Positions controls">
+  <label class="field">
+    <span>Preset</span>
+    <select data-testid="preset" [value]="preset()" (change)="onPresetChange($event)" aria-label="Column preset (Ctrl+Shift+P)">
+      @for (p of presets(); track p.name) {
+        <option [value]="p.name" [selected]="p.name === preset()">{{ p.name }}{{ p.builtIn ? '' : ' (mine)' }}</option>
+      }
+    </select>
+  </label>
+  <button type="button" (click)="savePresetAs()" [disabled]="saving()" aria-label="Save the current columns as a preset">Save as…</button>
+  @if (ownPreset()) {
+    <button type="button" (click)="deletePreset()" aria-label="Delete this preset">Delete</button>
+  }
+  <input #quick class="quick" data-testid="quick-filter" type="search" placeholder="Quick filter  ( / )"
+         aria-label="Quick filter (press / to focus)" (input)="onQuickInput($event)" />
+  <span class="spacer"></span>
+  @if (query.loading()) { <span class="muted" role="status">Loading…</span> }
+  <button type="button" data-testid="export" (click)="exportCsv()" [disabled]="exporting()" aria-label="Export CSV (Ctrl+Shift+E)">
+    {{ exporting() ? 'Exporting…' : 'Export CSV' }}
+  </button>
+</section>
+
+@if (loadError() ?? query.error(); as message) {
+  <div class="error-tile" role="alert">{{ message }}</div>
+}
+
+@if (columns(); as cols) {
+  <ag-grid-angular
+    class="grid"
+    data-testid="positions-grid"
+    [gridOptions]="gridOptions"
+    [columnDefs]="cols"
+    (gridReady)="onGridReady($event)"
+    (displayedColumnsChanged)="onDisplayedColumnsChanged()"
+    (firstDataRendered)="onFirstDataRendered()"
+    (viewportChanged)="onViewportChanged()"
+    (bodyScrollEnd)="onViewportChanged()"
+    (keydown)="onKeyDown($event)" />
+} @else if (!loadError()) {
+  <div class="skeleton" aria-busy="true" aria-label="Loading positions"></div>
+}

@@ -1,0 +1,24 @@
+<main class="login">
+  <form class="card" (submit)="submit($event)" aria-labelledby="login-title" novalidate>
+    <h1 id="login-title">Credit Desk Analytics</h1>
+    <p class="muted">Invite-only. Sign in with the account you were given.</p>
+
+    @if (maintenance()) {
+      <div class="banner" role="status" data-testid="maintenance">Down for maintenance: data is unavailable for now.</div>
+    }
+    @if (waking()) {
+      <div class="waking" role="status" data-testid="waking">
+        Waking the server… <span class="muted">(the free instance sleeps when idle; this can take up to a minute)</span>
+        <progress max="100" [value]="progress()" aria-label="Server start-up progress"></progress>
+      </div>
+    }
+    @if (unreachable()) {
+      <div class="error" role="alert">The server isn't answering. Reload to try again.</div>
+    }
+
+    <label>Email <input name="email" type="email" autocomplete="username" required data-testid="email" /></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required data-testid="password" /></label>
+    @if (error(); as e) { <div class="error" role="alert" data-testid="login-error">{{ e }}</div> }
+    <button type="submit" data-testid="sign-in" [disabled]="busy()">{{ busy() ? 'Signing in…' : 'Sign in' }}</button>
+  </form>
+</main>

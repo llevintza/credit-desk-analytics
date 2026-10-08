@@ -12,8 +12,8 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0006](0006-dapper-vs-ef-for-the-dynamic-grid.md) | Dynamic grid reads: Dapper + columnar reader vs EF Core (measured) | 3 Positions API | Accepted |
 | [0007](0007-row-json-vs-columnar-vs-messagepack.md) | Payload: columnar JSON by default, MessagePack on request (measured) | 3 Positions API | Accepted |
 | [0008](0008-offset-vs-keyset-paging.md) | Paging: OFFSET + tie-breaker, sort indexes (measured) | 3 Positions API | Accepted |
-| 0009 | Grid: Infinite Row Model + displayed-column requests vs client-side model (measured) | 4 Shell + Positions UI | Planned |
-| 0010 | Angular: signals + OnPush + zoneless | 4 Shell + Positions UI | Planned |
+| [0009](0009-infinite-row-model-vs-client-side.md) | Grid: Infinite Row Model + displayed-column requests vs client-side model (measured) | 4 Shell + Positions UI | Accepted |
+| [0010](0010-signals-onpush-zoneless.md) | Angular: signals + OnPush + zoneless | 4 Shell + Positions UI | Accepted |
 | 0011 | Fund performance: long format + edge pivot vs SQL pivot | 5 Fund Performance | Planned |
 | 0012 | Insights: per-source endpoints + per-task DbContext vs 20 calls vs one call (measured) | 6 Insights Board | Planned |
 | 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
