@@ -4,3 +4,6 @@
 /.claude/ @llevintza
 /CLAUDE.md @llevintza
 /AGENTS.md @llevintza
+/.gitleaks.toml @llevintza
+/perf/coverage-* @llevintza
+/tests/testconfig.json @llevintza

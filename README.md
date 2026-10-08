@@ -520,7 +520,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `Permissions-Policy` minimal.
 - **Errors:** ProblemDetails everywhere, with no stack traces outside Development.
 - **Logs:** structured, with no secrets and no full connection strings.
-- Dependabot for NuGet, npm and GitHub Actions.
+- Dependabot for NuGet, npm, GitHub Actions and Docker.
 
 ---
 
@@ -761,8 +761,8 @@ services:
 
 - **`deploy/Dockerfile`**, multi-stage:
   1. `node:22` builds `web/` (`npm ci && npm run build`).
-  2. `mcr.microsoft.com/dotnet/sdk:10.0` publishes `Desk.Api` and copies the SPA into `wwwroot`, and builds an **EF migrations bundle** (`dotnet ef migrations bundle`).
-  3. `mcr.microsoft.com/dotnet/aspnet:10.0` is the runtime, as a non-root user. `ASPNETCORE_URLS=http://0.0.0.0:${PORT}`.
+  2. `mcr.microsoft.com/dotnet/sdk:10.0` publishes `Desk.Api` and copies the SPA into `wwwroot`. The **EF migrations bundle** is built in GitHub Actions (`deploy.yml` / `db-ops.yml`), not in this image (ADR-0016).
+  3. `mcr.microsoft.com/dotnet/aspnet:10.0` is the runtime, as a non-root user. `ASPNETCORE_HTTP_PORTS=${PORT:-8080}` via `start.sh`.
 - **`deploy/start.sh`** only starts the app: it fails fast with a clear message if `DATABASE_URL` is missing, then runs `exec dotnet Desk.Api.dll`.
   - **Migrations and seeding are not done at boot.** GitHub Actions runs them before triggering the deploy (§14.2).
   - That way a cold start on the free tier never runs DDL, and a failed migration never reaches a running container.
@@ -784,8 +784,8 @@ services:
    - Set `DATABASE_URL` in the dashboard.
    - Copy the service's **Deploy Hook URL** (Settings → Deploy Hook).
 3. **GitHub protections first** (before any production secret):
-   - Environment **`production`:** deployment branch `main` only; **required reviewers on** (workflow YAML cannot set those).
-   - Ruleset on `main`: required status checks: every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
+   - Environment **`production`:** deployment branch `main` only. **No required reviewers** — none exists that could approve, and merges to `main` auto-deploy. Controls are the pre-merge review gate, required status checks (once the main ruleset is active), `deploy.yml` migrate/smoke, and README §14.4.
+   - Ruleset on `main` (once active): required status checks: every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`, `gate-tests`). No required approving review (every bot acts as `llevintza` and cannot self-approve). No force-push or deletion of `main`.
 4. **Then** add the `production` environment secrets (not `APP_URL` yet):
 
    | Kind | Name | Value |
@@ -807,16 +807,19 @@ services:
 
 1. **api:**
    - `dotnet build -warnaserror`
-   - `dotnet test` (Testcontainers needs Docker, available on `ubuntu-latest`)
+   - `dotnet test` with **coverlet.MTP** Cobertura (Testcontainers needs Docker, available on `ubuntu-latest`). Generated OpenAPI / `obj` sources are excluded (`GeneratedCodeAttribute`, `**/obj/**`, `**/*.generated.cs` in `tests/testconfig.json` and the same `--coverlet-exclude-by-file` flags). Do **not** exclude `CompilerGeneratedAttribute` (that drops `Program.cs` lambdas). Do not use `dotnet test --collect "XPlat Code Coverage"` (VSTest collector; this repo is MTP).
    - `dotnet ef migrations has-pending-model-changes` must be false
 2. **web:**
-   - `npm ci && npm run lint && npm test -- --run && npm run build`
+   - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
+   - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
    - the bundle budget is enforced by `angular.json` budgets
-3. **e2e:**
-   - `docker compose up -d --build`, seed at `--scale 0.2`, run Playwright
-   - upload the report and screenshots as artifacts
-4. **budgets:** `node perf/payload-size.mjs` against the compose stack; fail if over budget.
-5. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
+3. **coverage:** job summary of line/branch % per project and the coverlet scope (exclusions); **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at BASE_SHA. CI checks out BASE_SHA into `_base` (`fetch-depth: 0`, `persist-credentials: false`) and **always** runs **`_base/perf/coverage-gate.mjs`**. There is no HEAD fallback and no `_default` checkout. A BASE_SHA without the gate (retarget, stale base, deleted gate, rewound main) **fails closed** before `node` — bootstrap is closed after #5 (`741b19eb`); rebase onto main. Thresholds, tolerance, and the floor are read from BASE_SHA (`git show $BASE_SHA:…`), never from the PR head or the pushed commit. Exact JSON schema; NaN-safe comparisons (`!(actual >= floor)`); schema failures are written to the log and step summary. A PR that lowers a min, turns off `overallMustNotDrop`, or widens the tolerance fails. PRs whose base is not the default branch fail closed. `pull_request` `edited` re-runs the gate (retarget). Empty / zero / unknown `github.event.before` **fails closed**. On `push` to main, BASE_SHA is `github.event.before`; the gate runs from `_base` with `--default-dir _base --default-sha "$BASE_SHA"`; empty `--base-ref` is empty (not `"true"`); the retarget check runs only on `pull_request`. A baseline may be lowered **ONLY for a documented change in measurement scope**, never to absorb a real coverage drop. Any lowering must be its own `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` (applied only when that file differs from BASE_SHA; checked against the BASE_SHA floor and measured numbers) and sign-off from Code Reviewer, Tech Coordinator and Helms. A PR may raise the committed baseline to match measured coverage. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
+4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
+5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
+6. **workflows:** actionlint + shellcheck
+7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
+8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**.
+9. **e2e / budgets** (later phases): Playwright; `node perf/payload-size.mjs` against the compose stack; fail if over budget.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -828,11 +831,11 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 - **`workflow_dispatch`:** ref is exactly `refs/heads/main` (case-sensitive bash in the no-secrets `gate` job; GitHub's expression `==` is case-insensitive)
 - **SHA:** `workflow_run.head_sha` or `github.sha` equals the current tip of `main` (re-runs of old successful CI/deploy runs are refused)
 
-`DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). The workflow runs in the `production` environment, under `concurrency: production` (never two deploys at once; queued, not cancelled).
+`DATABASE_URL` is injected only on the migrate and seed steps. A failing migrate/seed command fails the step (`defaults.run.shell: bash` enables `pipefail`, so `cmd | tee` does not swallow the command's exit code). Deploy and db-ops share `concurrency: group: production` with `cancel-in-progress: false`: an **in-progress** run is never cancelled; GitHub keeps a single pending run in the group, so a **newer pending run cancels the older pending one**. That is fail-safe (the newer main tip wins) but means a db-ops dispatch can drop a pending deploy and vice versa. A SHA that is no longer the tip of `main` is skipped (neutral), not failed.
 
 | Job | Steps |
 |---|---|
-| **1. build-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
+| **1. db-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
 | **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
 | **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it reseeds inside a transaction per table and updates the metadata. The step prints the DB size and fails over budget (§5.4). |
 | **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
@@ -869,7 +872,7 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase.
 
@@ -909,7 +912,7 @@ The implementing agent **stops after opening each PR** and waits for review.
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
@@ -930,7 +933,7 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |

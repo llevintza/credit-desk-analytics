@@ -2,12 +2,14 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel an in-progress run on main; PR runs may cancel superseded SHAs.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -23,20 +25,51 @@ jobs:
   secrets:
     # Fails on any credential in ANY commit of the branch, not just the final tree (.gitleaks.toml).
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: gitleaks (full history)
+          persist-credentials: false
+      # Image pin tracked in deploy/ci-images/gitleaks/Dockerfile for Dependabot.
+      - name: gitleaks (full history of this SHA)
         run: >
-          docker run --rm -v "$PWD":/repo zricethezav/gitleaks:v8.30.0
+          docker run --rm -v "$PWD":/repo
+          zricethezav/gitleaks:v8.30.0@sha256:691af3c7c5a48b16f187ce3446d5f194838f91238f27270ed36eef6359a574d9
           git /repo --config /repo/.gitleaks.toml --redact --no-banner -v --log-opts=HEAD
+
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Image pin tracked in deploy/ci-images/actionlint/Dockerfile for Dependabot.
+      - name: actionlint
+        run: >
+          docker run --rm -v "$PWD":/repo -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+      # Image pin tracked in deploy/ci-images/shellcheck/Dockerfile for Dependabot.
+      - name: shellcheck
+        run: >
+          docker run --rm -v "$PWD":/repo -w /repo
+          koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+          --severity=warning
+          deploy/start.sh perf/pipefail-demo.sh
 
   api:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
         # Ephemeral, job-local database: trust auth, so no password exists anywhere.
         env:
           POSTGRES_DB: creditdesk
@@ -50,13 +83,40 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DATABASE_URL: Host=localhost;Port=5432;Database=creditdesk;Username=desk
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - run: dotnet tool restore
       - run: dotnet build -c Release
-      - run: dotnet test -c Release --no-build
+      - name: Test with cobertura coverage
+        run: |
+          mkdir -p TestResults/coverage
+          for proj in tests/Desk.Api.Tests tests/Desk.Data.Tests tests/Desk.Seeder.Tests; do
+            name=$(basename "$proj")
+            # Generated OpenAPI XML-comment support is [GeneratedCode] and
+            # *.generated.cs (PDB path is not under obj/ unless emitted). Do not
+            # pass CompilerGeneratedAttribute: that strips Program.cs lambdas.
+            # tests/testconfig.json is authoritative for exclude-by-attribute
+            # so coverlet.MTP CLI defaults (which include CompilerGenerated) are not merged.
+            # Do not use `dotnet test --collect "XPlat Code Coverage"` (VSTest).
+            dotnet test "$proj" -c Release --no-build -- \
+              --coverlet \
+              --coverlet-output-format cobertura \
+              --coverlet-file-prefix "$name" \
+              --coverlet-include '[Desk.*]*' \
+              --coverlet-exclude-by-file '**/obj/**' \
+              --coverlet-exclude-by-file '**/*.generated.cs' \
+              --coverlet-exclude-assemblies-without-sources MissingAll \
+              --results-directory "$PWD/TestResults/coverage"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-dotnet
+          path: TestResults/coverage
+          if-no-files-found: error
       - name: No pending model changes (README §14.4)
         run: dotnet ef migrations has-pending-model-changes --project src/Desk.Data --startup-project src/Desk.Data
       # Rehearse the deploy pipeline's database steps on a throwaway Postgres.
@@ -72,6 +132,9 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     # Job-level defaults.run replaces workflow-level defaults.run entirely, so
     # shell: bash (pipefail) must be repeated here with working-directory.
     defaults:
@@ -79,23 +142,130 @@ jobs:
         shell: bash
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
-      - run: npm test -- --watch=false
+      - run: npm test -- --watch=false --coverage
       - run: npm run build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-web
+          path: web/coverage
+          if-no-files-found: error
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # _base is BASE_SHA (PR base or event.before). Floor, thresholds, and the
+      # gate script come from _base so the commit under test cannot rewrite its
+      # own floor (R5-M1 / R104-M1). persist-credentials stays false.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          path: _base
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-dotnet
+          path: TestResults/coverage
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-web
+          path: web/coverage
+      - name: Coverage gates
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::BASE_SHA is missing (merge-base unresolved). Failing closed."
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --no-recurse-submodules "$PWD/_base" "$BASE_SHA"
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
+            exit 1
+          fi
+          # The gate exists on main since #5 (741b19eb). Never run the head copy:
+          # a BASE_SHA without the gate (retarget, stale base, deleted gate,
+          # rewound main) fails closed here, before any code under test runs.
+          GATE=_base/perf/coverage-gate.mjs
+          if [ ! -f "$GATE" ]; then
+            echo "::error::BASE_SHA ${BASE_SHA} has no perf/coverage-gate.mjs. Bootstrap closed after #5; rebase onto main. Failing closed."
+            exit 1
+          fi
+          node "$GATE" \
+            --dotnet TestResults/coverage \
+            --web web/coverage \
+            --base "$BASE_SHA" \
+            --base-dir _base \
+            --default-dir _base \
+            --default-sha "$BASE_SHA" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --base-ref "${GITHUB_BASE_REF:-}" \
+            --event "${GITHUB_EVENT_NAME:-}"
+
+  gate-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Gate script tests (≥80% line/branch)
+        run: |
+          set -o pipefail
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=perf/coverage-gate.mjs \
+            perf/coverage-gate.test.mjs | tee /tmp/gate-tests.out
+          {
+            echo "## Gate script coverage"
+            echo
+            echo '```'
+            awk '/start of coverage report/,/end of coverage report/' /tmp/gate-tests.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     needs: [api, web]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Generate a throwaway local password (never stored)
         run: |
           pw=$(openssl rand -hex 16)
@@ -110,7 +280,7 @@ jobs:
         run: |
           i=0
           while [ "$i" -lt 60 ]; do
-            if curl -fsS localhost:8080/health > health.json; then
+            if curl -fsS --max-time 10 localhost:8080/health > health.json; then
               break
             fi
             i=$((i + 1))
@@ -119,8 +289,8 @@ jobs:
           test -s health.json
           cat health.json
           test "$(jq -r .version health.json)" = "$EXPECT_SHA"
-          root_code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/)
-          me_code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/me)
+          root_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' localhost:8080/)
+          me_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' localhost:8080/api/me)
           echo "GET / -> $root_code"
           echo "GET /api/me -> $me_code"
           test "$root_code" = 200
@@ -134,10 +304,13 @@ jobs:
     # environment, no database. The api job also calls this action, but only after
     # `dotnet build`, which hid NETSDK1004 on production's first real release.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build migrations bundle and seeder
         uses: ./.github/actions/build-db-tools
       - name: Assert artifacts

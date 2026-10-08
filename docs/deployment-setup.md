@@ -4,7 +4,7 @@ This is the step-by-step version of README §13.3. Do it once. After that, every
 
 > CI → migrate Neon → seed (only if the seed version changed) → Render deploy of the exact commit → smoke test.
 
-> **Before step 4:** set the `production` environment to the `main` branch only **and** add a required reviewer (step 3), and set the main ruleset (required status checks only; no required approving review; no force-push or deletion). Don't add production secrets until those protections are on. Don't add `APP_URL` (which turns deploys on) until Tech Coordinator gives the go-ahead.
+> **Before step 4:** set the `production` environment to the `main` branch only, and set the main ruleset (required status checks only; no required approving review; no force-push or deletion). **No required reviewer** on `production`: merges to `main` auto-deploy. Controls are the pre-merge review gate, required checks (once the main ruleset is active), `deploy.yml` migrate/smoke, and README §14.4. Don't add production secrets until those protections are on. Don't add `APP_URL` (which turns deploys on) until Tech Coordinator gives the go-ahead.
 
 **Time needed:** about 30 minutes. **Accounts:** Neon, Render, GitHub (repo admin), Anthropic Console.
 
@@ -102,9 +102,9 @@ Workflow YAML cannot set these. Do them by hand.
 2. **Create `production`** if it does not exist (**New environment**, name `production` exactly), then **Configure environment**.
 3. **Restrict it now:**
    - **Deployment branches and tags:** choose **Selected branches and tags**, then add the rule `main`. Only `main` can deploy.
-   - **Required reviewers:** add `llevintza` (**required**). `deploy.yml` has both `preflight` and `release` on `environment: production`, so each deploy waits for **two** approvals, and every merge's preflight waits even while `APP_URL` is unset. Leave "Prevent self-review" off: you're the only reviewer. Every bot acts as `llevintza`, so this is a deliberate step and an audit trail, not separation of duties.
+   - **Required reviewers:** leave unset. No required reviewer exists; merges to `main` auto-deploy. Controls are the pre-merge review gate, required status checks (once the main ruleset is active), `deploy.yml` migrate/smoke, and README §14.4.
 4. **Ruleset on `main`** (Settings → Rules → New ruleset, target `main`):
-   - **Required status checks:** every CI job except `review` (today `secrets`, `api`, `web`, `compose-smoke`; add `coverage` and `workflows` when PR #5 lands). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
+   - **Required status checks:** every CI job except `review` (`secrets`, `api`, `web`, `coverage`, `compose-smoke`, `workflows`, `db-tools`, `gate-tests`). Do **not** require `review` (Claude review is advisory; a skipped draft would count as passing).
    - **No required approving review.** Every bot acts as `llevintza` and cannot self-approve, so a required PR review would deadlock every merge.
    - Block force-pushes and deletions of `main`.
 
@@ -161,7 +161,7 @@ The review job is **advisory and not a required check**. Leo's decision (2026-10
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
 1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile or render.yaml change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase.
 
@@ -171,7 +171,7 @@ Tech Coordinator merges and starts the next phase.
 
 ## Step 6: First deploy
 
-**Prerequisite:** Tech Coordinator's go-ahead, then step 4.3 (`APP_URL`); approve both `production` prompts (`preflight` and `release`).
+**Prerequisite:** Tech Coordinator's go-ahead, then step 4.3 (`APP_URL`). There is no production approval pause; Deploy starts when CI on `main` is green.
 
 1. GitHub → **Actions** → **Deploy** → **Run workflow** (branch **main**) → **Run workflow**.
 2. Open the run. The **preflight** job should report all values present. Then **release** runs:
@@ -186,7 +186,7 @@ Tech Coordinator merges and starts the next phase.
    SELECT version, seed, scale, completed_at, database_size_bytes FROM app.seed_metadata ORDER BY id;
    ```
 
-From now on, merging a PR into `main` runs all of this automatically. When CI on `main` passes, **Deploy** starts by itself (and still waits for the `production` environment's required reviewer).
+From now on, merging a PR into `main` runs all of this automatically. When CI on `main` passes, **Deploy** starts by itself (no production approval pause).
 
 ---
 
@@ -220,3 +220,5 @@ From now on, merging a PR into `main` runs all of this automatically. When CI on
 | Claude review job skipped with a missing-key notice | Add `ANTHROPIC_API_KEY` to the `claude-review` environment (step 5). The job stays green; it is not a required check |
 | Claude review job waits on a deployment approval | The `claude-review` environment must have **no** required reviewers and **no** branch restriction |
 | Site takes 30–60 s to load the first time | The free instance spins down after about 15 min idle. Expected; the page shows "Waking the server…" |
+| `NETSDK1004` / assets file not found while bundling | `dotnet tool restore` does not write `project.assets.json`. The composite action restores `Desk.Data` and `Desk.Seeder` for `linux-x64` on a clean checkout (CI `db-tools`, deploy, db-ops) |
+| `No connection string named 'App'` / `No connection string for source App` | `AppDbContextDesignFactory` needs `DATABASE_URL` or `ConnectionStrings__App` at bundle time. The composite sets a password-less design-time `DATABASE_URL` only for that step; production `DATABASE_URL` stays on migrate/seed |

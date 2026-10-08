@@ -3,7 +3,8 @@ using Desk.Data;
 using Desk.Seeder;
 using Microsoft.Extensions.Configuration;
 
-// Exit codes: 0 ok (seeded or skipped), 1 bad arguments / not migrated, 2 over the size budget, 130 cancelled.
+// Exit codes: 0 ok (seeded or skipped), 1 bad arguments / not migrated, 2 over the size budget,
+// 3 unexpected error, 130 cancelled.
 SeedOptions options;
 try { options = SeedOptions.Parse(args); }
 catch (Exception e) when (e is ArgumentException or FormatException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
@@ -27,6 +28,11 @@ catch (OperationCanceledException) when (cts.IsCancellationRequested)
 {
     Console.Error.WriteLine("ERROR: cancelled; the seeding transaction was rolled back.");
     return 130;
+}
+catch (Exception e)
+{
+    Console.Error.WriteLine($"ERROR: {e.GetType().Name}: {e.Message}");
+    return 3;
 }
 finally
 {

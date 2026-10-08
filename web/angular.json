@@ -72,7 +72,13 @@
           }
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "coverage": true,
+            "coverageInclude": ["src/**/*.ts"],
+            "coverageExclude": ["src/**/*.spec.ts"],
+            "coverageReporters": ["lcov", "text-summary"]
+          }
         },
         "lint": {
           "builder": "@angular-eslint/builder:lint",
