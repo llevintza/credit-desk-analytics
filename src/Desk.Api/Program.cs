@@ -1,19 +1,36 @@
 using System.IO.Compression;
+using Desk.Api;
+using Desk.Api.Audit;
+using Desk.Api.Auth;
+using Desk.Api.Hardening;
+using Desk.Api.Limits;
 using Desk.Data;
 using Microsoft.AspNetCore.ResponseCompression;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Structured logs outside Development: one JSON object per line, with the request id scope (README §7.3).
+if (!builder.Environment.IsDevelopment())
+{
+    builder.Logging.ClearProviders();
+    builder.Logging.AddJsonConsole(o => o.IncludeScopes = true);
+}
+
 builder.Services.AddDeskData(builder.Configuration);
+builder.Services.AddDeskAuth();
+builder.Services.AddSingleton<DemoAccounts>();
+builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration));
+builder.Services.AddSingleton<AuditQueue>();
+builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddProblemDetails();
-// OpenAPI document (README §8) at /openapi/v1.json, browsable at /swagger.
+// OpenAPI document (README §8) at /openapi/v1.json, browsable at /swagger (admin only).
 builder.Services.AddOpenApi(o => o.AddDocumentTransformer((doc, _, _) =>
 {
     doc.Info.Title = "Credit Desk Analytics API";
-    doc.Info.Description = "Front-office analytics API for a structured-credit desk. Data endpoints require a session (phase 2).";
+    doc.Info.Description = "Front-office analytics API for a structured-credit desk. Everything under /api except login needs a session.";
     // Behind a TLS-terminating proxy the generated server is http://; Swagger UI then
     // "Try it out"s over HTTP. Empty servers make the UI use the page's origin (relative).
-    doc.Servers?.Clear();
+    doc.Servers = [];
     return Task.CompletedTask;
 }));
 builder.Services.AddResponseCompression(o =>
@@ -27,44 +44,35 @@ builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = Compre
 
 var app = builder.Build();
 
+// Order matters: maintenance answers before anything that can reach the database; rate limiting partitions by
+// the authenticated user; the audit middleware sees only admitted requests; authorization runs last.
 app.UseExceptionHandler();
+app.UseStatusCodePages();
+app.UseMiddleware<SecurityHeaders>();
+if (!app.Environment.IsDevelopment())
+    app.UseHsts();
+app.UseMiddleware<MaintenanceMode>();
 app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseRouting();
+// Only paths that need a session decrypt the cookie: /health and the SPA never load the key ring or run the
+// security-stamp query, so they can't wake the database (maintenance mode, platform probes).
+app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication());
+// UseAuthentication on a branch doesn't mark the app, and WebApplication would then add a global one at the very
+// start of the pipeline (before maintenance mode). Mark it so the path-scoped one above is the only one.
+((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
+app.UseRateLimiter();
+// After the limiter: rejected (429) requests are not written to the audit table.
+app.UseMiddleware<AuditMiddleware>();
+app.UseAuthorization();
+app.UseDeskSwagger();
 
-// Static on purpose: platform probes must never wake the database (README §7.2).
-// `version` is the git SHA baked in at image build time; the deploy pipeline waits for it (README §14.2).
-var version = app.Configuration["APP_VERSION"] ?? "dev";
-app.MapGet("/health", () => Results.Ok(new HealthResponse("ok", version)))
-   .WithName("Health").WithTags("Health")
-   .WithSummary("Liveness probe with the deployed build version; never touches the database.");
-
-// Swagger UI for exploring and trying the API (README §8, ADR-0019). On in Development; elsewhere only when
-// SWAGGER_ENABLED=true (the site is public and there is no login until phase 2, which moves it behind admin).
-// Production stays off unless the value is exactly a boolean true. Non-booleans fail safe to off.
-if (IsSwaggerEnabled(app.Configuration, app.Environment, app.Logger))
-{
-    app.MapOpenApi();
-    app.UseSwaggerUI(o =>
-    {
-        o.SwaggerEndpoint("/openapi/v1.json", "Credit Desk Analytics API v1");
-        o.RoutePrefix = "swagger";
-        o.DocumentTitle = "Credit Desk Analytics API";
-    });
-}
-else
-{
-    // Strict 404 for the whole prefix so /swagger and /swagger/foo never look like missing SPA routes.
-    MapNotFoundPrefix(app, "/swagger");
-    MapNotFoundPrefix(app, "/openapi");
-}
-
-var api = app.MapGroup("/api").WithTags("Account");
-// Placeholder until phase 2 (accounts): every data endpoint is behind auth, so /api/me is 401 without a session.
-api.MapGet("/me", () => Results.Unauthorized())
-   .WithName("GetCurrentUser")
-   .WithSummary("Current user, roles and account expiry. Returns 401 until accounts land in phase 2.")
-   .Produces(StatusCodes.Status401Unauthorized);
+var api = app.MapGroup("/api")
+    .RequireAuthorization()
+    .AddEndpointFilter<AntiforgeryFilter>();
+app.MapHealthEndpoints(api);
+api.MapAuthEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 
 // Client-side routes fall back to the SPA; /api/* never does. /swagger and /openapi are
@@ -72,25 +80,5 @@ api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 app.MapFallbackToFile("index.html").ExcludeFromDescription();
 
 app.Run();
-
-static bool IsSwaggerEnabled(IConfiguration configuration, IHostEnvironment environment, ILogger logger)
-{
-    var raw = configuration["SWAGGER_ENABLED"];
-    if (raw is null)
-        return environment.IsDevelopment();
-    if (bool.TryParse(raw, out var enabled))
-        return enabled;
-
-    logger.LogWarning("SWAGGER_ENABLED value '{Value}' is not true or false; Swagger stays off.", raw);
-    return false;
-}
-
-static void MapNotFoundPrefix(WebApplication app, string prefix)
-{
-    app.Map(prefix, () => Results.NotFound()).ExcludeFromDescription();
-    app.Map($"{prefix}/{{**rest}}", () => Results.NotFound()).ExcludeFromDescription();
-}
-
-public sealed record HealthResponse(string Status, string Version);
 
 public partial class Program;

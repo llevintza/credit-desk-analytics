@@ -8,64 +8,22 @@ namespace Desk.Api.Tests;
 
 public sealed class OpenApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
-    [Fact]
-    public async Task OpenApi_document_lists_the_api_endpoints()
+    [Theory]
+    [InlineData("Development", null)]   // on by default in Development
+    [InlineData("Production", "true")]  // opted in elsewhere
+    public async Task Enabled_swagger_and_openapi_still_need_a_session(string environment, string? setting)
     {
-        var res = await factory.CreateClient().GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        var paths = doc.RootElement.GetProperty("paths");
-        Assert.True(paths.TryGetProperty("/health", out _));
-        Assert.True(paths.TryGetProperty("/api/me", out _));
-        // Exactly those two: SPA and /api fallbacks must stay excluded.
-        Assert.Equal(2, paths.EnumerateObject().Count());
-        Assert.Equal("Credit Desk Analytics API", doc.RootElement.GetProperty("info").GetProperty("title").GetString());
-    }
-
-    [Fact]
-    public async Task OpenApi_document_has_no_absolute_http_server()
-    {
-        var res = await factory.CreateClient().GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        if (!doc.RootElement.TryGetProperty("servers", out var servers)
-            || servers.ValueKind != JsonValueKind.Array
-            || servers.GetArrayLength() == 0)
+        var client = factory.WithWebHostBuilder(b =>
         {
-            return;
-        }
-
-        foreach (var server in servers.EnumerateArray())
+            b.UseEnvironment(environment);
+            if (setting is not null) b.UseSetting("SWAGGER_ENABLED", setting);
+        }).CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        foreach (var path in new[] { "/openapi/v1.json", "/swagger", "/swagger/index.html" })
         {
-            var url = server.GetProperty("url").GetString();
-            Assert.False(
-                url is not null && url.StartsWith("http://", StringComparison.OrdinalIgnoreCase),
-                $"OpenAPI server URL must not be an absolute http:// entry (got '{url}').");
-            Assert.True(
-                url is not null && (url.StartsWith('/') || !Uri.TryCreate(url, UriKind.Absolute, out _)),
-                $"OpenAPI server URL must be relative (got '{url}').");
+            var res = await client.GetAsync(path, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+            Assert.DoesNotContain("swagger-ui", await res.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
         }
-    }
-
-    [Fact]
-    public async Task Swagger_ui_is_served_not_the_spa()
-    {
-        var res = await factory.CreateClient().GetAsync("/swagger/index.html", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Contains("swagger-ui", await res.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Swagger_redirects_to_index_html()
-    {
-        var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
-        var res = await client.GetAsync("/swagger", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.MovedPermanently, res.StatusCode);
-        Assert.NotNull(res.Headers.Location);
-        var path = res.Headers.Location.IsAbsoluteUri
-            ? res.Headers.Location.AbsolutePath
-            : "/" + res.Headers.Location.OriginalString.TrimStart('/');
-        Assert.Equal("/swagger/index.html", path);
     }
 
     [Theory]
@@ -133,15 +91,6 @@ public sealed class OpenApiTests(WebApplicationFactory<Program> factory) : IClas
         {
             webRoot.Delete(recursive: true);
         }
-    }
-
-    [Fact]
-    public async Task Swagger_can_be_enabled_in_production()
-    {
-        var client = factory.WithWebHostBuilder(b => b.UseEnvironment("Production").UseSetting("SWAGGER_ENABLED", "true")).CreateClient();
-        var res = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Equal("application/json", res.Content.Headers.ContentType?.MediaType);
     }
 
     [Theory]
