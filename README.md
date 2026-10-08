@@ -235,7 +235,8 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | trade | 150,000 × ~100 B | ~15 MB (+ indexes ≈ 8 MB) |
 | surveillance / pricing / market | ~60 MB total | ~60 MB |
 | deal, bond, reference, app | small | < 10 MB |
-| **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
+| app.audit (90 days, `AUDIT_RETENTION_DAYS`) | 90 × audit rows/day × ~193 B (heap + PK + `IX_audit_at`) | ~17 MB per 1,000 rows/day; break-even with the 350 MB budget at ~4,500 rows/day (ADR-0022) |
+| **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
 
@@ -515,6 +516,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
@@ -958,7 +960,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |
