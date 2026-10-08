@@ -5,6 +5,7 @@ using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
@@ -127,10 +128,32 @@ public sealed class PositionsUnitTests
     public void Positions_cache_size_defaults_to_64_mb(string? value, int expectedMb)
     {
         using var cache = new PositionsCache(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build());
+            .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build(), TimeProvider.System);
         Assert.Equal(expectedMb * 1024L * 1024L, cache.SizeLimitBytes);
         cache.Cache.Set("k", new byte[] { 1 }, new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions { Size = 1 });
         cache.Clear();
+        Assert.False(cache.Cache.TryGetValue("k", out _));
+    }
+
+    /// <summary>
+    /// Entries expire at the batch end, an instant on the app's clock, so the cache must use that clock too. Run with
+    /// the fake clock both far behind and far ahead of the real one, so it fails on a wall-clock cache whatever the
+    /// date the suite runs on.
+    /// </summary>
+    [Theory]
+    [InlineData(2001)]
+    [InlineData(2201)]
+    public void Positions_cache_expires_on_the_injected_clock(int year)
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(year, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        using var cache = new PositionsCache(new ConfigurationBuilder().Build(), time);
+        var batchEnd = time.GetUtcNow().AddHours(1);
+        cache.Cache.Set("k", new byte[] { 1 }, new MemoryCacheEntryOptions { Size = 1, AbsoluteExpiration = batchEnd });
+
+        Assert.True(cache.Cache.TryGetValue("k", out _));
+        time.Advance(TimeSpan.FromMinutes(59));
+        Assert.True(cache.Cache.TryGetValue("k", out _));
+        time.Advance(TimeSpan.FromMinutes(1));
         Assert.False(cache.Cache.TryGetValue("k", out _));
     }
 
