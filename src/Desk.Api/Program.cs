@@ -29,6 +29,7 @@ builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), 
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddHostedService<AuditWriter>();
+builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<MetaRepository>();
 builder.Services.AddSingleton<PresetRepository>();

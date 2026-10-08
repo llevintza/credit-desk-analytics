@@ -1,7 +1,10 @@
 using Desk.Api.Audit;
 using Desk.Data.App;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Npgsql;
@@ -9,7 +12,8 @@ using Npgsql;
 namespace Desk.Api.Tests;
 
 /// <summary>
-/// #114 / ADR-0022: audit rows are kept for <c>AUDIT_RETENTION_DAYS</c> (default 90) and purged on a schedule.
+/// #114 / ADR-0022: audit rows are kept for <c>AUDIT_RETENTION_DAYS</c> (default 90) and purged on a schedule:
+/// after an audit write, and on a timer while nobody writes (#193).
 /// The purge is table-wide, so direct purge tests run on their own migrated database in the same container.
 /// The end-to-end test purges the shared <c>app.audit</c> with a 30-day window on the shared clock: only its own
 /// rows are that old, and its assertions read only its own marked rows.
@@ -118,6 +122,93 @@ public sealed class AuditRetentionTests(PostgresApiFactory api)
         Assert.Equal(1, await retention.PurgeIfDueAsync(db, Ct)); // short batch: done, slot kept
         Assert.Null(await retention.PurgeIfDueAsync(db, Ct));
         Assert.Empty(await RemainingAsync(marker, cs));
+    }
+
+    /// <summary>The services <see cref="AuditPurgeTimer"/> resolves: a pooled factory on <paramref name="cs"/> that counts DELETEs.</summary>
+    private static ServiceProvider Services(string cs, DeleteCounter deletes)
+    {
+        var services = new ServiceCollection();
+        services.AddPooledDbContextFactory<AppDbContext>(o => o
+            .UseNpgsql(cs, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema))
+            .AddInterceptors(deletes));
+        return services.BuildServiceProvider();
+    }
+
+    private sealed class DeleteCounter : DbCommandInterceptor
+    {
+        private int _count;
+        public int Count => Volatile.Read(ref _count);
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command, CommandEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.TrimStart().StartsWith("DELETE", StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref _count);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task A_cold_backlog_drains_in_batches_on_a_timer_tick_with_no_writes()
+    {
+        var cs = await IsolatedDatabaseAsync();
+        var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(now);
+        var retention = new AuditRetention(new ConfigurationBuilder().Build(), time, NullLogger<AuditRetention>.Instance) { BatchSize = 2 };
+        var marker = await InsertAsync(cs, [.. Enumerable.Range(91, 7).Select(d => now - TimeSpan.FromDays(d)), now]);
+        var deletes = new DeleteCounter();
+        await using var sp = Services(cs, deletes);
+        var logger = new AuditPurgeTimerTests.CapturingLogger();
+        using var timer = AuditPurgeTimerTests.Timer(sp, retention, time, logger);
+
+        await timer.StartAsync(Ct);
+        time.Advance(timer.CheckEvery); // one tick, no audit write anywhere
+        await AuditPurgeTimerTests.WaitForAsync(() => logger.Lines.Any(l => l.Text.StartsWith("Purged 7 ")), logger);
+        await timer.StopAsync(Ct);
+
+        Assert.Equal([now], await RemainingAsync(marker, cs));
+        Assert.Equal(4, deletes.Count); // 2 + 2 + 2 + 1, each its own statement and commit, all in one tick
+    }
+
+    [Fact]
+    public async Task While_nobody_writes_the_timer_purges_once_a_day_and_checks_without_the_database()
+    {
+        var cs = await IsolatedDatabaseAsync();
+        var start = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        var time = new FakeTimeProvider(start);
+        var retention = AuditTests.Retention(time: time);
+        var deletes = new DeleteCounter();
+        await using var sp = Services(cs, deletes);
+        var logger = new AuditPurgeTimerTests.CapturingLogger();
+        using var timer = AuditPurgeTimerTests.Timer(sp, retention, time, logger);
+        await timer.StartAsync(Ct);
+
+        time.Advance(timer.CheckEvery); // first check: due, nothing to delete
+        await AuditPurgeTimerTests.WaitForAsync(() => logger.Lines.Count == 1);
+
+        // A row ages past the window during the idle day. The hourly checks before the day is up don't purge.
+        var marker = await InsertAsync(cs, time.GetUtcNow() - TimeSpan.FromDays(90) + TimeSpan.FromHours(12));
+        for (var h = 1; h < 24; h++) time.Advance(timer.CheckEvery);
+        await Task.Delay(200, Ct);
+        Assert.Single(await RemainingAsync(marker, cs));
+        Assert.Single(logger.Lines);
+        var deletesBefore = deletes.Count;
+
+        time.Advance(timer.CheckEvery); // 24 h after the last purge: due again
+        await AuditPurgeTimerTests.WaitForAsync(() => logger.Lines.Count == 2);
+        await timer.StopAsync(Ct);
+
+        Assert.Empty(await RemainingAsync(marker, cs));
+        Assert.Equal(deletesBefore + 1, deletes.Count);
+        Assert.StartsWith("Purged 1 ", logger.Lines[1].Text);
+    }
+
+    [Fact]
+    public void The_app_runs_the_idle_timer_next_to_the_writer()
+    {
+        var hosted = api.Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
+        Assert.Single(hosted.OfType<AuditWriter>());
+        Assert.Equal(TimeSpan.FromMinutes(AuditPurgeTimer.DefaultCheckMinutes), Assert.Single(hosted.OfType<AuditPurgeTimer>()).CheckEvery);
     }
 
     [Fact]
