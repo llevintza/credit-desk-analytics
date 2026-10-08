@@ -235,7 +235,8 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | trade | 150,000 × ~100 B | ~15 MB (+ indexes ≈ 8 MB) |
 | surveillance / pricing / market | ~60 MB total | ~60 MB |
 | deal, bond, reference, app | small | < 10 MB |
-| **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
+| app.audit (90 days, `AUDIT_RETENTION_DAYS`) | 90 × audit rows/day × ~193 B (heap + PK + `IX_audit_at`) | ~17 MB per 1,000 rows/day; break-even with the 350 MB budget at ~4,500 rows/day (ADR-0022) |
+| **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
 
@@ -515,6 +516,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
@@ -823,7 +825,7 @@ services:
 6. **workflows:** actionlint + shellcheck
 7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
 8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**.
-9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10).
+9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10). Then `perf/LastBlockCheck` (#43 AC4): with ≥ 18,000 rows, the final 500 ids of the Risk view sorted by `market_value` desc and every summary SUM must equal independent SQL. Any mismatch exits 1 and fails the job.
 10. **e2e:** the compose stack (with `e2e/docker-compose.e2e.yml`: higher per-user limits for one automated user) migrated and seeded at scale 0.2, a throwaway viewer (generated, masked password), then Playwright: log in, the P1 acceptance flows, no console or CSP errors, and dark/light screenshots of every page. The report and screenshots are uploaded as artifacts.
 
 **Per-area runs (#169, [ADR-0023](docs/adr/0023-per-area-ci-jobs.md)):** on `pull_request`, a `changes` job runs `.github/scripts/ci-changes.mjs` **from the BASE_SHA checkout** over `git diff --name-only --no-renames BASE...HEAD` and sets one flag per area. Docs (`*.md` anywhere except under `src/` and `web/src/`, where only `AGENTS.md`/`CLAUDE.md` count; `docs/**`; `.claude/skills/**`) set none. Shared triggers (`.github/**` other than Markdown, `Directory.*.props`, `global.json`, `dotnet-tools.json`, `*.sln`/`*.slnx`, lockfiles, Docker/compose files, `perf/coverage-*`, `tests/testconfig.json`, `.gitleaks.toml`), any path that matches no area, and an empty diff set every flag.
@@ -836,7 +838,7 @@ services:
 | `app` | `deploy/**`, `e2e/**`, `render.yaml`, plus any `api`, `web` or `db` change | `compose-smoke`, `e2e`, `budgets` |
 | `perf` | `perf/**` | `budgets` |
 
-`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
+`secrets`, `workflows` and `gate-tests` always run. Jobs are skipped by a job-level `if:` (never a workflow-level `paths` filter), so a skipped job keeps its exact name and still reports. A job skips only when its flag is exactly `false`: on `push` to `main`, on a base without the classifier, or when `changes` fails, the flags are empty and **every job runs**. Such a skip is not a "skipped" suite under gate clause 1; any other skip is (Code Reviewer checks the `changes` job summary). Clause 1 still applies in full to every job that runs. `coverage` passes `--suites` with the suites that ran; a suite that did not run is skipped by the gate, not passed on stale data, and a suite that ran without coverage data, or a skipped suite whose sources changed, fails closed.
 
 Nothing deploys from PR branches. `deploy.yml` additionally refuses a `workflow_run` unless the triggering CI run was a **`push` to `main` on this repository**, and refuses `workflow_dispatch` unless the ref is exactly `refs/heads/main` (case-sensitive bash; GitHub `==` is not). A PR whose head branch is named `main` is not a deploy. The SHA being deployed **MUST** equal the current tip of `main`, so re-running an old CI or deploy run cannot roll production back.
 
@@ -893,7 +895,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
@@ -935,7 +937,7 @@ The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisor
 
 Tech Coordinator merges and starts the next phase. Don't start the next phase yourself.
 
-Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary.
+Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 
 ---
 
@@ -958,7 +960,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |
