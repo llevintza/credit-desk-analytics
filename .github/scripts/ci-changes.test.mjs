@@ -391,28 +391,89 @@ test("every solution project maps to the api job (or every flag)", () => {
   assert.deepEqual(areasFor("perf/payload-size.mjs"), ["perf"]);
 });
 
-// Any job that needs a job that can be skipped must say how it handles the skip (R173-07):
-// without `!cancelled()` it is skipped silently whenever a needed job is skipped.
-test("ci.yml: every job that needs a skippable job has an explicit !cancelled() if", () => {
-  const SKIPPABLE = new Set(["changes", ...Object.values(JOB_IDS)]);
-  const ids = [...CI.slice(CI.indexOf("\njobs:")).matchAll(/^  ([a-z][\w-]*):$/gm)].map((m) => m[1]);
-  assert.ok(ids.length >= 11, ids.join(","));
+// Any job that needs a job that can be skipped must say how it handles the skip (R173-07,
+// R173-12): without a job-level `!cancelled()` it is skipped silently whenever a needed job is.
+const SKIPPABLE = new Set(["changes", ...Object.values(JOB_IDS)]);
+
+/** Job ids and their raw blocks, from the `jobs:` section of a workflow. */
+function workflowJobs(yml) {
+  const lines = yml.slice(yml.indexOf("\njobs:\n") + 7).split("\n");
+  const jobs = new Map();
+  let current = null;
+  for (const line of lines) {
+    const head = /^  ([A-Za-z_][\w-]*):\s*$/.exec(line);
+    if (head) jobs.set((current = head[1]), []);
+    else if (/^\S/.test(line)) break;
+    else if (current) jobs.get(current).push(line);
+  }
+  return [...jobs].map(([id, body]) => [id, body]);
+}
+
+/** `needs:` in inline (`x`, `[a, b]`) or block-list form; anything else fails, never skips. */
+function jobNeeds(id, body) {
+  const at = body.findIndex((l) => /^    needs:/.test(l));
+  if (at < 0) return [];
+  const value = body[at].replace(/^    needs:/, "").trim();
+  if (/^\[[^\]]*\]$/.test(value)) return value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+  if (/^[\w-]+$/.test(value)) return [value];
+  if (value === "") {
+    const items = [];
+    for (const l of body.slice(at + 1)) {
+      const item = /^      - ([\w-]+)\s*$/.exec(l);
+      if (!item) break;
+      items.push(item[1]);
+    }
+    if (items.length) return items;
+  }
+  assert.fail(`${id}: unparsed needs: ${body[at]}`);
+}
+
+/** The job-level `if:` only (plus folded continuation lines), never a step-level one or a comment. */
+function jobIf(body) {
+  const at = body.findIndex((l) => /^    if:/.test(l));
+  if (at < 0) return "";
+  const out = [body[at].replace(/^    if:/, "")];
+  for (const l of body.slice(at + 1)) {
+    if (!/^      /.test(l)) break;
+    out.push(l);
+  }
+  return out.join("\n");
+}
+
+function checkSkippableDependents(yml) {
   let dependents = 0;
-  for (const id of ids) {
-    const block = jobBlock(id);
-    const m = /^    needs: (?:\[([^\]]*)\]|(\S+))$/m.exec(block);
-    if (!m) continue;
-    const needs = (m[1] ?? m[2]).split(",").map((s) => s.trim()).filter(Boolean);
-    const skippable = needs.filter((n) => SKIPPABLE.has(n));
+  for (const [id, body] of workflowJobs(yml)) {
+    const skippable = jobNeeds(id, body).filter((n) => SKIPPABLE.has(n));
     if (!skippable.length) continue;
     dependents++;
-    assert.ok(block.includes("!cancelled()"), `${id} needs [${skippable}] but has no !cancelled() if`);
+    const cond = jobIf(body);
+    assert.ok(cond.includes("!cancelled()"), `${id} needs [${skippable}] but its job-level if has no !cancelled()`);
     for (const n of skippable.filter((x) => x !== "changes")) {
       assert.ok(
-        block.includes(`contains(fromJSON('["success", "skipped"]'), needs.${n}.result)`),
-        `${id} must accept success or skipped (and nothing else) from ${n}`,
+        cond.includes(`contains(fromJSON('["success", "skipped"]'), needs.${n}.result)`),
+        `${id} must accept success or skipped (and nothing else) from ${n} in its job-level if`,
       );
     }
   }
-  assert.ok(dependents >= 7, `checked ${dependents} dependent jobs`);
+  return dependents;
+}
+
+test("ci.yml: every job that needs a skippable job has an explicit !cancelled() if", () => {
+  assert.ok(workflowJobs(CI).length >= 11);
+  assert.ok(checkSkippableDependents(CI) >= 7);
+});
+
+test("dependency checker: block-list needs, step-level ifs and comments do not pass", () => {
+  const wf = (job) => `name: x\non: push\njobs:\n  api:\n    runs-on: ubuntu-latest\n${job}`;
+  const blockList = "  summary:\n    runs-on: ubuntu-latest\n    needs:\n      - api\n    steps:\n      - run: echo\n";
+  assert.throws(() => checkSkippableDependents(wf(blockList)), /summary needs \[api\]/);
+  const stepIf =
+    "  summary:\n    needs: [api]\n    # !cancelled() contains(fromJSON('[\"success\", \"skipped\"]'), needs.api.result)\n" +
+    "    steps:\n      - if: ${{ !cancelled() && contains(fromJSON('[\"success\", \"skipped\"]'), needs.api.result) }}\n        run: echo\n";
+  assert.throws(() => checkSkippableDependents(wf(stepIf)), /summary needs \[api\]/);
+  const good =
+    "  summary:\n    needs:\n      - api\n    if: >-\n      ${{ !cancelled()\n      && contains(fromJSON('[\"success\", \"skipped\"]'), needs.api.result) }}\n    steps:\n      - run: echo\n";
+  assert.equal(checkSkippableDependents(wf(good)), 1);
+  assert.throws(() => checkSkippableDependents(wf("  summary:\n    needs: ${{ fromJSON('[]') }}\n")), /summary: unparsed needs/);
+  assert.throws(() => checkSkippableDependents(wf("  summary:\n    needs:\n    steps: []\n")), /summary: unparsed needs/);
 });
