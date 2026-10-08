@@ -298,6 +298,8 @@ public sealed class AuthTests(PostgresApiFactory api)
 
         var without = await client.PostAsync("/api/auth/logout", null, Ct);
         Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        // The SPA's XSRF refresh (#233) tells this 400 from the others by its title.
+        Assert.Equal("Missing or invalid antiforgery token", (await without.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
 
         using var forged = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");

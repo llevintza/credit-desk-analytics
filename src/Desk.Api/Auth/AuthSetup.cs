@@ -57,6 +57,7 @@ public static class AuthSetup
             .AddSignInManager<DeskSignInManager>();
         // Scoped like the hasher it verifies through, so a test's counting hasher sees the decoy checks too.
         services.AddScoped<TimingGuard>();
+        services.AddSingleton(LoginFloorOptions.Default);
 
         services.AddAuthentication(IdentityConstants.ApplicationScheme)
             .AddCookie(IdentityConstants.ApplicationScheme, ConfigureCookie)

@@ -1,18 +1,22 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using Desk.Api.Auth;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
 /// <summary>
-/// R105-F2 (#118): every login attempt runs exactly one PBKDF2 verification, whatever the account's state, so the
-/// response time doesn't reveal whether an email is a real account. Counted through the app's own hasher.
+/// R105-F2 (#118): every login attempt runs exactly one PBKDF2 verification, whatever the account's state. Counted
+/// through the app's own hasher. #230: the DB work still differs per state, so every failed login also answers after
+/// the same floor; that runs on a fake clock that records each wait.
 /// </summary>
 [Collection(ApiCollection.Name)]
 public sealed class LoginTimingTests(PostgresApiFactory api)
@@ -70,6 +74,105 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
             Assert.NotNull((await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).LockoutEnd);
         }
     }
+
+    [Theory]
+    [InlineData(LoginPath.UnknownEmail)]
+    [InlineData(LoginPath.MissingEmail)]
+    [InlineData(LoginPath.WrongPassword)]
+    [InlineData(LoginPath.EmptyPassword)]
+    [InlineData(LoginPath.MissingPassword)]
+    [InlineData(LoginPath.Locked)]
+    [InlineData(LoginPath.LockedWithTheRightPassword)]
+    [InlineData(LoginPath.Disabled)]
+    [InlineData(LoginPath.Expired)]
+    [InlineData(LoginPath.NoStoredPassword)]
+    [InlineData(LoginPath.TriggersLockout)]
+    public async Task Every_failed_login_answers_after_the_floor(LoginPath path)
+    {
+        var clock = new FloorClock(api.Time.GetUtcNow());
+        await using var host = WithFloor(clock);
+        var (email, password) = await ArrangeAsync(path);
+
+        await AssertWaitsTheFloorAsync(clock, PostgresApiFactory.NewClient(host).PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password), Ct));
+    }
+
+    [Theory]
+    [InlineData("/api/auth/login/")]
+    [InlineData("/API/AUTH/LOGIN/")]
+    [InlineData("/Api/Auth/Login")]
+    public async Task Every_spelling_routing_accepts_for_login_waits_the_floor(string route)
+    {
+        // R279-01: routing matches a trailing slash in any casing, so the floor follows the endpoint, not the path.
+        var clock = new FloorClock(api.Time.GetUtcNow());
+        await using var host = WithFloor(clock);
+        var user = await api.CreateUserAsync();
+
+        await AssertWaitsTheFloorAsync(clock, PostgresApiFactory.NewClient(host).PostAsJsonAsync(route, new LoginRequest(user.Email, "not-the-password"), Ct));
+    }
+
+    /// <summary>The login is not answered one tick before its floor wait ends, and is a 401 once it has.</summary>
+    private static async Task AssertWaitsTheFloorAsync(FloorClock clock, Task<HttpResponseMessage> pending)
+    {
+        var wait = Assert.Single(await clock.FloorWaitsAsync(1));
+        Assert.InRange(wait, LoginFloorOptions.Default.Floor, LoginFloorOptions.Default.Floor + LoginFloorOptions.Default.MaxJitter);
+        clock.Advance(wait - TimeSpan.FromTicks(1));
+        Assert.False(pending.IsCompleted);
+        clock.Advance(TimeSpan.FromTicks(1));
+        var res = await pending.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Contains(AuthEndpoints.LoginFailedDetail, await res.Content.ReadAsStringAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_successful_login_is_not_delayed()
+    {
+        var clock = new FloorClock(api.Time.GetUtcNow());
+        await using var host = WithFloor(clock);
+        var user = await api.CreateUserAsync();
+
+        // The clock never moves: a floor on this path would never let it finish.
+        var res = await PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), user.Email!).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Empty(clock.FloorWaits);
+    }
+
+    [Fact]
+    public async Task Failed_logins_waiting_for_the_floor_hold_no_database_permit()
+    {
+        // One permit and one queue slot for all of /api: a wait inside the limiter would queue the second login and
+        // turn the third away with a 429.
+        var clock = new FloorClock(api.Time.GetUtcNow());
+        await using var host = WithFloor(clock, ("RATE_LIMIT_GLOBAL_CONCURRENCY", "1"), ("RATE_LIMIT_GLOBAL_QUEUE", "1"));
+        var client = PostgresApiFactory.NewClient(host);
+
+        var waiting = new List<Task<HttpResponseMessage>>();
+        for (var i = 1; i <= 9; i++)
+        {
+            waiting.Add(PostgresApiFactory.PostLoginAsync(client, $"nobody-{Guid.NewGuid():N}@example.com"));
+            await clock.FloorWaitsAsync(i);
+        }
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct)).StatusCode);
+        Assert.DoesNotContain(waiting, t => t.IsCompleted);
+
+        clock.Advance(LoginFloorOptions.Default.Floor + LoginFloorOptions.Default.MaxJitter);
+        foreach (var res in await Task.WhenAll(waiting).WaitAsync(TimeSpan.FromSeconds(30), Ct))
+            Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    /// <summary>A host on its own clock, with the production floor the shared fixture turns off.</summary>
+    private WebApplicationFactory<Program> WithFloor(FloorClock clock, params (string Key, string Value)[] settings) =>
+        api.WithWebHostBuilder(b =>
+        {
+            foreach (var (key, value) in settings) b.UseSetting(key, value);
+            b.ConfigureTestServices(s =>
+            {
+                s.RemoveAll<TimeProvider>();
+                s.AddSingleton<TimeProvider>(clock);
+                s.RemoveAll<LoginFloorOptions>();
+                s.AddSingleton(LoginFloorOptions.Default);
+            });
+        });
 
     private async Task<(string? Email, string? Password)> ArrangeAsync(LoginPath path)
     {
@@ -194,6 +297,32 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
         Assert.Equal(Convert.FromBase64String(real.HashPassword(new DeskUser(), PostgresApiFactory.Password)).Length, Convert.FromBase64String(decoy).Length);
         Assert.Equal(PasswordVerificationResult.Failed, real.VerifyHashedPassword(new DeskUser(), decoy, PostgresApiFactory.Password));
         Assert.Equal(PasswordVerificationResult.Failed, real.VerifyHashedPassword(new DeskUser(), decoy, ""));
+    }
+
+    /// <summary>A fake clock that records every wait the size of the login floor (other timers run for minutes or hours).</summary>
+    private sealed class FloorClock(DateTimeOffset start) : FakeTimeProvider(start)
+    {
+        private readonly ConcurrentQueue<TimeSpan> _waits = new();
+
+        public TimeSpan[] FloorWaits => [.. _waits];
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            // Recorded once the timer is armed, so a test that sees it can advance past it.
+            if (dueTime > TimeSpan.Zero && dueTime <= LoginFloorOptions.Default.Floor + LoginFloorOptions.Default.MaxJitter)
+                _waits.Enqueue(dueTime);
+            return timer;
+        }
+
+        /// <summary>Waits (bounded, in real time) until <paramref name="count"/> floor waits have started.</summary>
+        public async Task<TimeSpan[]> FloorWaitsAsync(int count)
+        {
+            for (var i = 0; i < 600 && _waits.Count < count; i++)
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.True(_waits.Count >= count, $"{_waits.Count} of {count} logins reached the floor.");
+            return FloorWaits;
+        }
     }
 
     /// <summary>The app's hasher, counting each PBKDF2 run.</summary>

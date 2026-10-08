@@ -563,7 +563,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan`, #192), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
@@ -981,7 +981,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
 | 5 Fund Performance | n/a | Not started |

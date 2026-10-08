@@ -1,4 +1,6 @@
 using Desk.Data.App.Migrations;
+using Desk.Data.Catalog;
+using Desk.Data.Grid;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 
 namespace Desk.Data.Tests;
@@ -19,5 +21,41 @@ public sealed class MigrationTests
         Assert.Equal(up.Count, down.Count); // else Assert.All(down, …) passes on an empty Down
         Assert.All(down, sql => Assert.StartsWith("DROP INDEX IF EXISTS core.ix_snapshot_sort_", sql));
         Assert.Equal(SnapshotSortIndexes.SortColumns, up.Select(sql => sql.Split(' ')[5]["ix_snapshot_sort_".Length..]));
+    }
+
+    [Fact]
+    public void The_NaN_checks_cover_exactly_the_summarised_columns()
+    {
+        // #192: every column the summary row SUMs or weights, plus the weight itself. A new measure in the catalog fails
+        // this until a new migration guards it (the frozen lists here must not change once applied).
+        var summarised = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation != Aggregation.None).ToList();
+        Assert.Equal(summarised.Where(c => c.SqlType == "numeric(18,2)").Select(c => c.Name), SnapshotNanChecks.NumericMeasures);
+        Assert.Equal(summarised.Where(c => c.SqlType == "double precision").Select(c => c.Name), SnapshotNanChecks.Float8Measures);
+        Assert.Equal(summarised.Count, SnapshotNanChecks.NumericMeasures.Length + SnapshotNanChecks.Float8Measures.Length);
+        Assert.Contains(GridSqlBuilder.WeightColumn, SnapshotNanChecks.NumericMeasures);
+    }
+
+    [Fact]
+    public void The_NaN_check_migration_is_rerun_safe_and_names_every_constraint_alike()
+    {
+        var migration = new SnapshotNanChecks();
+        var up = Assert.Single(migration.UpOperations.OfType<SqlOperation>()).Sql;
+        var down = Assert.Single(migration.DownOperations.OfType<SqlOperation>()).Sql;
+        var columns = SnapshotNanChecks.NumericMeasures.Concat(SnapshotNanChecks.Float8Measures).ToList();
+
+        Assert.StartsWith("ALTER TABLE core.position_snapshot\n", up);
+        Assert.StartsWith("ALTER TABLE core.position_snapshot\n", down);
+        foreach (var c in columns)
+        {
+            var name = SnapshotNanChecks.ConstraintName(c);
+            Assert.Equal($"ck_snapshot_{c}_not_nan", name);
+            Assert.True(name.Length <= 63, name); // Postgres truncates longer identifiers
+            var type = SnapshotNanChecks.NumericMeasures.Contains(c) ? "numeric" : "float8";
+            Assert.Contains($"DROP CONSTRAINT IF EXISTS {name}, ADD CONSTRAINT {name} CHECK ({c} <> 'NaN'::{type})", up);
+            Assert.Contains($"DROP CONSTRAINT IF EXISTS {name}", down);
+        }
+        Assert.Equal(columns.Count, up.Split("ADD CONSTRAINT").Length - 1);
+        Assert.Equal(columns.Count, down.Split("DROP CONSTRAINT IF EXISTS").Length - 1);
+        Assert.DoesNotContain("ADD CONSTRAINT", down);
     }
 }
