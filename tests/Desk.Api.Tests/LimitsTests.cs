@@ -544,6 +544,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var res = await client.SendAsync(Export(xsrf, "deal_name"), Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
         Assert.Equal("Export timed out", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+        Assert.Null(res.Content.Headers.ContentDisposition); // a problem, not a file
+        Assert.False(res.Headers.Contains("Retry-After"));  // the same export would time out again
         var gate = host.Services.GetRequiredService<ExportGate>();
         Assert.False(gate.IsRunning(user.Email!));
         Assert.Equal(0, gate.Running);

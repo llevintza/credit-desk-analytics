@@ -143,8 +143,12 @@ public static class PositionsEndpoints
             loggers.CreateLogger(typeof(PositionsEndpoints)).LogWarning(
                 "Export for {User} stopped at its {Seconds} s deadline", user, limits.ExportTimeout.TotalSeconds);
             if (!http.Response.HasStarted)
+            {
+                // Not a file any more. No Retry-After: the same export would hit the same deadline.
+                http.Response.Headers.Remove(HeaderNames.ContentDisposition);
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Export timed out",
                     detail: "Narrow the filter or the columns and try again.");
+            }
             // Part of the file is already sent: break the connection so the download fails instead of ending as a
             // CSV that looks complete.
             http.Abort();

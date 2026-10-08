@@ -94,7 +94,7 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - `ExportGate` allows one export per user and `EXPORT_GLOBAL_SLOTS` (default 2) in total, both without waiting. Either limit answers 429 with `Retry-After`.
   - Exports can never take every database permit from interactive reads.
 - **Export deadline:** `EXPORT_TIMEOUT_SECONDS` (default 60; a value that isn't positive or is above 3600 falls back to 60) bounds the whole stream, including a slow reader's TCP backpressure. The command timeout doesn't bound reading a streamed result.
-  - Before any output, the export answers 503. Mid-stream, it aborts the connection, so a truncated download fails instead of ending like a complete CSV.
+  - Before any output, the export answers 503, without the file's `Content-Disposition` and without `Retry-After`: the same export would hit the same deadline, so the problem says to narrow it instead. Mid-stream, it aborts the connection, so a truncated download fails instead of ending like a complete CSV.
   - On deadline or client cancel, the stream's connection is disposed and both export slots are released in `finally`. The deadline is armed before the slots are taken, so nothing can throw between taking them and that `finally`.
 - **Cold meta load:** the four reference reads run one after another, so the request that loads the snapshot holds one connection under its one permit. In parallel, they held up to four connections under one permit.
 
