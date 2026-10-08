@@ -39,6 +39,10 @@ public sealed class DeskSignInManager(
     /// metric: its recorder is internal to <see cref="SignInManager{TUser}"/>. The base's logging is kept
     /// (<see cref="SignInManager{TUser}.LockedOut"/> on the attempt that triggers lockout).
     /// </para>
+    /// <para>
+    /// An account with no stored password fails without counting toward lockout (the base increments the count).
+    /// Such an account can never sign in with a password, so there is nothing to lock it out of.
+    /// </para>
     /// </remarks>
     public override async Task<SignInResult> CheckPasswordSignInAsync(DeskUser user, string password, bool lockoutOnFailure)
     {
