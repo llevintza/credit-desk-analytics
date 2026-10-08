@@ -3,6 +3,12 @@
     <h1 id="login-title">Credit Desk Analytics</h1>
     <p class="muted">Invite-only. Sign in with the account you were given.</p>
 
+    @if (signoutUnconfirmed) {
+      <div class="banner" role="alert" data-testid="signout-unconfirmed">
+        Sign-out couldn't be confirmed with the server. Your session may stay active on this device until it expires:
+        close the browser, or sign in and sign out again.
+      </div>
+    }
     @if (maintenance()) {
       <div class="banner" role="status" data-testid="maintenance">Down for maintenance: data is unavailable for now.</div>
     }

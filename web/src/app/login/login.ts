@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { AuthService } from '../core/auth.service';
 import { HealthService } from '../core/health.service';
 
@@ -31,6 +31,8 @@ export class Login {
     return s.kind === 'ready' && s.maintenance;
   });
   protected readonly unreachable = computed(() => this.api().kind === 'unreachable');
+  /** Shell's logout failed with a 403, 5xx or network error: the server session may still be alive (#208). */
+  protected readonly signoutUnconfirmed = inject(ActivatedRoute).snapshot.queryParamMap.get('signout') === 'unconfirmed';
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
 
