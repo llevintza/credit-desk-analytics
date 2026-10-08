@@ -148,10 +148,11 @@ credit-desk-analytics/
 │  └─ Desk.UserAdmin/        ← CLI: add/list/disable/reset accounts (prints a generated password once)
 ├─ tests/
 │  ├─ Desk.Api.Tests/        ← integration tests on Testcontainers Postgres
-│  └─ Desk.Data.Tests/       ← query-builder and whitelist unit tests
+│  ├─ Desk.Data.Tests/       ← query-builder and whitelist unit tests (phase 3)
+│  └─ Desk.Seeder.Tests/     ← generator unit tests + Testcontainers seeding tests
 ├─ web/                      ← Angular 22 workspace (app + Vitest unit tests)
 ├─ e2e/                      ← Playwright tests + screenshot specs
-├─ perf/                     ← k6 scripts, payload-size script, results/ (committed summaries only)
+├─ perf/                     ← LoadBenchmark (ADR-0004), k6 scripts, payload-size script
 ├─ deploy/
 │  ├─ Dockerfile             ← multi-stage: node build web → dotnet publish → runtime image
 │  └─ start.sh               ← env check → exec app (no migrations at boot)
@@ -193,7 +194,7 @@ In production all six settings point at the same Neon database (`DATABASE_URL`) 
 | `core.position_snapshot` | **20,000 per as-of date**, **2 as-of dates** (today and the prior business day) | **wide, about 200 columns**, see 5.3 |
 | `core.position_history` | about 24 month-ends × 20,000 | **narrow**: as_of_date, position_id, market_value, face, price, spread, dv01, cs01, wal, pnl_mtd |
 | `core.trade` | ~150,000 over 2 years | trade_id, bond_id, portfolio_id, trade_ts `timestamptz` (realistic intraday times), side, face, price, counterparty_id, trader |
-| `core.fund_performance` | 36–60 months per fund | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
+| `core.fund_performance` | about 40–70 months per fund (from each fund's inception through the month before as-of) | fund_id, as_of_month (month-end `date`), nav `numeric(18,2)`, balance, irr_itd, irr_ytd, net_flows |
 
 **Deliberate edge cases the seed MUST include** (tests depend on them):
 - at least **3 deals with zero bonds** (newly announced, pricing pending)
@@ -236,11 +237,33 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | deal, bond, reference, app | small | < 10 MB |
 | **Total** | | **≈ 250 MB, which MUST stay < 350 MB** |
 
-The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB.
+The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
+
+**Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` before it truncates. Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed. The first deploy after this PR starts from empty phase-1 tables, so the peak is about the committed size (~271 MB) plus WAL.
+
+**Measured (phase 1, scale 1.0, SEED=42, Postgres 17, linux-x64):**
+- **1,563,791 rows** across 20 tables.
+- First `--if-changed` on an empty migrated DB: `DB_SIZE_MB=270`, `ELAPSED_S=11.1` (generate+load 10.5 s).
+- Forced reseed: `DB_SIZE_MB=271`, `ELAPSED_S=11.5`; peak `pg_database_size` during the transaction **533.8 MB**.
+- The snapshot is **202 columns**.
+- The total book is about $6.9B market value across 20,001 positions.
+
+See ADR-0003 and ADR-0004.
 
 ### 5.5 Seeder requirements
 
-- A .NET console app (`src/Desk.Seeder`). Options: `--seed`, `--as-of`, `--scale` (0.1 for tests, 1.0 for the default), `--drop`.
+- A .NET console app (`src/Desk.Seeder`). Options:
+  - `--seed` (default 42)
+  - `--as-of yyyy-MM-dd` (default: the last business day)
+  - `--scale` (0.1 for tests, 1.0 default)
+  - **exactly one mode is required** (no mode exits 1, because a reseed truncates every seeded table):
+    - `--if-changed`: skip when the version, seed and scale match `app.seed_metadata` (what the deploy pipeline uses)
+    - `--force`: always reseed (`db-ops` reseed)
+    - `--size-report`
+  - `--max-mb`
+- The prior business day is generated as the snapshot's second as-of date.
+- **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
+- **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
 - **Realism:**
@@ -913,7 +936,7 @@ Tech Coordinator merges and starts the next phase. Don't start the next phase yo
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up (this PR): push-mode floor from BASE_SHA + bootstrap cleanup |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | In review |
