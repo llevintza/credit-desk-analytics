@@ -515,7 +515,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
-- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted at most once a day, right after an audit insert, so the purge never wakes the database on its own (ADR-0022).
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
