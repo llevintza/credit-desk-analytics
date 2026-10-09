@@ -87,7 +87,60 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
 
 **Database touches (free tier)**
 - The cookie is decrypted only on paths that use a session: `/api`, `/swagger` and `/openapi`. `/health` and the SPA never load the key ring or run the security-stamp query, even when the browser sends the cookie, so maintenance mode and platform probes stay at zero connections (asserted).
-- Every `/api` request passes a chained limiter: the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+- Every `/api` request passes a chained limiter: the caller's concurrency (amended in #127, below), the caller's token bucket, then one shared concurrency limiter (8, queue 32). Login is included, and new endpoints can't forget to opt in.
+  - Concurrency comes before the token bucket because a spent token is never given back. The middleware tries a synchronous acquire before it queues, so with the bucket first, a request that queues behind its own user would pay two tokens.
+
+**Availability per user and for exports** (amended in #127)
+- **Per-user concurrency:** one request in flight per signed-in user (`RATE_LIMIT_PER_USER_CONCURRENCY`, default 1), with a queue of 8 (`RATE_LIMIT_PER_USER_QUEUE`), then 429.
+  - Anonymous callers (login, a signed-out `/api/me`) don't pass it. They are already bounded by their token bucket, the per-IP login window and the shared limiter. Keyed per IP, one permit would be shared by every anonymous caller whenever the client address resolves to one key (#165), and about 10 concurrent requests would turn every login into a 429.
+  - It sits before the shared limiter. A request waiting for its caller's turn holds no database permit, so one busy user can't fill the shared 8.
+  - The queue is 8, not 1 or 2, because the SPA's first paint fans out about 5 requests at once (session, portfolios, presets, first blocks). Those queue behind each other rather than failing.
+- **Exports are capped separately**, not by the per-user limiter. Counted there, a running export would block its owner's grid for up to the export deadline.
+  - `ExportGate` allows one export per user and `EXPORT_GLOBAL_SLOTS` (default 2) in total, both without waiting. Either limit answers 429 with `Retry-After`.
+  - Exports can never take every database permit from interactive reads.
+- **Export deadline:** `EXPORT_TIMEOUT_SECONDS` (default 60; a value that isn't positive or is above 3600 falls back to 60) bounds the whole stream, including a slow reader's TCP backpressure. The command timeout doesn't bound reading a streamed result.
+  - Before any output, the export answers 503, without the file's `Content-Disposition` and without `Retry-After`: the same export would hit the same deadline, so the problem says to narrow it instead. Mid-stream, it aborts the connection, so a truncated download fails instead of ending like a complete CSV.
+  - On deadline or client cancel, the stream's connection is disposed and both export slots are released in `finally`. The deadline is armed before the slots are taken, so nothing can throw between taking them and that `finally`.
+- **Cold meta load:** the four reference reads run one after another, so the request that loads the snapshot holds one connection under its one permit. In parallel, they held up to four connections under one permit.
+
+| Measurement (local, Release, seed 42 at scale 1.0, 2 rounds) | Before (`main` 7cbacc7) | After |
+|---|---|---|
+| Cold meta load, `db` p50 / p95 (200 loads per round) | 5.3 / 12.7 ms; 4.8 / 9.5 ms | 8.9 / 16.0 ms; 6.3 / 22.2 ms |
+| `GET /api/me` with a session, p50 / p95 (1,000 requests per round) | 1.60 / 3.34 ms; 1.61 / 2.79 ms | 1.53 / 2.01 ms; 1.49 / 2.79 ms |
+
+- The sequential cold load costs about 1.5–3.6 ms at p50. It happens at most once per revalidation (10 min) or after a cache clear, and buys one connection per permit.
+- The extra limiter on every request is within noise.
+
+```
+# local stack only (two local API processes on one local database; admin account created locally)
+BASE_URL=http://localhost:5183 DESK_EMAIL=… DESK_PASSWORD=… node perf/meta-cold-load.mjs 200
+cold meta loads: 200  db p50 5.30 ms  p95 12.70 ms  max 68.30 ms     # before, round 1
+BASE_URL=http://localhost:5184 DESK_EMAIL=… DESK_PASSWORD=… node perf/meta-cold-load.mjs 200
+cold meta loads: 200  db p50 8.90 ms  p95 16.00 ms  max 84.70 ms     # after, round 1
+BASE_URL=http://localhost:518x DESK_EMAIL=… DESK_PASSWORD=… node perf/auth-overhead.mjs 1000
+```
+
+**P1 first paint with one request in flight per user** (README §10: first rows painted < 1.0 s warm). The SPA's first paint (session, as-of and portfolios, columns and presets, the first blocks) now queues per user instead of running in parallel. Measured with the ADR-0009 Playwright perf spec (`positions:first-rows` mark, 5 warm navigations per round), 3 alternating rounds per image, on the same local database.
+
+| Local stack (Release images, seed 42 at scale 1.0, one throwaway viewer) | Before (`main` 7d1cafc) | After (this PR) |
+|---|---|---|
+| First rows painted, warm, p50 / p95 / max (15 navigations) | 208 / 308 / 308 ms | 186 / 251 / 251 ms |
+| Per-round medians | 202, 216, 208 ms | 220, 186, 176 ms |
+
+- No measurable cost: the difference is within run-to-run noise, and both are far under the 1.0 s budget. Most first-paint calls are cache hits of a few ms, so serialising them adds little. `RATE_LIMIT_PER_USER_CONCURRENCY` stays at 1.
+- Per-user rate limits were raised for both runs, as in the e2e override (the spec's client-side comparison fetches every block back to back); the per-user concurrency cap stayed at its default of 1.
+
+```
+# local stack only: the app image of each commit on a private docker network with a local, trust-auth Postgres
+# (migrated, seeded --scale 1.0); a viewer created locally with Desk.UserAdmin
+cd e2e && PERF=1 BASE_URL=http://localhost:58174 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test perf
+main  round 1  firstRowsPaintedMs median 202  all 215,188,185,202,247
+pr174 round 1  firstRowsPaintedMs median 220  all 210,231,251,220,194
+main  round 2  firstRowsPaintedMs median 216  all 238,216,197,194,244
+pr174 round 2  firstRowsPaintedMs median 186  all 199,186,187,179,169
+main  round 3  firstRowsPaintedMs median 208  all 229,203,208,308,184
+pr174 round 3  firstRowsPaintedMs median 176  all 181,172,176,173,176
+```
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
 - Every failed login runs the same PBKDF2 work: exactly one verification (#118, R105-F2). The paths are an unknown email, a wrong, empty or missing password, a locked, disabled or expired account, an account with no stored password, and the attempt that triggers lockout (which used to hash twice). `DeskSignInManager.CheckPasswordSignInAsync` checks the account once, then verifies either the stored hash or `TimingGuard`'s decoy, never both. The decoy is a v3 hash with the configured iteration count, verified through the app's own `IPasswordHasher`, so it costs the same as a real check. `LoginTimingTests` counts the verifications per path.
   - **Correction (#230):** this bullet used to say that response time "doesn't reveal which emails exist or what state an account is in". Equal hashing alone doesn't give that. The DB work still differs: a wrong password on an active account runs `AccessFailedAsync` (about 3 more round trips) where an unknown email or a locked, disabled or expired account runs 1 SELECT, and the switch to fast answers after the 5th failure shows that lockout began.
