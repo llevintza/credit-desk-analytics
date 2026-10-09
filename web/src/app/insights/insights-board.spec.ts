@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
+import { AuthService } from '../core/auth.service';
 import { ScopeService } from '../core/scope.service';
 import { ThemeService } from '../core/theme.service';
 import { InsightGrid, InsightSource, InsightsResult } from '../data-access/api.types';
@@ -112,6 +113,13 @@ describe('Insights board (README §6 P3)', () => {
     reqs.forEach((r) => r.flush({ ...result('core'), grids: [grid(r.request.params.get('grid')!)] }));
     await fixture.whenStable();
     expect(el.querySelectorAll('[data-state=ready]')).toHaveLength(20);
+  });
+
+  it('admins get the naive-mode toggle', async () => {
+    const { el, fixture } = await render();
+    TestBed.inject(AuthService).me.set({ email: 'a@example.com', roles: ['admin'], expiresAt: '2099-12-31' });
+    await fixture.whenStable();
+    expect(el.querySelector('[data-testid=naive]')).not.toBeNull();
   });
 
   it('marks when the inputs change and when each source has painted (README §10 P3 budget)', async () => {

@@ -367,10 +367,24 @@ public sealed class InsightsConcurrencyTests(PostgresApiFactory api)
         Assert.Equal(11, registry.Opens);
     }
 
+    [Fact]
+    public async Task A_failing_grid_fails_the_source_and_gives_back_its_connection_and_permits()
+    {
+        var registry = new PeakRegistry(api.Services.GetRequiredService<IDataSourceRegistry>());
+        using var repo = new InsightsRepository(registry, new InsightsOptions(PerRequest: 1, Global: 1));
+        var broken = new InsightSpec("core", "broken", "Broken", "SELECT * FROM core.no_such_table WHERE @asOf IS NOT NULL AND @portfolios IS NOT NULL", ["A"], ["text"]);
+        await Assert.ThrowsAsync<PostgresException>(() => repo.ReadAsync([broken], PostgresApiFactory.AsOf, All, Ct));
+        // One permit each: had the failure kept either, this would wait forever (the test's timeout).
+        var grids = await repo.ReadAsync(InsightCatalog.For(InsightCatalog.Reference), PostgresApiFactory.AsOf, All, Ct);
+        Assert.Equal(3, grids.Length);
+        Assert.Equal(0, registry.Open);
+    }
+
     /// <summary>Counts connections open at once (through the real registry).</summary>
     private sealed class PeakRegistry(IDataSourceRegistry inner) : IDataSourceRegistry
     {
         private int _open;
+        public int Open => Volatile.Read(ref _open);
         public int Peak;
         public int Opens;
 

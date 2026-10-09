@@ -261,6 +261,11 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var query = await SendWithCookie(client, cookie, HttpMethod.Post, "/api/positions/query", xsrf, new { });
         Assert.Equal(HttpStatusCode.ServiceUnavailable, query.StatusCode);
         Assert.Equal("No data loaded", (await query.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+
+        // README §6 P3: insights say the same, before any grid query runs.
+        var insights = await SendWithCookie(client, cookie, HttpMethod.Get, "/api/insights/core");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, insights.StatusCode);
+        Assert.Equal("No data loaded", (await insights.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
     }
 
     /// <summary>Captures log levels (the meta cache logs a count, never the names themselves).</summary>

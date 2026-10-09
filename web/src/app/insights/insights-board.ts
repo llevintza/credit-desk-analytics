@@ -37,7 +37,7 @@ export class InsightsBoard {
   protected readonly sources = insightSources;
   /** Naive mode (dev or admin only): 20 requests, one per grid, for the Performance Lab comparison. */
   protected readonly naive = signal(false);
-  protected readonly canNaive = computed(() => isDevMode() || this.auth.isAdmin());
+  protected readonly canNaive = computed(() => this.auth.isAdmin() || isDevMode());
   private readonly retries = Object.fromEntries(insightSources.map((s) => [s.source, signal(0)])) as Record<InsightSource, ReturnType<typeof signal<number>>>;
 
   /** The shared inputs: as-of and portfolios from the shell scope. Null until the scope is known. */
