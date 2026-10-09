@@ -1,5 +1,5 @@
 import {
-  CellStyleModule, ColumnApiModule, ColumnAutoSizeModule, DateFilterModule,
+  CellStyleModule, ClientSideRowModelModule, ColumnApiModule, ColumnAutoSizeModule, DateFilterModule,
   EventApiModule, InfiniteRowModelModule, ModuleRegistry, NumberFilterModule, PinnedRowModule, RenderApiModule,
   RowApiModule, RowStyleModule, ScrollApiModule, TextFilterModule, TooltipModule, ValidationModule, themeQuartz,
   type Module,
@@ -12,7 +12,7 @@ import { isDevMode } from '@angular/core';
  */
 export function gridModules(dev: boolean): Module[] {
   return [
-    InfiniteRowModelModule, ColumnApiModule, RowApiModule, ScrollApiModule, RenderApiModule, EventApiModule,
+    InfiniteRowModelModule, ClientSideRowModelModule, ColumnApiModule, RowApiModule, ScrollApiModule, RenderApiModule, EventApiModule,
     TextFilterModule, NumberFilterModule, DateFilterModule, TooltipModule, PinnedRowModule, CellStyleModule,
     RowStyleModule, ColumnAutoSizeModule,
     ...(dev ? [ValidationModule] : []),

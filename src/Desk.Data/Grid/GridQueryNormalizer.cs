@@ -155,7 +155,7 @@ public sealed class GridQueryNormalizer
     /// stays exact and on the column's own type; <c>double</c> for the <c>double precision</c> and integer columns.
     /// </summary>
     private static object? Number(ColumnDef col, JsonElement? e) =>
-        col.Kind == ColumnKind.Money ? Money(col, e) : Number(e);
+        col.Kind == ColumnKind.Money ? Money(col, e) : Double(col, e);
 
     private static decimal? Money(ColumnDef col, JsonElement? e)
     {
@@ -172,13 +172,19 @@ public sealed class GridQueryNormalizer
         return null;
     }
 
-    private static double? Number(JsonElement? e)
+    private static double? Double(ColumnDef col, JsonElement? e)
     {
-        double v;
-        if (e is { ValueKind: JsonValueKind.Number } n) v = n.GetDouble();
-        else if (e is { ValueKind: JsonValueKind.String } s && double.TryParse(s.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)) v = parsed;
+        string? text;
+        if (e is { ValueKind: JsonValueKind.Number } n) text = n.GetRawText();
+        else if (e is { ValueKind: JsonValueKind.String } s) text = s.GetString();
         else return null;
-        return double.IsFinite(v) ? v : null;
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return null;
+        if (double.IsFinite(v)) return v;
+        // As for money (#276): a real number beyond double's range can't be applied, and dropping it would widen the
+        // result. "NaN" and "Infinity" aren't numbers the user typed: they're dropped like any non-number.
+        if (!double.IsNaN(v) && text!.Any(char.IsAsciiDigit))
+            throw new GridRequestException($"Filter value on {col.Name} is outside the supported range.");
+        return null;
     }
 
     private static GridCondition? TextCondition(ColumnDef col, FilterSpec spec)

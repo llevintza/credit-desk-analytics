@@ -266,9 +266,9 @@ See ADR-0003 and ADR-0004.
   - `--max-mb` (default 400): budget for the **committed** size, checked just before COMMIT; over it the load rolls back (exit 2).
   - `--cap-mb` (default 512, must be > 0): storage cap for the reseed **peak**, checked **before TRUNCATE** on runs that would reseed (version, seed or scale change, or `--force`). Over it, or when the current size can't be read, the seeder refuses with exit 2 and changes nothing. An `--if-changed` skip never checks it. See §10.
   - Both `--max-mb` and `--cap-mb` (and the seeder's `MB` output: `SEED_PEAK_EST_MB`, `DB_SIZE_MB`) are MiB (1024² bytes); the peak estimate rounds up.
-- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled.
+- Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled (before or after COMMIT; the message says which).
 - The prior business day is generated as the snapshot's second as-of date.
-- **Cancellation (Ctrl+C or a CI timeout) rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130.
+- **Cancellation (Ctrl+C or a CI timeout) before COMMIT rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130. A cancellation **after COMMIT** (during `ANALYZE` or the final size report) keeps the new data and its `app.seed_metadata` row, so the next `--if-changed` run skips; it prints `ERROR: cancelled after the seed was committed (version …, scale …); ANALYZE/size report skipped.` and also exits 130 (#285).
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
@@ -524,7 +524,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
-- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted on the first audit insert after each start and then at most once every 24 h, in batches, so the purge never wakes the database on its own (ADR-0022).
+- **Audit retention:** audit rows are kept for `AUDIT_RETENTION_DAYS` days (default **90**; whole days, 1 to 36,500; any other value keeps 90 and logs a warning). Older rows are deleted at most once every 24 h per process (each start re-arms it), in batches of about 50,000 (each its own statement and commit): right after an audit insert when one is due (the first insert after each start, then every 24 h), and, so idle periods drain while the instance stays up (on Render free it sleeps after about 15 min idle, before a 60-minute check), by a timer that checks every `AUDIT_PURGE_CHECK_MINUTES` minutes (default **60**; whole minutes, 1 to 1,440; any other value keeps 60 and logs a warning). A check only reads the clock; the timer touches the database only when a purge is due, never at start, so a cold start doesn't wake Neon. A failed timer purge is logged and retried at the next check, at most twice in a row, then the next day (ADR-0022).
 - **Health:** `/health` is static (never touches the DB, so platform probes don't wake Neon). `/health/db` does a real check and is admin-only.
 
 ### 7.3 Hardening
@@ -983,10 +983,10 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
-| 4 Shell + Positions UI | phase-4/shell-and-positions-ui | In review |
-| 5 Fund Performance | n/a | Not started |
+| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
+| 5 Fund Performance | phase-5/fund-performance | In review |
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
