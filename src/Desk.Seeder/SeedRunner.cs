@@ -20,7 +20,8 @@ public static class SeedRunner
     /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap, 130 cancelled after COMMIT
     /// or during the final size read of a skip or <c>--size-report</c>.</returns>
     /// <remarks>Cancelling <paramref name="ct"/> before COMMIT aborts the COPY, rolls back the single seeding transaction and
-    /// throws. A cancellation after COMMIT (during ANALYZE or the size report) keeps the data, says so and returns 130 (#285).</remarks>
+    /// throws. A cancellation after COMMIT (during ANALYZE or the size report) keeps the data, says so and returns 130 (#285).
+    /// A cancellation during the final size read of a skip or <c>--size-report</c> says nothing was changed and returns 130 (#324).</remarks>
     public static Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err, CancellationToken ct = default) =>
         RunAsync(options, connectionString, output, err, DatabaseSizeAsync, ct);
 
