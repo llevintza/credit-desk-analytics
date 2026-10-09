@@ -139,7 +139,7 @@ describe('xsrfRefreshInterceptor', () => {
     expect(((await done) as HttpErrorResponse).status).toBe(400);
   });
 
-  it.each(['https://elsewhere.example/api/x', '//elsewhere.example/api/x', 'api/x'])(
+  it.each(['https://elsewhere.example/api/x', '//elsewhere.example/api/x', 'api/x', '/apix', '/api-foo'])(
     'never refreshes or retries a URL outside the API (%s)',
     async (url) => {
       const done = settle(http().post(url, {}));
