@@ -28,6 +28,7 @@ export const ANTIFORGERY_URL = '/api/auth/antiforgery';
  * before this one and won't replace a header that's already set, so the retry sets the fresh token itself.
  */
 export const xsrfRefreshInterceptor: HttpInterceptorFn = (req, next) => {
+  // DeskApi's URLs are all root-relative `/api/…`: serving the app under a path prefix would need this check widened.
   if (/^(GET|HEAD|OPTIONS)$/.test(req.method) || !req.url.startsWith('/api/')) return next(req);
   const tokens = inject(HttpXsrfTokenExtractor);
   const refresh = inject(XsrfRefresh);
