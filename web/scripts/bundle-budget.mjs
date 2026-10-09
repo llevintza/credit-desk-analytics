@@ -3,7 +3,7 @@
 // this measures what the browser downloads: Brotli at the quality the API serves (BROTLI_QUALITY) of every script and
 // stylesheet the built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
 // Fails closed (#145): anything that would leave the budget unchecked exits 1 instead of passing.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix, resolve, sep } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 
@@ -18,12 +18,14 @@ const fail = (message) => {
   process.exit(1);
 };
 
-// index.html paths may not leave the dist dir (`../…`); only files the build emitted are measured.
+// index.html paths may not leave the dist dir (`../…`); only files the build emitted are measured, and a directory
+// (`import"./lib/"`) fails with a message rather than an EISDIR stack trace (#266 N5).
 const root = resolve(dir);
 const read = (file) => {
   const path = resolve(root, file);
   if (!path.startsWith(root + sep)) fail(`${file} resolves outside ${root}; refusing to read it.`);
   if (!existsSync(path)) fail(`${path} is referenced by the initial load but missing.`);
+  if (!statSync(path).isFile()) fail(`${path} is referenced by the initial load but is not a file.`);
   return readFileSync(path);
 };
 
@@ -35,21 +37,38 @@ const normalize = (from, url) => {
 };
 
 // #204: tags are matched case-insensitively, attributes in any order, quoted with " or ' or unquoted, with optional
-// whitespace around `=`, and a quoted value may contain `>`. Comments are dropped first. Any <script or <link this
-// can't parse fails rather than being skipped.
+// whitespace around `=`, and a quoted value may contain `>`. Comments are dropped first, but only where HTML has
+// them (#266 N1): a `<!--` inside a <script> or <style> body or a quoted attribute is text, so those are matched
+// whole and kept. Any <script or <link this can't parse fails rather than being skipped.
 const indexPath = join(dir, 'index.html');
 if (!existsSync(indexPath)) fail(`${indexPath} is missing; refusing to pass the budget.`);
-const html = readFileSync(indexPath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+const html = readFileSync(indexPath, 'utf8').replace(
+  /<(script|style)\b(?:[^>"']|"[^"]*"|'[^']*')*>[\s\S]*?<\/\1\s*>|<(?:[^>"'!]|"[^"]*"|'[^']*')*>|<!--[\s\S]*?-->/gi,
+  (m) => (m.startsWith('<!--') ? '' : m),
+);
 const tagPattern = /<(script|link)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 const attrPattern = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+// HTML keeps the first of duplicate attributes (#266 N2), so the matches are reversed before the Map keeps the last.
 const attributes = (text) =>
-  new Map([...text.matchAll(attrPattern)].map(([, name, ...value]) => [name.toLowerCase(), value.find((v) => v !== undefined) ?? '']));
+  new Map([...text.matchAll(attrPattern)].reverse().map(([, name, ...value]) => [name.toLowerCase(), value.find((v) => v !== undefined) ?? '']));
 const tags = [...html.matchAll(tagPattern)];
 if (tags.length !== (html.match(/<(?:script|link)\b/gi) ?? []).length) fail('index.html has a <script> or <link> tag that cannot be parsed.');
 
 // Static `import`/`export … from` specifiers that are relative (`./`, `../`) or site-rooted (`/`); dynamic import()
 // is lazy and excluded (the `(` stops the match). Bare specifiers can't load in the browser without an import map.
 const staticImports = (source) => [...source.matchAll(/(?:\bfrom|\bimport)\s*["']((?:\.{1,2})?\/[^"']+)["']/g)].map((m) => m[1]);
+
+// CSS `@import` (#266 N4), quoted or in url(), in a counted stylesheet or an inline <style>. Unlike a JS specifier, a
+// bare `theme.css` is relative. CSS comments aren't stripped, so an @import inside one is counted: that fails closed.
+const cssImports = (source) =>
+  [...source.matchAll(/@import\s*(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'()]+))|"([^"]*)"|'([^']*)')/gi)].map((m) =>
+    m.slice(1).find((v) => v !== undefined),
+  );
+const stylesheet = (from, spec) => {
+  const file = normalize(from, spec);
+  if (!file.endsWith('.css')) fail(`@import "${spec}" in ${from} is not a .css file; refusing to guess its size.`);
+  return file;
+};
 
 const initial = [];
 const inlineImports = [];
@@ -75,17 +94,23 @@ for (const { 0: tag, 1: name, 2: text, index } of tags) {
   }
 }
 for (const spec of inlineImports) initial.push(normalize('index.html', spec));
+for (const [, body] of html.matchAll(/<style\b(?:[^>"']|"[^"]*"|'[^']*')*>([\s\S]*?)<\/style\s*>/gi))
+  for (const spec of cssImports(body)) initial.push(stylesheet('index.html', spec));
 const main = initial.find((f) => /^main-[^/]*\.js$/.test(f));
 if (initial.length === 0 || !main) fail('index.html lists no initial scripts or no main-*.js; refusing to pass the budget.');
 
 // Static imports of the initial scripts load up front too, followed transitively and resolved against the importer
-// (#204): any file name or sub-path, not only `./chunk-*.js` at the root.
+// (#204): any file name or sub-path, not only `./chunk-*.js` at the root. Every script is followed, whatever its
+// extension: an inline module can import `./boot.mjs` (#266 N3). Stylesheets are followed through @import (#266 N4).
 const files = [...new Set(initial)];
-const queue = files.filter((f) => f.endsWith('.js'));
+const queue = [...files];
 while (queue.length > 0) {
   const importer = queue.shift();
-  for (const spec of staticImports(read(importer).toString('utf8'))) {
-    const file = normalize(importer, spec);
+  const source = read(importer).toString('utf8');
+  const imports = importer.endsWith('.css')
+    ? cssImports(source).map((spec) => stylesheet(importer, spec))
+    : staticImports(source).map((spec) => normalize(importer, spec));
+  for (const file of imports) {
     if (!files.includes(file)) {
       files.push(file);
       queue.push(file);
