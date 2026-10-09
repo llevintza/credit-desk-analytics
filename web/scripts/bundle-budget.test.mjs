@@ -255,3 +255,83 @@ for (const [label, tag, message] of [
     assert.match(r.stderr, message);
   });
 }
+
+// #266 N1: `<!--` is only a comment outside <script>/<style> bodies and quoted attributes. Stripping it there would
+// swallow every tag up to the next `-->`.
+for (const [label, decoy] of [
+  ['a script body', '<script>var s="<!--";</script>'],
+  ['a style body', '<style>p::before{content:"<!--"}</style>'],
+  ['a quoted attribute', '<div title="<!--"></div>'],
+]) {
+  test(`counts scripts after a <!-- in ${label}`, () => {
+    const r = run({
+      'index.html': page(`<script src="main-A1.js" type="module"></script>${decoy}<script src="chunk-BIG.js"></script><!-- -->`),
+      'main-A1.js': 'void 0;',
+      'chunk-BIG.js': big(),
+    });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
+
+// #266 N2: HTML uses the first of duplicate attributes, so a later src or href is ignored.
+for (const [label, tag, files] of [
+  ['a script src', '<script src="chunk-BIG.js" src="main-A1.js"></script>', { 'chunk-BIG.js': big() }],
+  ['a stylesheet href', '<link rel="stylesheet" href="big-A1.css" href="tiny-A1.css">', { 'big-A1.css': big(), 'tiny-A1.css': 'p{}' }],
+]) {
+  test(`counts the first of duplicate attributes on ${label}`, () => {
+    const r = run({ 'index.html': page(`<script src="main-A1.js" type="module"></script>${tag}`), 'main-A1.js': 'void 0;', ...files });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
+
+// #266 N3: an inline module can import a script that isn't .js; its own static imports load up front too.
+test('follows the static imports of a non-.js script an inline module imports', () => {
+  const r = run({
+    'index.html': page('<script src="main-A1.js" type="module"></script><script type="module">import"./boot-A1.mjs";</script>'),
+    'main-A1.js': 'void 0;',
+    'boot-A1.mjs': 'import"./chunk-BIG.js";',
+    'chunk-BIG.js': big(),
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /over the 500 KB budget/);
+});
+
+// #266 N4: a stylesheet's @import loads up front too, from a counted .css file or an inline <style>, transitively,
+// resolved against the importer, in every spelling CSS allows.
+for (const [label, head, files] of [
+  ['a quoted @import', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': '@import "theme-A1.css";p{}' }],
+  ['an @import url()', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': "@import url( 'theme-A1.css' ) screen;" }],
+  ['an unquoted upper-case @IMPORT url()', '<link rel="stylesheet" href="styles-A1.css">', { 'styles-A1.css': '@IMPORT url(theme-A1.css);' }],
+  [
+    'a nested @import relative to its importer',
+    '<link rel="stylesheet" href="styles-A1.css">',
+    { 'styles-A1.css': '@import"css/a-A1.css";', 'css/a-A1.css': "@import '../theme-A1.css';" },
+  ],
+  ['an inline <style> @import', '<style>@import url("theme-A1.css");</style>', {}],
+]) {
+  test(`counts ${label}`, () => {
+    const r = run({ 'index.html': page(`${head}<script src="main-A1.js" type="module"></script>`), 'main-A1.js': 'void 0;', 'theme-A1.css': big(), ...files });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
+
+test('fails closed on an @import of a file that is not .css', () => {
+  const r = run({
+    'index.html': page('<link rel="stylesheet" href="styles-A1.css"><script src="main-A1.js" type="module"></script>'),
+    'styles-A1.css': '@import "theme-A1.php";',
+    'theme-A1.php': big(),
+    'main-A1.js': 'void 0;',
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /@import "theme-A1\.php" in styles-A1\.css is not a \.css file/);
+});
+
+// #266 N5: a specifier that names a directory fails with a message, not an EISDIR stack trace.
+test('fails closed on an import of a directory', () => {
+  const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': 'import"./lib/";', 'lib/x.js': 'void 0;' });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /^FAIL: .*lib is referenced by the initial load but is not a file\.$/m);
+});
