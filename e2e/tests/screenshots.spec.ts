@@ -24,6 +24,7 @@ for (const theme of ['dark', 'light'] as const) {
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       if (p.name === 'positions') await gridReady(page);
       if (p.name === 'fund-performance') await expect(page.getByTestId('caption')).toBeVisible();
+      if (p.name === 'insights') await expect(page.locator('[data-state=ready]')).toHaveCount(20);
       await page.waitForTimeout(400);
       await page.screenshot({ path: `${dir}/${p.name}-${theme}.png` });
     }
