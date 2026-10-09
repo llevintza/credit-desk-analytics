@@ -13,7 +13,8 @@ export const ANTIFORGERY_URL = '/api/auth/antiforgery';
 /**
  * A stale or missing XSRF token (#233: a deploy that renames the antiforgery cookie, #268 N6: a sign-out that
  * fails on it) gets one fresh token from GET /api/auth/antiforgery and one retry of the unsafe request. Never
- * more: if the retry is rejected too, or the refresh fails, that error goes to the caller. Other 400s, and safe
+ * more: if the retry is rejected too, or the refresh fails, that error goes to the caller, and if the refresh leaves
+ * no token to send, the original 400 does (#310 N2: a retry without one would only be rejected again). Other 400s, and safe
  * methods, pass through untouched, and so does any URL outside the API's relative `/api/` path (#310 N1: like
  * Angular's own XSRF interceptor, a cross-origin server never gets the token). Angular's XSRF interceptor runs
  * before this one and won't replace a header that's already set, so the retry sets the fresh token itself.
@@ -29,17 +30,17 @@ export const xsrfRefreshInterceptor: HttpInterceptorFn = (req, next) => {
           // The refresh's Sent event comes first: retry once its response (and so its Set-Cookie) has arrived.
           return next(new HttpRequest('GET', ANTIFORGERY_URL)).pipe(
             filter((ev) => ev.type === HttpEventType.Response),
-            switchMap(() => next(withToken(req, tokens.getToken()))),
+            switchMap(() => {
+              const token = tokens.getToken();
+              if (token === null) return throwError(() => e);
+              return next(req.clone({ headers: req.headers.set(XSRF_HEADER, token) }));
+            }),
           );
         }),
       ),
     ),
   );
 };
-
-function withToken(req: HttpRequest<unknown>, token: string | null): HttpRequest<unknown> {
-  return token === null ? req : req.clone({ headers: req.headers.set(XSRF_HEADER, token) });
-}
 
 /** Whether the error is the API's antiforgery 400. A blob request (the CSV export) gets its problem as a Blob. */
 function antiforgeryRejection(e: unknown): Observable<boolean> {

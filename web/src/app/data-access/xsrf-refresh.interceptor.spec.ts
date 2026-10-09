@@ -73,15 +73,15 @@ describe('xsrfRefreshInterceptor', () => {
     expect(((await done) as HttpErrorResponse).status).toBe(401);
   });
 
-  it('retries with the request as it was when no token came back', async () => {
+  it('passes the original 400 to the caller when no token came back', async () => {
     token = null;
     const done = settle(http().delete('/api/presets/risk', { headers: { [XSRF_HEADER]: 'stale' } }));
     mock().expectOne('/api/presets/risk').flush(rejected, bad);
     mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 204, statusText: 'No Content' });
-    const retry = mock().expectOne('/api/presets/risk');
-    expect(retry.request.headers.get(XSRF_HEADER)).toBe('stale');
-    retry.flush(null, { status: 204, statusText: 'No Content' });
-    expect(await done).toBeNull();
+    mock().expectNone('/api/presets/risk');
+    const e = (await done) as HttpErrorResponse;
+    expect(e.status).toBe(400);
+    expect(e.error).toEqual(rejected);
   });
 
   it.each([
