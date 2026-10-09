@@ -21,30 +21,32 @@
             @if (tile.grid.rows.length === 0) {
               <p class="empty">No positions in scope.</p>
             } @else {
-              <table>
-                <thead>
-                  <tr>
-                    @for (c of tile.grid.columns; track $index) {
-                      <th scope="col" [class.num]="numeric(tile.grid, $index)">{{ c }}</th>
-                    }
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (row of tile.grid.rows; track row[0]) {
+              <div class="scroll">
+                <table>
+                  <thead>
                     <tr>
-                      @for (v of row; track $index) {
-                        @if ($first) {
-                          <th scope="row">{{ v }}</th>
-                        } @else {
-                          <td [class.num]="numeric(tile.grid, $index)" [class.neg]="isNegative(v)" [attr.title]="tooltip(tile.grid, $index, v)">
-                            {{ text(tile.grid, $index, v) }}
-                          </td>
-                        }
+                      @for (c of tile.grid.columns; track $index) {
+                        <th scope="col" [class.num]="numeric(tile.grid, $index)">{{ c }}</th>
                       }
                     </tr>
-                  }
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    @for (row of tile.grid.rows; track row[0]) {
+                      <tr>
+                        @for (v of row; track $index) {
+                          @if ($first) {
+                            <th scope="row">{{ v }}</th>
+                          } @else {
+                            <td [class.num]="numeric(tile.grid, $index)" [class.neg]="isNegative(v)" [attr.title]="tooltip(tile.grid, $index, v)">
+                              {{ text(tile.grid, $index, v) }}
+                            </td>
+                          }
+                        }
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
             }
           }
           @case ('error') {

@@ -5,15 +5,16 @@
 .field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .board {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; padding: 8px;
-  overflow: auto; min-height: 0; align-content: start;
+  grid-auto-rows: max-content; overflow: auto; min-height: 0; flex: 1; align-content: start;
 }
-.tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-height: 150px; overflow-x: auto; }
+.tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-height: 150px; min-width: 0; }
+.scroll { overflow-x: auto; }
 .tile header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .tile h3 { flex: 1; margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 .chip { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th, td { padding: 2px 4px; white-space: nowrap; border-bottom: 1px solid var(--line); }
-thead th { color: var(--muted); font-weight: 500; text-align: left; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { padding: 2px 3px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+thead th { color: var(--muted); font-weight: 500; text-align: left; white-space: normal; vertical-align: bottom; }
 tbody th { text-align: left; font-weight: 500; }
 tbody tr:nth-child(even) { background: var(--zebra); }
 .num { text-align: right; }
