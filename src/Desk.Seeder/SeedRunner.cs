@@ -13,10 +13,12 @@ public static class SeedRunner
     /// <summary>Measured committed size at scale 1.0 (README §5.4). The new-data half of the reseed peak estimate.</summary>
     public const double MeasuredMegabytesAtScale1 = 271;
 
-    /// <summary>Exit code for a cancellation, before COMMIT (thrown to Program.cs) or after it (returned here, #285).</summary>
+    /// <summary>Exit code for a cancellation, before COMMIT (thrown to Program.cs), after it (returned here, #285), or during
+    /// the final size read of a skip or <c>--size-report</c> (returned here, #324).</summary>
     public const int CancelledExitCode = 130;
 
-    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap, 130 cancelled after COMMIT.</returns>
+    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap, 130 cancelled after COMMIT
+    /// or during the final size read of a skip or <c>--size-report</c>.</returns>
     /// <remarks>Cancelling <paramref name="ct"/> before COMMIT aborts the COPY, rolls back the single seeding transaction and
     /// throws. A cancellation after COMMIT (during ANALYZE or the size report) keeps the data, says so and returns 130 (#285).</remarks>
     public static Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err, CancellationToken ct = default) =>
@@ -157,6 +159,12 @@ public static class SeedRunner
         long bytes;
         try { bytes = await databaseSize(conn, ct); }
         catch (Exception) when (committed && ct.IsCancellationRequested) { return CancelledAfterCommit(options, err); }
+        // Only a skip or --size-report gets here uncommitted: nothing was written, so this is no rollback (#324).
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            err.WriteLine("ERROR: cancelled; nothing was changed (seed skipped / size report only).");
+            return CancelledExitCode;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             output.WriteLine("DB_SIZE_MB=unknown");
