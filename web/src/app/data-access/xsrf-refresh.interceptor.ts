@@ -14,11 +14,12 @@ export const ANTIFORGERY_URL = '/api/auth/antiforgery';
  * A stale or missing XSRF token (#233: a deploy that renames the antiforgery cookie, #268 N6: a sign-out that
  * fails on it) gets one fresh token from GET /api/auth/antiforgery and one retry of the unsafe request. Never
  * more: if the retry is rejected too, or the refresh fails, that error goes to the caller. Other 400s, and safe
- * methods, pass through untouched. Angular's XSRF interceptor runs before this one and won't replace a header
- * that's already set, so the retry sets the fresh token itself.
+ * methods, pass through untouched, and so does any URL outside the API's relative `/api/` path (#310 N1: like
+ * Angular's own XSRF interceptor, a cross-origin server never gets the token). Angular's XSRF interceptor runs
+ * before this one and won't replace a header that's already set, so the retry sets the fresh token itself.
  */
 export const xsrfRefreshInterceptor: HttpInterceptorFn = (req, next) => {
-  if (/^(GET|HEAD|OPTIONS)$/.test(req.method)) return next(req);
+  if (/^(GET|HEAD|OPTIONS)$/.test(req.method) || !req.url.startsWith('/api/')) return next(req);
   const tokens = inject(HttpXsrfTokenExtractor);
   return next(req).pipe(
     catchError((e: unknown) =>

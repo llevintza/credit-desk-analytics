@@ -109,6 +109,18 @@ describe('xsrfRefreshInterceptor', () => {
     expect(((await done) as HttpErrorResponse).status).toBe(400);
   });
 
+  it.each(['https://elsewhere.example/api/x', '//elsewhere.example/api/x', 'api/x'])(
+    'never refreshes or retries a URL outside the API (%s)',
+    async (url) => {
+      const done = settle(http().post(url, {}));
+      mock().expectOne(url).flush(rejected, bad);
+      mock().expectNone(ANTIFORGERY_URL);
+      const e = (await done) as HttpErrorResponse;
+      expect(e.status).toBe(400);
+      expect(e.error).toEqual(rejected);
+    },
+  );
+
   it('reads the problem of a blob request (the CSV export) and retries it', async () => {
     const done = settle(http().post('/api/positions/export', {}, { responseType: 'blob' }));
     mock().expectOne('/api/positions/export').flush(new Blob([JSON.stringify(rejected)]), bad);
