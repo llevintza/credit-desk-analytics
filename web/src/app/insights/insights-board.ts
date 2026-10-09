@@ -59,9 +59,10 @@ export class InsightsBoard {
     const state = this.states[source]();
     return {
       source, label,
-      tiles: grids.map((id, i): Tile => {
+      tiles: grids.map((id): Tile => {
         if (state.kind === 'error') return { kind: 'error', id };
-        const grid = state.kind === 'ready' ? state.grids[i] : null;
+        // By id, not position, so a change in the API's grid order can't put a grid in the wrong tile.
+        const grid = state.kind === 'ready' ? state.grids.find((g) => g?.id === id) : null;
         return grid ? { kind: 'ready', id, grid } : { kind: 'loading', id };
       }),
     };
@@ -77,7 +78,8 @@ export class InsightsBoard {
       const b = this.base();
       untracked(() => {
         if (b === null) return;
-        performance.clearMarks();
+        // Only the board's own marks: other pages' marks stay.
+        for (const m of performance.getEntriesByType('mark')) if (m.name.startsWith('insights:')) performance.clearMarks(m.name);
         performance.mark('insights:start');
       });
     });
