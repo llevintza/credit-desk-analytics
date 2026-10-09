@@ -78,7 +78,7 @@ End to end in the browser (Playwright `tests/insights.spec.ts`, local stack at s
 
 **Tiles: plain tables vs AG Grid.** README §6 P3 leaves this to measurement.
 
-- **Bytes:** with plain tables the board's lazy chunk is **3.5 KB** transferred (`ng build`). AG Grid's shared lazy chunk is **236 KB** transferred, which a first visit to the board would otherwise download.
+- **Bytes:** with plain tables the board's lazy chunk is **4.2 KB** (brotli q1, the bundle-budget measurement). AG Grid's shared lazy chunk is **327.5 KB** on the same measure, which a first visit to the board would otherwise download.
 - **Paint:** the tables paint the whole board within the warm 57 ms above.
 - **Features:** a 5 × 5 tile needs no sorting, virtualisation or column state.
 
