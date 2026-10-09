@@ -166,10 +166,13 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         await using (var db = api.NewContext())
             before = await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct);
 
-        var run = await RunAsync(s => s.AddScoped<IPasswordValidator<DeskUser>, RejectingPasswordValidator>(), "reset", "--email", email);
+        var run = await RunAsync(s => s
+            .AddScoped<IPasswordValidator<DeskUser>, RejectingPasswordValidator>()
+            .AddScoped<IPasswordValidator<DeskUser>, SecondRejectingPasswordValidator>(), "reset", "--email", email);
 
         Assert.Equal(3, run.Exit);
-        Assert.Contains(RejectingPasswordValidator.Reason, run.Err);
+        Assert.Contains(RejectingPasswordValidator.Reason, run.Err); // every validator's reason is reported
+        Assert.Contains(SecondRejectingPasswordValidator.Reason, run.Err);
         Assert.DoesNotMatch(PasswordLine(), run.Out);
         await using (var db = api.NewContext())
         {
@@ -191,6 +194,14 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
     private sealed class RejectingPasswordValidator : IPasswordValidator<DeskUser>
     {
         public const string Reason = "Rejected by the test validator.";
+
+        public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
+            Task.FromResult(IdentityResult.Failed(new IdentityError { Description = Reason }));
+    }
+
+    private sealed class SecondRejectingPasswordValidator : IPasswordValidator<DeskUser>
+    {
+        public const string Reason = "Also rejected by a second test validator.";
 
         public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
             Task.FromResult(IdentityResult.Failed(new IdentityError { Description = Reason }));

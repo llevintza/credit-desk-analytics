@@ -164,8 +164,11 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         var password = PasswordGenerator.Generate();
         // Validate first, then one write (#314): separate remove/add writes could leave the account with no
         // password hash if the add failed. A rejected password throws before anything is saved.
+        // Every validator runs and all reasons are reported, as UserManager.ValidatePasswordAsync does.
+        var errors = new List<IdentityError>();
         foreach (var validator in users.PasswordValidators)
-            Check(await validator.ValidateAsync(users, user, password));
+            errors.AddRange((await validator.ValidateAsync(users, user, password)).Errors);
+        Check(errors.Count == 0 ? IdentityResult.Success : IdentityResult.Failed([.. errors]));
         ct.ThrowIfCancellationRequested();
         user.PasswordHash = users.PasswordHasher.HashPassword(user, password);
         user.LockoutEnd = null;
