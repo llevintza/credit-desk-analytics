@@ -55,6 +55,22 @@ describe('xsrfRefreshInterceptor', () => {
     expect(await save).toBeNull();
   });
 
+  it('keeps the shared refresh going for the others when the first caller cancels', async () => {
+    const first = http().post('/api/auth/logout', null).subscribe({ error: () => undefined });
+    const save = settle(http().put('/api/presets/risk', { name: 'a' }));
+    mock().expectOne('/api/auth/logout').flush(rejected, bad);
+    mock().expectOne('/api/presets/risk').flush(rejected, bad);
+    const refresh = mock().expectOne(ANTIFORGERY_URL);
+    first.unsubscribe();
+    expect(refresh.cancelled).toBe(false);
+    refresh.flush(null, { status: 204, statusText: 'No Content' });
+    mock().expectNone('/api/auth/logout');
+    const retry = mock().expectOne('/api/presets/risk');
+    expect(retry.request.headers.get(XSRF_HEADER)).toBe('fresh');
+    retry.flush(null, { status: 204, statusText: 'No Content' });
+    expect(await save).toBeNull();
+  });
+
   it('starts a new refresh for a rejection that arrives after the last one failed or succeeded', async () => {
     const failed = settle(http().post('/api/auth/logout', null));
     mock().expectOne('/api/auth/logout').flush(rejected, bad);
