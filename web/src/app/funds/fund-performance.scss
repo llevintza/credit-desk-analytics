@@ -1,0 +1,11 @@
+:host { display: flex; flex-direction: column; min-height: 0; }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.field { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.ranges { display: flex; gap: 4px; }
+.ranges button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.caption { margin: 8px; color: var(--muted); }
+.grid { margin: 0 8px; }
+.error-tile { margin: 8px; padding: 8px 12px; border: 1px solid var(--down); color: var(--down); background: var(--surface-2); }
+.skeleton { height: 90px; margin: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); opacity: 0.6; }
+:host ::ng-deep .neg { color: var(--down); }
+:host ::ng-deep .row-label { font-weight: 600; }

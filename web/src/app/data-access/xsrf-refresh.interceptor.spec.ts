@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { HttpClient, HttpErrorResponse, HttpXsrfTokenExtractor, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Observable, firstValueFrom } from 'rxjs';
-import { ANTIFORGERY_PROBLEM_TITLE, ANTIFORGERY_URL, XSRF_HEADER, xsrfRefreshInterceptor } from './xsrf-refresh.interceptor';
+import { ANTIFORGERY_PROBLEM_TITLE, ANTIFORGERY_PROBLEM_TYPE, ANTIFORGERY_URL, XSRF_HEADER, xsrfRefreshInterceptor } from './xsrf-refresh.interceptor';
 
 describe('xsrfRefreshInterceptor', () => {
   let token: string | null;
@@ -23,7 +23,7 @@ describe('xsrfRefreshInterceptor', () => {
   const http = () => TestBed.inject(HttpClient);
   const mock = () => TestBed.inject(HttpTestingController);
   const settle = <T>(o: Observable<T>) => firstValueFrom(o).catch((e: unknown) => e);
-  const rejected = { title: ANTIFORGERY_PROBLEM_TITLE, status: 400 };
+  const rejected = { type: ANTIFORGERY_PROBLEM_TYPE, title: ANTIFORGERY_PROBLEM_TITLE, status: 400 };
   const bad = { status: 400, statusText: 'Bad Request' };
   /** Lets the interceptor's promise-based steps (reading a Blob problem) run. */
   const tick = () => new Promise((r) => setTimeout(r));
@@ -37,6 +37,21 @@ describe('xsrfRefreshInterceptor', () => {
     const retry = mock().expectOne('/api/auth/logout');
     expect(retry.request.headers.get(XSRF_HEADER)).toBe('fresh');
     retry.flush(null, { status: 204, statusText: 'No Content' });
+    expect(await done).toBeNull();
+  });
+
+  it('pins the problem type the API sends (AntiforgeryFilter.ProblemType)', () => {
+    expect(ANTIFORGERY_PROBLEM_TYPE).toBe('urn:desk:problem:antiforgery');
+  });
+
+  it.each([
+    ['by its type alone', { type: ANTIFORGERY_PROBLEM_TYPE, title: 'Reworded title', status: 400 }],
+    ['by its title alone (the one-release fallback)', { title: ANTIFORGERY_PROBLEM_TITLE, status: 400 }],
+  ])('recognises the antiforgery 400 %s and retries', async (_, body) => {
+    const done = settle(http().post('/api/auth/logout', null));
+    mock().expectOne('/api/auth/logout').flush(body, bad);
+    mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 204, statusText: 'No Content' });
+    mock().expectOne('/api/auth/logout').flush(null, { status: 204, statusText: 'No Content' });
     expect(await done).toBeNull();
   });
 
@@ -71,6 +86,7 @@ describe('xsrfRefreshInterceptor', () => {
 
   it.each([
     ['another 400 problem', { title: 'One or more validation errors occurred.' }, 400],
+    ['a 400 with another problem type', { type: 'urn:desk:problem:other', title: 'Something else' }, 400],
     ['a 400 with no body', null, 400],
     ['a 400 with a text body', 'bad', 400],
     ['a 403', rejected, 403],

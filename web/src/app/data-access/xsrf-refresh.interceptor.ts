@@ -4,7 +4,9 @@ import { Observable, catchError, filter, from, map, of, switchMap, throwError } 
 
 /** ADR-0005: the header the API reads the XSRF token from (Angular's XSRF interceptor fills it from the cookie). */
 export const XSRF_HEADER = 'X-XSRF-TOKEN';
-/** The ProblemDetails title of the API's antiforgery 400 (`AntiforgeryFilter.ProblemTitle`). */
+/** The ProblemDetails type of the API's antiforgery 400 (`AntiforgeryFilter.ProblemType`): the stable contract (#282). */
+export const ANTIFORGERY_PROBLEM_TYPE = 'urn:desk:problem:antiforgery';
+/** Its title (`AntiforgeryFilter.ProblemTitle`), still matched as a fallback for one release (#282). */
 export const ANTIFORGERY_PROBLEM_TITLE = 'Missing or invalid antiforgery token';
 export const ANTIFORGERY_URL = '/api/auth/antiforgery';
 
@@ -49,5 +51,7 @@ function antiforgeryRejection(e: unknown): Observable<boolean> {
 }
 
 function isAntiforgeryProblem(body: unknown): boolean {
-  return typeof body === 'object' && body !== null && (body as { title?: unknown }).title === ANTIFORGERY_PROBLEM_TITLE;
+  if (typeof body !== 'object' || body === null) return false;
+  const { type, title } = body as { type?: unknown; title?: unknown };
+  return type === ANTIFORGERY_PROBLEM_TYPE || title === ANTIFORGERY_PROBLEM_TITLE;
 }
