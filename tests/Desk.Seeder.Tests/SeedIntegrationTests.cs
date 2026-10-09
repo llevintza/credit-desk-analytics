@@ -362,6 +362,71 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         Assert.Equal(before.Meta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cancelling_during_ANALYZE_reports_the_committed_seed(bool surfacesAsOce)
+    {
+        // #285: a signal after COMMIT used to reach Program.cs as "the seeding transaction was rolled back".
+        var before = await StateAsync();
+        var err = new StringWriter();
+        using var cts = new CancellationTokenSource();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        Task Analyze(NpgsqlConnection conn, CancellationToken ct)
+        {
+            cts.Cancel();
+            return surfacesAsOce ? SeedRunner.AnalyzeAsync(conn, ct) : throw new NpgsqlException("connection broken by cancel");
+        }
+        Assert.Equal(SeedRunner.CancelledExitCode, await SeedRunner.RunAsync(roomy, db.ConnectionString, new StringWriter(), err,
+            SeedRunner.DatabaseSizeAsync, Analyze, cts.Token));
+        AssertReportedAsCommitted(err.ToString(), roomy);
+        Assert.Equal(before.Meta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cancelling_the_size_report_after_commit_reports_the_committed_seed(bool surfacesAsOce)
+    {
+        // #285: the post-commit size read used to exit 0 with DB_SIZE_MB=unknown on a non-OCE cancellation.
+        var before = await StateAsync();
+        var o = new StringWriter();
+        var err = new StringWriter();
+        using var cts = new CancellationTokenSource();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        var calls = 0;
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct)
+        {
+            if (++calls < 3) return await SeedRunner.DatabaseSizeAsync(conn, ct);
+            cts.Cancel();
+            return surfacesAsOce ? await SeedRunner.DatabaseSizeAsync(conn, ct) : throw new NpgsqlException("connection broken by cancel");
+        }
+        Assert.Equal(SeedRunner.CancelledExitCode, await SeedRunner.RunAsync(roomy, db.ConnectionString, o, err, Probe, cts.Token));
+        Assert.Equal(3, calls);
+        Assert.Contains("SEED_ACTION=seeded", o.ToString());
+        Assert.DoesNotContain("DB_SIZE_MB", o.ToString());
+        AssertReportedAsCommitted(err.ToString(), roomy);
+        Assert.Equal(before.Meta + 1, await db.ScalarAsync<long>("SELECT count(*) FROM app.seed_metadata"));
+    }
+
+    [Fact]
+    public async Task Failed_ANALYZE_without_cancellation_warns_and_exits_0()
+    {
+        var o = new StringWriter();
+        var err = new StringWriter();
+        var roomy = SeededDatabase.Options(force: true) with { CapMegabytes = 10_000 };
+        Assert.Equal(0, await SeedRunner.RunAsync(roomy, db.ConnectionString, o, err, SeedRunner.DatabaseSizeAsync,
+            (_, _) => throw new NpgsqlException("analyze failed"), TestContext.Current.CancellationToken));
+        Assert.Contains("WARN: ANALYZE of seeded tables failed", err.ToString());
+        Assert.Contains("SEED_ACTION=seeded", o.ToString());
+    }
+
+    private static void AssertReportedAsCommitted(string err, SeedOptions options)
+    {
+        Assert.Contains($"ERROR: cancelled after the seed was committed (version {SeedVersion.Current}, scale {options.Scale}); ANALYZE/size report skipped.", err);
+        Assert.DoesNotContain("rolled back", err);
+    }
+
     [Fact]
     public async Task Pre_commit_projection_uses_the_size_read_at_load_time()
     {

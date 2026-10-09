@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Desk.Api.Auth;
 using Desk.Api.Positions;
+using Desk.Data.Funds;
 using Desk.Data.Grid;
 
 namespace Desk.Api;
@@ -22,4 +23,5 @@ namespace Desk.Api;
 [JsonSerializable(typeof(PresetResponse[]))]
 [JsonSerializable(typeof(SavePresetRequest))]
 [JsonSerializable(typeof(BuiltInState))]
+[JsonSerializable(typeof(FundPerformance))]
 public sealed partial class DeskJsonContext : JsonSerializerContext;

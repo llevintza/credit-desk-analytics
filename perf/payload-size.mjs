@@ -2,6 +2,7 @@
 // README §10 payload budgets for the P1 first block, measured on the wire (compressed bytes as sent):
 //   Risk preset (≈40 columns): ≤ 60 KB  → exit 1 above budget (the CI budgets job fails)
 //   All preset (≈200 columns): ≤ 250 KB → warning only
+// and the largest P2 response (README §6: fund 1 ITD, 69 months): < 5 KB → exit 1 above budget.
 //
 // Usage (a running, seeded API; an account from Desk.UserAdmin):
 //   BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs
@@ -81,4 +82,11 @@ for (const { preset, limitKb, failOver } of budgets) {
   console.log(`| ${preset} | ${columns.length + 1} | ${res.headers['content-encoding'] ?? 'identity'} | ${kb.toFixed(1)} | ${limitKb} | ${result} |`);
   if (over && !failOver) console.log(`::warning::${preset} first block is ${kb.toFixed(1)} KB, over the ${limitKb} KB budget`);
 }
+
+const fund = await request('GET', '/api/funds/1/performance?range=ITD', { headers: { 'accept-encoding': 'br, gzip', cookie: cookieHeader() } });
+if (fund.status !== 200) throw new Error(`P2 fund 1 ITD: HTTP ${fund.status} ${fund.body}`);
+const fundKb = fund.body.length / 1024;
+const fundOver = fundKb >= 5;
+if (fundOver) failed = true;
+console.log(`| P2 fund 1 ITD | – | ${fund.headers['content-encoding'] ?? 'identity'} | ${fundKb.toFixed(1)} | 5 | ${fundOver ? 'FAIL' : 'ok'} |`);
 process.exit(failed ? 1 : 0);
