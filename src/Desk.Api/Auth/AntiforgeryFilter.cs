@@ -39,3 +39,16 @@ public sealed class SkipAntiforgery
 {
     public static readonly SkipAntiforgery Instance = new();
 }
+
+/// <summary>Endpoint metadata: <see cref="AntiforgeryFilter"/> runs on this endpoint (read by the OpenAPI document, #307).</summary>
+public sealed class ValidatesAntiforgery
+{
+    public static readonly ValidatesAntiforgery Instance = new();
+}
+
+public static class AntiforgeryFilterExtensions
+{
+    /// <summary>Adds <see cref="AntiforgeryFilter"/> to the group and marks its endpoints with <see cref="ValidatesAntiforgery"/>.</summary>
+    public static RouteGroupBuilder ValidateAntiforgery(this RouteGroupBuilder group) =>
+        group.AddEndpointFilter<AntiforgeryFilter>().WithMetadata(ValidatesAntiforgery.Instance);
+}
