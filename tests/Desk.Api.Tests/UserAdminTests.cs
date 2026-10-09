@@ -5,6 +5,7 @@ using Desk.UserAdmin;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Desk.Api.Tests;
@@ -20,7 +21,9 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
 
     private sealed record Run(int Exit, string Out, string Err, string Logs);
 
-    private async Task<Run> RunAsync(params string[] args)
+    private Task<Run> RunAsync(params string[] args) => RunAsync(null, args);
+
+    private async Task<Run> RunAsync(Action<IServiceCollection>? configure, params string[] args)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
@@ -29,7 +32,8 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:App"] = api.ConnectionString })
             .Build();
-        var exit = await new UserAdminApp(stdout, stderr, loggers, api.Time).RunAsync(args, config, Ct);
+        var app = new UserAdminApp(stdout, stderr, loggers, api.Time) { ConfigureServices = configure };
+        var exit = await app.RunAsync(args, config, Ct);
         return new Run(exit, stdout.ToString(), stderr.ToString(), logs.Text);
     }
 
@@ -128,15 +132,103 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
                 .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, api.Time.GetUtcNow().AddMinutes(10)).SetProperty(u => u.AccessFailedCount, 5), Ct);
         // Locked on the fixture clock (#261), even for the right password.
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(api.NewClient(), email, oldPassword)).StatusCode);
+        string? oldStamp;
+        await using (var db = api.NewContext())
+            oldStamp = (await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).SecurityStamp;
 
         var run = await RunAsync("reset", "--email", email);
         Assert.Equal(0, run.Exit);
         var newPassword = Assert.Single(PasswordLine().Matches(run.Out)).Groups[1].Value;
         Assert.NotEqual(oldPassword, newPassword);
         Assert.DoesNotContain(newPassword, run.Logs);
+        await using (var db = api.NewContext())
+        {
+            var user = await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct);
+            Assert.NotEqual(oldStamp, user.SecurityStamp); // live sessions end (README §7.1)
+            Assert.Null(user.LockoutEnd);
+            Assert.Equal(0, user.AccessFailedCount);
+        }
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(api.NewClient(), email, oldPassword)).StatusCode);
         await PostgresApiFactory.LoginAsync(api.NewClient(), email, newPassword);
+    }
+
+    [Fact]
+    public async Task A_failed_reset_leaves_the_old_password_lockout_and_failure_count_untouched()
+    {
+        var email = Email();
+        var added = await RunAsync("add", "--email", email, "--role", "viewer", "--expires", "2027-01-01");
+        var oldPassword = PasswordLine().Match(added.Out).Groups[1].Value;
+        var lockoutEnd = DateTimeOffset.UtcNow.AddMinutes(10);
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Email == email)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, lockoutEnd).SetProperty(u => u.AccessFailedCount, 3), Ct);
+        DeskUser before;
+        await using (var db = api.NewContext())
+            before = await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct);
+
+        var run = await RunAsync(s => s
+            .AddScoped<IPasswordValidator<DeskUser>, RejectingPasswordValidator>()
+            .AddScoped<IPasswordValidator<DeskUser>, SecondRejectingPasswordValidator>(), "reset", "--email", email);
+
+        Assert.Equal(3, run.Exit);
+        Assert.Contains(RejectingPasswordValidator.Reason, run.Err); // every validator's reason is reported
+        Assert.Contains(SecondRejectingPasswordValidator.Reason, run.Err);
+        Assert.DoesNotMatch(PasswordLine(), run.Out);
+        await using (var db = api.NewContext())
+        {
+            var after = await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct);
+            Assert.NotNull(after.PasswordHash);
+            Assert.Equal(before.PasswordHash, after.PasswordHash);
+            Assert.Equal(before.SecurityStamp, after.SecurityStamp);
+            Assert.Equal(before.LockoutEnd, after.LockoutEnd);
+            Assert.Equal(3, after.AccessFailedCount);
+        }
+
+        // The old password still verifies; the lockout set above still holds until it is cleared.
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Email == email)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, (DateTimeOffset?)null).SetProperty(u => u.AccessFailedCount, 0), Ct);
+        await PostgresApiFactory.LoginAsync(api.NewClient(), email, oldPassword);
+    }
+
+    [Fact]
+    public async Task A_validator_failure_without_errors_still_fails_the_reset()
+    {
+        var email = Email();
+        Assert.Equal(0, (await RunAsync("add", "--email", email, "--role", "viewer", "--expires", "2027-01-01")).Exit);
+        string? hash;
+        await using (var db = api.NewContext())
+            hash = (await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).PasswordHash;
+
+        var run = await RunAsync(s => s.AddScoped<IPasswordValidator<DeskUser>, SilentlyRejectingPasswordValidator>(), "reset", "--email", email);
+
+        Assert.Equal(3, run.Exit);
+        Assert.DoesNotMatch(PasswordLine(), run.Out);
+        await using (var db = api.NewContext())
+            Assert.Equal(hash, (await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).PasswordHash);
+    }
+
+    private sealed class SilentlyRejectingPasswordValidator : IPasswordValidator<DeskUser>
+    {
+        public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
+            Task.FromResult(IdentityResult.Failed());
+    }
+
+    private sealed class RejectingPasswordValidator : IPasswordValidator<DeskUser>
+    {
+        public const string Reason = "Rejected by the test validator.";
+
+        public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
+            Task.FromResult(IdentityResult.Failed(new IdentityError { Description = Reason }));
+    }
+
+    private sealed class SecondRejectingPasswordValidator : IPasswordValidator<DeskUser>
+    {
+        public const string Reason = "Also rejected by a second test validator.";
+
+        public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
+            Task.FromResult(IdentityResult.Failed(new IdentityError { Description = Reason }));
     }
 
     [Theory]
