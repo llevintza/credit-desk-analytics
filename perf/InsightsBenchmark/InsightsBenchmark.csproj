@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ADR-0012: P3 per-source endpoints + per-task connections vs 20 calls vs one call. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Data/Desk.Data.csproj" />
+  </ItemGroup>
+</Project>

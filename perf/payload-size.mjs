@@ -89,4 +89,11 @@ const fundKb = fund.body.length / 1024;
 const fundOver = fundKb >= 5;
 if (fundOver) failed = true;
 console.log(`| P2 fund 1 ITD | – | ${fund.headers['content-encoding'] ?? 'identity'} | ${fundKb.toFixed(1)} | 5 | ${fundOver ? 'FAIL' : 'ok'} |`);
+
+// P3 has no payload budget (README §10): each source's response is reported for the ADR-0012 numbers.
+for (const source of ['core', 'market', 'surveillance', 'pricing', 'reference']) {
+  const res = await request('GET', `/api/insights/${source}`, { headers: { 'accept-encoding': 'br, gzip', cookie: cookieHeader() } });
+  if (res.status !== 200) throw new Error(`P3 ${source}: HTTP ${res.status} ${res.body}`);
+  console.log(`| P3 insights ${source} | – | ${res.headers['content-encoding'] ?? 'identity'} | ${(res.body.length / 1024).toFixed(1)} | – | report |`);
+}
 process.exit(failed ? 1 : 0);

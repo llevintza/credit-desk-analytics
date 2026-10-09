@@ -15,7 +15,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0009](0009-infinite-row-model-vs-client-side.md) | Grid: Infinite Row Model + displayed-column requests vs client-side model (measured) | 4 Shell + Positions UI | Accepted |
 | [0010](0010-signals-onpush-zoneless.md) | Angular: signals + OnPush + zoneless | 4 Shell + Positions UI | Accepted |
 | [0011](0011-long-format-edge-pivot.md) | P2: long format + edge pivot vs SQL pivot (measured) | 5 Fund Performance | Accepted |
-| 0012 | Insights: per-source endpoints + per-task DbContext vs 20 calls vs one call (measured) | 6 Insights Board | Planned |
+| [0012](0012-insights-per-source-endpoints.md) | Insights: per-source endpoints + per-task connections vs 20 calls vs one call; plain-table tiles (measured) | 6 Insights Board | Accepted |
 | 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
