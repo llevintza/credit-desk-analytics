@@ -158,7 +158,8 @@ describe('Shell', () => {
     ['a 500', (req: TestRequest) => req.flush('boom', { status: 500, statusText: 'Server Error' })],
     ['a network error', (req: TestRequest) => req.error(new ProgressEvent('error'))],
   ])('signs out locally and tells /login the sign-out was unconfirmed when logout fails with %s', async (_, fail) => {
-    const { el, http } = await render();
+    // With the real interceptor chain: sessionInterceptor must leave these to the Shell (still one navigation).
+    const { el, http } = await render(viewer, undefined, provideHttpClient(withInterceptors([sessionInterceptor])));
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const auth = TestBed.inject(AuthService);
     const scope = TestBed.inject(ScopeService);

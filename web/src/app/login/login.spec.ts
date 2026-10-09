@@ -44,7 +44,7 @@ describe('Login', () => {
   it.each([
     ['/login?signout=unconfirmed', true],
     ['/login?signout=other', false],
-    ['/login', false],
+    ['/login?signout=UNCONFIRMED', false], // the match is exact, not case-insensitive
   ])('on %s, warns that sign-out could not be confirmed: %s', async (url, shown) => {
     TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'login', component: Login }])] });
     const harness = await RouterTestingHarness.create();
