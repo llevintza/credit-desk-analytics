@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
@@ -73,6 +75,36 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
             await using var db = api.NewContext();
             Assert.NotNull((await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).LockoutEnd);
         }
+    }
+
+    public enum Outcome { Success, NotAllowed, LockedOut, Failed }
+
+    [Theory]
+    [InlineData(LoginPath.Disabled, Outcome.NotAllowed)]
+    [InlineData(LoginPath.Expired, Outcome.NotAllowed)]
+    [InlineData(LoginPath.Locked, Outcome.LockedOut)]
+    [InlineData(LoginPath.LockedWithTheRightPassword, Outcome.LockedOut)]
+    [InlineData(LoginPath.TriggersLockout, Outcome.LockedOut)]
+    [InlineData(LoginPath.NoStoredPassword, Outcome.Failed)]
+    [InlineData(LoginPath.EmptyPassword, Outcome.Failed)]
+    [InlineData(LoginPath.MissingPassword, Outcome.Failed)]
+    [InlineData(LoginPath.WrongPassword, Outcome.Failed)]
+    [InlineData(LoginPath.Success, Outcome.Success)]
+    public async Task Each_account_state_gets_its_own_sign_in_result(LoginPath path, Outcome expected)
+    {
+        // #231: the endpoint answers every failure with the same 401, so only the manager's result tells a swapped
+        // outcome apart.
+        var (email, password) = await ArrangeAsync(path);
+        await using var scope = api.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByEmailAsync(email!);
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, password!, lockoutOnFailure: true);
+
+        Assert.Equal(expected == Outcome.Success, result.Succeeded);
+        Assert.Equal(expected == Outcome.NotAllowed, result.IsNotAllowed);
+        Assert.Equal(expected == Outcome.LockedOut, result.IsLockedOut);
+        Assert.False(result.RequiresTwoFactor);
     }
 
     [Theory]
@@ -259,6 +291,75 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_null_password_fails_with_one_hash()
+    {
+        // #231: callers other than the endpoint may pass null; the decoy still runs, without throwing.
+        var hasher = new CountingHasher();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<IPasswordHasher<DeskUser>>();
+            s.AddSingleton<IPasswordHasher<DeskUser>>(hasher);
+        }));
+        var user = await api.CreateUserAsync();
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByIdAsync(user.Id.ToString());
+
+        hasher.Reset();
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, null!, lockoutOnFailure: true);
+
+        Assert.Equal(SignInResult.Failed, result);
+        Assert.Equal(1, hasher.Verifications);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Without_lockout_support_the_failure_count_is_neither_raised_nor_cleared(bool rightPassword)
+    {
+        // #231: as the base, the failure count is touched only where the user manager supports lockout.
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<UserManager<DeskUser>>();
+            s.AddScoped<UserManager<DeskUser>, NoLockoutUserManager>();
+        }));
+        var user = await api.CreateUserAsync();
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.AccessFailedCount, 2), Ct);
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        Assert.False(signIn.UserManager.SupportsUserLockout);
+        var tracked = await signIn.UserManager.FindByIdAsync(user.Id.ToString());
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, rightPassword ? PostgresApiFactory.Password : "wrong-password-123456", lockoutOnFailure: true);
+
+        Assert.Equal(rightPassword ? SignInResult.Success : SignInResult.Failed, result);
+        await using (var db = api.NewContext())
+            Assert.Equal(2, (await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct)).AccessFailedCount);
+    }
+
+    [Fact]
+    public async Task The_attempt_that_triggers_lockout_logs_it_as_the_base_does()
+    {
+        // #231: the base returns through LockedOut, which logs the lockout; the override must too.
+        var log = new CapturingLogger();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.RemoveAll<ILogger<SignInManager<DeskUser>>>();
+            s.AddSingleton<ILogger<SignInManager<DeskUser>>>(log);
+        }));
+        var (email, password) = await ArrangeAsync(LoginPath.TriggersLockout);
+        await using var scope = host.Services.CreateAsyncScope();
+        var signIn = scope.ServiceProvider.GetRequiredService<SignInManager<DeskUser>>();
+        var tracked = await signIn.UserManager.FindByEmailAsync(email!);
+
+        var result = await signIn.CheckPasswordSignInAsync(tracked!, password!, lockoutOnFailure: true);
+
+        Assert.True(result.IsLockedOut);
+        Assert.Contains("UserLockedOut", log.EventNames);
+    }
+
+    [Fact]
     public async Task Without_lockout_on_failure_a_wrong_password_is_not_counted()
     {
         var user = await api.CreateUserAsync();
@@ -323,6 +424,37 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
             Assert.True(_waits.Count >= count, $"{_waits.Count} of {count} logins reached the floor.");
             return FloorWaits;
         }
+    }
+
+    /// <summary>Records the event name of every entry the sign-in manager logs, at any level.</summary>
+    private sealed class CapturingLogger : ILogger<SignInManager<DeskUser>>
+    {
+        private readonly ConcurrentQueue<string?> _events = new();
+
+        public string?[] EventNames => [.. _events];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            _events.Enqueue(eventId.Name);
+    }
+
+    /// <summary>The app's user manager over the same store, reporting that it does not support lockout.</summary>
+    private sealed class NoLockoutUserManager(
+        IUserStore<DeskUser> store,
+        IOptions<IdentityOptions> options,
+        IPasswordHasher<DeskUser> hasher,
+        IEnumerable<IUserValidator<DeskUser>> userValidators,
+        IEnumerable<IPasswordValidator<DeskUser>> passwordValidators,
+        ILookupNormalizer normalizer,
+        IdentityErrorDescriber errors,
+        IServiceProvider services,
+        ILogger<UserManager<DeskUser>> logger)
+        : UserManager<DeskUser>(store, options, hasher, userValidators, passwordValidators, normalizer, errors, services, logger)
+    {
+        public override bool SupportsUserLockout => false;
     }
 
     /// <summary>The app's hasher, counting each PBKDF2 run.</summary>

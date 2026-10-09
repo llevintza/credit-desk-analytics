@@ -34,6 +34,15 @@ public sealed class DeskSignInManager(
     /// triggers lockout hashes there and again in a caller that guards the locked case. Here the account is checked
     /// once, then either the stored hash is verified or the <see cref="TimingGuard"/> decoy is, never both. Calling
     /// the base after the pre-check would re-run it, and an expiry passing in between would skip the hash.
+    /// <para>
+    /// Unlike the base, this doesn't record Identity's <c>aspnetcore.identity.sign_in.check_password_attempts</c>
+    /// metric: its recorder is internal to <see cref="SignInManager{TUser}"/>. The base's logging is kept
+    /// (<see cref="SignInManager{TUser}.LockedOut"/> on the attempt that triggers lockout).
+    /// </para>
+    /// <para>
+    /// An account with no stored password fails without counting toward lockout (the base increments the count).
+    /// Such an account can never sign in with a password, so there is nothing to lock it out of.
+    /// </para>
     /// </remarks>
     public override async Task<SignInResult> CheckPasswordSignInAsync(DeskUser user, string password, bool lockoutOnFailure)
     {
@@ -41,19 +50,23 @@ public sealed class DeskSignInManager(
         var refused = await PreSignInCheck(user);
         if (refused is not null || string.IsNullOrEmpty(password) || user.PasswordHash is null)
         {
-            guard.Verify(password);
+            // The endpoint coalesces a missing password to "", other callers may not: the hasher throws on null.
+            guard.Verify(password ?? string.Empty);
             return refused ?? SignInResult.Failed;
         }
 
         if (await UserManager.CheckPasswordAsync(user, password))
         {
-            // No two-factor in this app, so a correct password always clears the failure count (as the base does).
+            // No two-factor in this app, so a correct password always clears the failure count (as the base does,
+            // and only where the store supports lockout).
             // As the base: a reset that fails (e.g. a concurrency conflict from parallel guesses) must not sign in.
+            if (!UserManager.SupportsUserLockout)
+                return SignInResult.Success;
             var reset = await UserManager.ResetAccessFailedCountAsync(user);
             return reset.Succeeded ? SignInResult.Success : SignInResult.Failed;
         }
 
-        if (lockoutOnFailure)
+        if (UserManager.SupportsUserLockout && lockoutOnFailure)
         {
             // As the base: an increment that fails (a concurrency conflict) fails the attempt, rather than reading
             // the lockout from unsaved in-memory state.
@@ -61,7 +74,7 @@ public sealed class DeskSignInManager(
             if (!counted.Succeeded)
                 return SignInResult.Failed;
             if (await UserManager.IsLockedOutAsync(user))
-                return SignInResult.LockedOut;
+                return await LockedOut(user);
         }
         return SignInResult.Failed;
     }
