@@ -65,8 +65,8 @@ export class Shell {
   }
 
   /**
-   * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in.
-   * The server session may survive until it expires; see the follow-up issue.
+   * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in, but the
+   * server never confirmed it: the session cookie may stay valid until it expires. /login says so (#208).
    * Teardown unsubscribes the logout request on purpose: Shell only goes away on navigation to /login.
    */
   protected logout(): void {
@@ -76,7 +76,7 @@ export class Shell {
         // 401: sessionInterceptor has already signed out and navigated to /login.
         if (e instanceof HttpErrorResponse && e.status === 401) return;
         this.auth.signedOut();
-        void this.router.navigate(['/login']);
+        void this.router.navigate(['/login'], { queryParams: { signout: 'unconfirmed' } });
       },
     });
   }

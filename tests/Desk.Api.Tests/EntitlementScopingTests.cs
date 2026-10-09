@@ -161,6 +161,7 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
         Assert.Equal("MISS", second.Headers.GetValues("X-Cache").Single());
         var secondDoc = await JsonAsync(second);
         Assert.All(secondDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        Assert.Equal(Math.Min(p2Count, 500), secondDoc.GetProperty("data")[1].GetArrayLength());
         // The summary cache (sum:{SummaryKey}) is shared by every block of a view: it must not carry portfolio 1's totals.
         Assert.Equal(p2Count, secondDoc.GetProperty("rowCount").GetInt32());
         Assert.Equal(p2Sum, secondDoc.GetProperty("summary").GetProperty("market_value").GetDecimal());
@@ -169,6 +170,7 @@ public sealed class EntitlementScopingTests(PostgresApiFactory api)
         var replay = await client.SendAsync(Post("/api/positions/query", xsrf, Body, ifNoneMatch: etag), Ct);
         var replayDoc = await JsonAsync(replay);
         Assert.All(replayDoc.GetProperty("data")[1].EnumerateArray(), v => Assert.Equal(P2, v.GetInt32()));
+        Assert.Equal(Math.Min(p2Count, 500), replayDoc.GetProperty("data")[1].GetArrayLength());
         Assert.Equal(p2Count, replayDoc.GetProperty("rowCount").GetInt32());
     }
 

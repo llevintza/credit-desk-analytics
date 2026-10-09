@@ -3,6 +3,8 @@ using Desk.Api;
 using Desk.Api.Admin;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
+using Desk.Api.Funds;
+using Desk.Data.Funds;
 using Desk.Api.Hardening;
 using Desk.Api.Limits;
 using Desk.Api.Positions;
@@ -21,7 +23,7 @@ if (!builder.Environment.IsDevelopment())
 }
 
 builder.Services.AddDeskData(builder.Configuration);
-builder.Services.AddDeskAuth();
+builder.Services.AddDeskAuth(AuthSetup.HttpsOnly(builder.Configuration, builder.Environment));
 builder.Services.AddSingleton<DemoAccounts>();
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
@@ -29,7 +31,9 @@ builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), 
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddHostedService<AuditWriter>();
+builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
+builder.Services.AddSingleton<FundRepository>();
 builder.Services.AddSingleton<MetaRepository>();
 builder.Services.AddSingleton<PresetRepository>();
 builder.Services.AddSingleton<MetaCache>();
@@ -76,6 +80,8 @@ app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication());
 // UseAuthentication on a branch doesn't mark the app, and WebApplication would then add a global one at the very
 // start of the pipeline (before maintenance mode). Mark it so the path-scoped one above is the only one.
 ((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
+// Before the limiter: a failed login's wait for its response-time floor holds no /api concurrency permit (#230).
+app.UseMiddleware<LoginFloor>();
 app.UseRateLimiter();
 // After the limiter: rejected (429) requests are not written to the audit table.
 app.UseMiddleware<AuditMiddleware>();
@@ -89,6 +95,7 @@ app.MapHealthEndpoints(api);
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();
 api.MapPositionsEndpoints();
+api.MapFundEndpoints();
 api.MapAdminEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 

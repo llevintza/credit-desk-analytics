@@ -1,3 +1,4 @@
+using Desk.Api.Limits;
 using Desk.Data.App;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Authentication;
@@ -15,10 +16,16 @@ public static class AuthSetup
 {
     public const string CookieName = "__Host-desk";
     /// <summary>
-    /// No <c>__Host-</c> prefix: that needs Secure, and antiforgery refuses to issue a Secure cookie on a plain-HTTP
-    /// request (local compose, the dev proxy). In production the request is HTTPS (forwarded headers), so it is Secure.
+    /// The antiforgery cookie behind the TLS proxy outside Development (production): <c>__Host-</c> prefix and
+    /// always Secure, so nothing on another subdomain or plain HTTP can plant or overwrite it (#118 N1).
     /// </summary>
-    public const string AntiforgeryCookieName = "desk-af";
+    public const string AntiforgeryCookieName = "__Host-desk-af";
+    /// <summary>
+    /// The antiforgery cookie off the proxy (local compose, CI e2e and budgets, the dev proxy), which serve plain
+    /// HTTP: Secure only when the request is HTTPS, so no <c>__Host-</c> prefix. Antiforgery refuses to issue an
+    /// always-Secure cookie on a plain-HTTP request, which was a login 500 on compose.
+    /// </summary>
+    public const string PlainHttpAntiforgeryCookieName = "desk-af";
     /// <summary>Readable by the SPA, echoed back in <see cref="AntiforgeryHeaderName"/> (Angular's default names).</summary>
     public const string XsrfCookieName = "XSRF-TOKEN";
     public const string AntiforgeryHeaderName = "X-XSRF-TOKEN";
@@ -30,7 +37,17 @@ public static class AuthSetup
     public static readonly TimeSpan AbsoluteExpiry = TimeSpan.FromHours(24);
     public static readonly TimeSpan SecurityStampInterval = TimeSpan.FromMinutes(5);
 
-    public static IServiceCollection AddDeskAuth(this IServiceCollection services)
+    /// <summary>
+    /// Every request is HTTPS: behind Render's TLS proxy (it redirects plain HTTP, and the app reads
+    /// <c>X-Forwarded-Proto</c>), outside Development. Local compose and CI run Production over plain HTTP without the
+    /// proxy setting, so they stay on the plain-HTTP antiforgery cookie.
+    /// </summary>
+    public static bool HttpsOnly(IConfiguration config, IHostEnvironment env) =>
+        !env.IsDevelopment() && ClientAddress.From(config).BehindProxy;
+
+    /// <param name="services">The app's services.</param>
+    /// <param name="httpsOnly"><see cref="HttpsOnly"/>: issue the <c>__Host-</c>, always-Secure antiforgery cookie.</param>
+    public static IServiceCollection AddDeskAuth(this IServiceCollection services, bool httpsOnly)
     {
         services.TryAddSingleton(TimeProvider.System);
         services.AddIdentityCore<DeskUser>(IdentityPolicy.Apply)
@@ -38,6 +55,9 @@ public static class AuthSetup
             .AddEntityFrameworkStores<AppDbContext>()
             .AddClaimsPrincipalFactory<DeskClaimsFactory>()
             .AddSignInManager<DeskSignInManager>();
+        // Scoped like the hasher it verifies through, so a test's counting hasher sees the decoy checks too.
+        services.AddScoped<TimingGuard>();
+        services.AddSingleton(LoginFloorOptions.Default);
 
         services.AddAuthentication(IdentityConstants.ApplicationScheme)
             .AddCookie(IdentityConstants.ApplicationScheme, ConfigureCookie)
@@ -64,8 +84,8 @@ public static class AuthSetup
         services.AddAntiforgery(o =>
         {
             o.HeaderName = AntiforgeryHeaderName;
-            o.Cookie.Name = AntiforgeryCookieName;
-            o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            o.Cookie.Name = httpsOnly ? AntiforgeryCookieName : PlainHttpAntiforgeryCookieName;
+            o.Cookie.SecurePolicy = httpsOnly ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
             o.Cookie.SameSite = SameSiteMode.Strict;
             o.Cookie.HttpOnly = true;
         });

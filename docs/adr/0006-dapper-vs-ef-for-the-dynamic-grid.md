@@ -23,6 +23,8 @@ The page is not the expensive part. The **summary**, a COUNT plus a SUM or marke
 
 Seed 42, scale 1.0, as-of 2026-10-06. 20,001 rows per as-of, 202 columns, about 63 MB of heap. Postgres 17.11 in Docker, Apple M5, .NET 10.0.12, 200 iterations after warm-up.
 
+**These are local measurements.** In CI, the `budgets` job enforces the payload budget (#125) on a scale-1.0 compose stack and runs the k6 p95 checks (#135); the k6 latency results are reported but non-blocking until #87 (see the Addendum and #241).
+
 **The page (200 rows, sort `market_value DESC`, indexed):**
 
 | Preset | Path | p50 ms | p95 ms | alloc KB/op |
@@ -74,7 +76,9 @@ DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 80    # "
 | MISS: **the whole book's first view** (every row, a filter value never seen before; #129) | 42.7 | **71.0** | ≤ 150 |
 | HIT | 1.7 | 4.3 | ≤ 15 |
 
-**Corrected in #129 (R121-F5).** The MISS row above used to say 11.7 / 13.9 ms. That run's filter, `spread_bp > ~1,100`, selected only the B/CCC tail, not the whole-book first view the 150 ms budget is about. The script now uses a threshold below every spread, unique per iteration, so every row is counted and summarised, and a `whole book` check asserts `rowCount ≥ 19,000` at scale 1.0. The same API build and local database were used for both runs:
+The k6 figure is end-to-end (DB + columnar serialization + br compression + HTTP); the 34.4 ms above is the DB round trip alone.
+
+**Corrected in #129 (R121-F5).** The MISS row above used to say 11.7 / 13.9 ms. That run's filter, `spread_bp > ~1,100`, selected only the B/CCC tail, not the whole-book first view the 150 ms budget is about. That run's script used a threshold below every spread, unique per VU and iteration, so every row was counted and summarised, with a `whole book` check of `rowCount ≥ 19,000` at scale 1.0. Since #202 the threshold also carries a per-run offset (`−1e12·VU − 1e6·run − n`), and `whole book` asserts that `rowCount` equals the unfiltered count from `setup()`, with a separate `book >= MIN_BOOK` guard (`MIN_BOOK`, a whole number, default 19,000; a blank or non-numeric value stops the run). Since #244 the All-preset scenario's `All whole book` check uses the same exact count. The same API build and local database were used for both runs:
 
 | MISS filter | rows | p50 ms | p95 ms |
 |---|---:|---:|---:|
@@ -82,7 +86,7 @@ DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 80    # "
 | `spread_bp > −1e6·VU − n` (after) | every row (~20k) | 42.7 | 71.0 |
 
 ```
-# local stack only; seed 42, scale 1.0; per-user limits raised in the local API process
+# local stack only; abridged k6 1.3.0 summary; seed 42, scale 1.0; API: dotnet run -c Release --no-launch-profile, ASPNETCORE_ENVIRONMENT=Production, ASPNETCORE_URLS=http://localhost:5185 (the reproduce block uses the script's default :5181), per-user limits raised in that process
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5185 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ✓ 'p(95)<150' http_req_duration{scenario:miss} p(95)=70.98ms
@@ -97,7 +101,7 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 ```
 DATABASE_URL=… dotnet run -c Release --project src/Desk.Seeder -- --force --scale 1.0 --as-of 2026-10-06
 DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out
-# Local stack only. API with RATE_LIMIT_PER_USER_PER_MIN/BURST raised in its own process (one k6 user), then:
+# Local stack only. API: ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://localhost:5181 dotnet run -c Release --no-launch-profile --project src/Desk.Api, with RATE_LIMIT_PER_USER_PER_MIN/BURST raised in its own process (one k6 user), then:
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:5181 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ```
@@ -116,7 +120,25 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 
 - SQL text is built by hand. The safety rests on `GridQueryNormalizer`: catalog-only identifiers, quoted, with every value a parameter. It has a dedicated unit test suite, including SQL snapshot tests and injection tests.
 - The SQL is close to ANSI. Two things are Postgres-specific: `ILIKE`, and `LATERAL … OFFSET 0`, which would become `CROSS APPLY` on SQL Server (README §16).
-- The summary still scans every filtered row: 33 ms (Risk) and 85 ms (All) locally for the first view of the whole book. On Neon's fractional CPU expect several times that, still well under the 10 s guard.
+- The summary still scans every filtered row: 33 ms (Risk) and 85 ms (All) of DB time locally for the first view of the whole book (k6 end-to-end, Risk: p95 71 ms). On Neon's fractional CPU expect several times that, still well under the 10 s guard.
 - Cache keys are the JSON form of the normalized query: values are escaped by the serializer, so a crafted filter can't collide with another query's key or ETag in the shared cache.
 - The reference data behind every key (catalog, as-of dates, data version) is re-read every 10 minutes while traffic continues, and every 30 seconds while the database is still empty. A reseed is therefore picked up without a restart. `POST /api/admin/cache/clear` drops everything at once.
 - Revisit if the snapshot grows past ~100k rows per as-of. Options then: materialized per-filter totals, or a narrower aggregate table.
+
+## Addendum (#135, 2026-10-08): All-preset whole-book MISS
+
+README §10's 150 ms MISS budget is not scoped to a preset, so `perf/positions.js` now also measures the All preset (every column of the built-in All preset, ~200) under the same whole-book, never-asked filter, as its own `all_miss` trend with `p(95)<150`. The CI `budgets` job reports it (#135). Local numbers, labelled as such: compose stack (`docker compose up --build`), seed 42, scale 1.0, per-user limits raised in that app's environment only, one VU, 30 s per scenario, on a laptop shared with other workloads (so the Risk MISS p95 also ran higher than the 71.0 ms above):
+
+| Run | MISS Risk p50 / p95 ms | HIT p50 / p95 ms | MISS All p50 / p95 ms | All within 150 ms? |
+|---|---:|---:|---:|---|
+| 1 | 40.9 / 80.6 | 1.5 / 6.3 | 119.8 / 227.7 | **no** |
+| 2 | 55.1 / 117.6 | 1.3 / 4.9 | 117.0 / 272.8 | **no** |
+| 3 | 57.2 / 118.6 | 2.3 / 6.1 | 114.8 / 188.0 | **no** |
+
+The All-preset whole-book first view is **over the 150 ms budget** locally (p50 ~115–120 ms, p95 188–273 ms), while Risk and HIT are within theirs. The budget stays as written; whether to optimise the All first view or rescope the MISS budget to the Risk preset is open for Leo/Helms (#241).
+
+```
+# local stack only (compose, -p desk135, its own ports); a throwaway viewer from Desk.UserAdmin
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:18135 \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
+```

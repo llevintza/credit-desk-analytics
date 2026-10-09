@@ -79,6 +79,8 @@
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
+            "isolate": true,
+            "runnerConfig": "vitest.config.mts",
             "coverage": true,
             "coverageInclude": ["src/**/*.ts"],
             "coverageExclude": ["src/**/*.spec.ts"],

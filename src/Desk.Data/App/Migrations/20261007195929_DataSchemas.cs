@@ -338,6 +338,8 @@ namespace Desk.Data.App.Migrations
             migrationBuilder.Sql(DropSchemasSql);
             // Dropping the data schemas leaves empty tables after a later Up. Delete this
             // version's metadata so --if-changed cannot skip and leave the book empty.
+            // The literal stays on purpose (#109 R2-N2): Desk.Data can't reference Desk.Seeder.SeedVersion, and a
+            // migration is a frozen snapshot of the schema it created, which version 1.0.0 seeded. Don't edit it later.
             migrationBuilder.Sql("DELETE FROM app.seed_metadata WHERE version = '1.0.0';");
 
             migrationBuilder.DropTable(

@@ -238,13 +238,18 @@ export class Positions {
     return this.grid!.getAllDisplayedColumns().map((c) => c.getColId());
   }
 
-  /** The `detail` (else `title`) of an RFC 9457 problem response, or null for a network error or a plain body. */
+  /**
+   * The `detail` (else `title`) of an RFC 9457 problem response, or null for a network error or a plain body.
+   * A 409's detail alone ("Try again.") doesn't say what clashed, so it keeps the title in front: `title: detail`.
+   */
   private static problemDetail(e: unknown): string | null {
     const body: unknown = e instanceof HttpErrorResponse ? e.error : null;
     if (typeof body !== 'object' || body === null) return null;
     const { detail, title } = body as { detail?: unknown; title?: unknown };
-    for (const text of [detail, title]) if (typeof text === 'string' && text) return text;
-    return null;
+    const text = (v: unknown) => (typeof v === 'string' && v ? v : null);
+    const [d, t] = [text(detail), text(title)];
+    if (d && t && (e as HttpErrorResponse).status === 409) return `${t}: ${d}`;
+    return d ?? t;
   }
 
   private static remembered(): string | null {

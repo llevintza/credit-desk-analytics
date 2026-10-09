@@ -169,6 +169,42 @@ public sealed class PositionsUnitTests
     }
 
     [Fact]
+    public async Task Cached_responses_hit_store_and_answer_304_with_or_without_an_audit_feature()
+    {
+        using var cache = new PositionsCache(new ConfigurationBuilder().Build(), TimeProvider.System);
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        Assert.Null(CachedResponse.TryHit(http, cache, "W/\"k\"", "application/json", 0));
+        Assert.Equal("W/\"k\"", http.Response.Headers.ETag.ToString());
+
+        var stored = CachedResponse.Store(http, cache, "W/\"k\"", [1, 2, 3], "application/json", DateTimeOffset.MaxValue, 1, 1, 0, rows: 2);
+        Assert.NotNull(stored);
+        Assert.Equal("MISS", http.Response.Headers["X-Cache"].ToString());
+
+        var again = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        var feature = new Desk.Api.Audit.AuditFeature();
+        again.Features.Set(feature);
+        var hit = CachedResponse.TryHit(again, cache, "W/\"k\"", "application/json", 0);
+        Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.FileContentHttpResult>(hit);
+        Assert.Equal("HIT", feature.Cache);
+
+        var conditional = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        conditional.Request.Headers.IfNoneMatch = "W/\"other\", W/\"k\"";
+        var notModified = CachedResponse.TryHit(conditional, cache, "W/\"k\"", "application/json", 0);
+        Assert.Equal(304, Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.StatusCodeHttpResult>(notModified).StatusCode);
+        await Task.CompletedTask;
+    }
+
+    [Theory]
+    [InlineData("W/\"a\"", true)]
+    [InlineData("W/\"x\", W/\"a\"", true)]   // a list
+    [InlineData(" W/\"a\" ", true)]          // whitespace
+    [InlineData("*", true)]
+    [InlineData("W/\"b\"", false)]
+    [InlineData("", false)]
+    public void If_none_match_understands_lists_and_wildcards(string header, bool matches) =>
+        Assert.Equal(matches, CachedResponse.Matches(new Microsoft.Extensions.Primitives.StringValues(header), "W/\"a\""));
+
+    [Fact]
     public void Accept_negotiation_finds_messagepack_anywhere_in_the_header()
     {
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
@@ -176,4 +212,19 @@ public sealed class PositionsUnitTests
         http.Request.Headers.Accept = "application/json, application/x-msgpack;q=0.9";
         Assert.True(PositionsEndpoints.WantsMsgPack(http.Request));
     }
+
+    [Fact]
+    public void Unavailable_tells_an_unseeded_database_from_an_invalid_catalog()
+    {
+        static string? Title(MetaSnapshot meta) =>
+            Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(PositionsEndpoints.Unavailable(meta, new GridRequest())).ProblemDetails.Title;
+        var catalog = ColumnCatalog.PositionSnapshot;
+        var now = DateTimeOffset.UnixEpoch;
+        // A usable catalog with no as-of dates yet, and an empty database: both are "not seeded".
+        Assert.Equal("No data loaded", Title(new MetaSnapshot(catalog, new GridQueryNormalizer(catalog), [], "v", [], now, now)));
+        Assert.Equal("No data loaded", Title(new MetaSnapshot([], null, [], "empty", [], now, now)));
+        // Catalog rows but no normalizer: the catalog was refused.
+        Assert.Equal("Column catalog invalid", Title(new MetaSnapshot(catalog, null, [], "v", [], now, now)));
+    }
 }
+

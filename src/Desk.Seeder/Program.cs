@@ -3,11 +3,12 @@ using Desk.Data;
 using Desk.Seeder;
 using Microsoft.Extensions.Configuration;
 
-// Exit codes: 0 ok (seeded or skipped), 1 bad arguments / not migrated, 2 over the size budget,
-// 3 unexpected error, 130 cancelled.
+// Exit codes: 0 ok (seeded or skipped), 1 bad arguments / not migrated, 2 over the size budget or the reseed peak cap
+// (refused before TRUNCATE), 3 unexpected error (53100 disk full gets its own message), 130 cancelled (before COMMIT: rolled
+// back, reported here; after COMMIT: data kept, reported by SeedRunner, #285).
 SeedOptions options;
 try { options = SeedOptions.Parse(args); }
-catch (Exception e) when (e is ArgumentException or FormatException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
+catch (Exception e) when (e is ArgumentException or FormatException or OverflowException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }
 
 string connectionString;
 try { connectionString = ConnectionStrings.Resolve(new ConfigurationBuilder().AddEnvironmentVariables().Build(), ConnectionStrings.App); }
@@ -24,14 +25,16 @@ try
 {
     return await SeedRunner.RunAsync(options, connectionString, Console.Out, Console.Error, cts.Token);
 }
-catch (OperationCanceledException) when (cts.IsCancellationRequested)
+// Any failure once cancellation was requested is the cancellation (it can surface as e.g. an NpgsqlException).
+// SeedRunner handles a cancellation after COMMIT itself, so only a pre-commit cancellation reaches this.
+catch (Exception) when (cts.IsCancellationRequested)
 {
     Console.Error.WriteLine("ERROR: cancelled; the seeding transaction was rolled back.");
-    return 130;
+    return SeedRunner.CancelledExitCode;
 }
 catch (Exception e)
 {
-    Console.Error.WriteLine($"ERROR: {e.GetType().Name}: {e.Message}");
+    Console.Error.WriteLine(SeedRunner.DescribeError(e));
     return 3;
 }
 finally

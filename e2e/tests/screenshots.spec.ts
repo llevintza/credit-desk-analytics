@@ -23,6 +23,7 @@ for (const theme of ['dark', 'light'] as const) {
       await page.goto(p.path);
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
       if (p.name === 'positions') await gridReady(page);
+      if (p.name === 'fund-performance') await expect(page.getByTestId('caption')).toBeVisible();
       await page.waitForTimeout(400);
       await page.screenshot({ path: `${dir}/${p.name}-${theme}.png` });
     }

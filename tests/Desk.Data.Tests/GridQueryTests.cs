@@ -94,7 +94,6 @@ public sealed class GridQueryTests
             ["cs01"] = new("number", "explode", Json("1")),
             ["price"] = new("number", "greaterThan", Json("\"98.5\"")),       // numeric string is fine
             ["yield"] = new("number", "inRange", Json("1")),                  // inRange without filterTo
-            ["oas_bp"] = new("number", "equals", Json("1e400")),              // not finite
             ["cusip"] = new("text", "contains", Json("\"\"")),                // empty text
             ["sector"] = new("bogus"),
             ["class"] = null!,
@@ -139,13 +138,13 @@ public sealed class GridQueryTests
 
         var expected =
             "SELECT \"position_id\", \"deal_name\", \"market_value\", \"spread_bp\", \"price_source\" FROM core.position_snapshot " +
-            "WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 AND \"sector\" = ANY(@p5) " +
-            "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 AND " + Haystack() + " ILIKE @p8 " +
+            "WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 ESCAPE '\\' AND \"sector\" = ANY(@p5) " +
+            "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 ESCAPE '\\' AND " + Haystack() + " ILIKE @p8 ESCAPE '\\' " +
             "ORDER BY \"market_value\" DESC, \"position_id\" DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;\n" +
             "SELECT COUNT(*)::int AS row_count, SUM(\"market_value\") AS \"market_value\", " +
             "SUM(\"spread_bp\" * w.weight_f8) / NULLIF(SUM(w.weight_f8) FILTER (WHERE \"spread_bp\" IS NOT NULL), 0) AS \"spread_bp\" " +
-            "FROM core.position_snapshot CROSS JOIN LATERAL (SELECT abs(market_value)::float8 AS weight_f8 OFFSET 0) w WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 AND \"sector\" = ANY(@p5) " +
-            "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 AND " + Haystack() + " ILIKE @p8;";
+            "FROM core.position_snapshot CROSS JOIN LATERAL (SELECT abs(market_value)::float8 AS weight_f8 OFFSET 0) w WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 ESCAPE '\\' AND \"sector\" = ANY(@p5) " +
+            "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 ESCAPE '\\' AND " + Haystack() + " ILIKE @p8 ESCAPE '\\';";
         Assert.Equal(expected, sql.Sql); // the WHERE text and its parameters are shared by both statements
 
         var p = sql.Parameters.ToDictionary(x => x.Key, x => x.Value);
@@ -186,12 +185,12 @@ public sealed class GridQueryTests
 
     public static TheoryData<string, string, string> TextOps => new()
     {
-        { "contains", "\"deal_name\" ILIKE @p4", "%a\\%b\\_c\\\\d%" },
-        { "notContains", "(\"deal_name\" IS NULL OR \"deal_name\" NOT ILIKE @p4)", "%a\\%b\\_c\\\\d%" },
-        { "startsWith", "\"deal_name\" ILIKE @p4", "a\\%b\\_c\\\\d%" },
-        { "endsWith", "\"deal_name\" ILIKE @p4", "%a\\%b\\_c\\\\d" },
-        { "equals", "\"deal_name\" ILIKE @p4", "a\\%b\\_c\\\\d" },
-        { "notEqual", "(\"deal_name\" IS NULL OR \"deal_name\" NOT ILIKE @p4)", "a\\%b\\_c\\\\d" },
+        { "contains", "\"deal_name\" ILIKE @p4 ESCAPE '\\'", "%a\\%b\\_c\\\\d%" },
+        { "notContains", "(\"deal_name\" IS NULL OR \"deal_name\" NOT ILIKE @p4 ESCAPE '\\')", "%a\\%b\\_c\\\\d%" },
+        { "startsWith", "\"deal_name\" ILIKE @p4 ESCAPE '\\'", "a\\%b\\_c\\\\d%" },
+        { "endsWith", "\"deal_name\" ILIKE @p4 ESCAPE '\\'", "%a\\%b\\_c\\\\d" },
+        { "equals", "\"deal_name\" ILIKE @p4 ESCAPE '\\'", "a\\%b\\_c\\\\d" },
+        { "notEqual", "(\"deal_name\" IS NULL OR \"deal_name\" NOT ILIKE @p4 ESCAPE '\\')", "a\\%b\\_c\\\\d" },
     };
 
     [Theory]
@@ -210,15 +209,20 @@ public sealed class GridQueryTests
         Assert.Contains(expected, Sql(new GridRequest(FilterModel: new() { ["deal_name"] = new("text", type) })).Sql);
 
     [Fact]
-    public void Text_filters_reject_unknown_types_non_strings_and_overlong_values()
+    public void Text_filters_drop_unknown_types_and_non_strings_and_refuse_overlong_values()
     {
-        foreach (var spec in new FilterSpec[]
-        {
-            new("text", "regex", Json("\"x\"")),
-            new("text", "contains", Json("5")),
-            new("text", "contains", Json(JsonSerializer.Serialize(new string('x', GridQueryNormalizer.MaxTextLength + 1)))),
-        })
+        foreach (var spec in new FilterSpec[] { new("text", "regex", Json("\"x\"")), new("text", "contains", Json("5")), new("text", "contains") })
             Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["deal_name"] = spec })).Filters);
+        // A long search is a real filter: dropping it would widen the result, so it's a 400 (#130 N7).
+        Assert.Single(Normalize(new GridRequest(FilterModel: new()
+        {
+            ["deal_name"] = new("text", "contains", Json(JsonSerializer.Serialize(new string('x', GridQueryNormalizer.MaxTextLength)))),
+        })).Filters);
+        var e = Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
+        {
+            ["deal_name"] = new("text", "contains", Json(JsonSerializer.Serialize(new string('x', GridQueryNormalizer.MaxTextLength + 1)))),
+        })));
+        Assert.Contains("deal_name", e.Message);
     }
 
     [Theory]
@@ -261,7 +265,7 @@ public sealed class GridQueryTests
     }
 
     [Fact]
-    public void Combined_conditions_join_with_the_operator_and_drop_if_any_part_is_invalid()
+    public void Combined_conditions_join_with_the_operator_and_refuse_if_any_part_is_invalid()
     {
         var or = Sql(new GridRequest(FilterModel: new()
         {
@@ -273,19 +277,20 @@ public sealed class GridQueryTests
         {
             ["deal_name"] = new("text", Operator: "AND", Conditions: [new(Type: "startsWith", Filter: Json("\"A\"")), new(Type: "endsWith", Filter: Json("\"3\""))]),
         }));
-        Assert.Contains("(\"deal_name\" ILIKE @p4 AND \"deal_name\" ILIKE @p5)", and.Sql);
+        Assert.Contains("(\"deal_name\" ILIKE @p4 ESCAPE '\\' AND \"deal_name\" ILIKE @p5 ESCAPE '\\')", and.Sql);
 
-        Assert.Empty(Normalize(new GridRequest(FilterModel: new()
+        // Dropping the whole filter because one part can't be applied would widen the result (#130 N7).
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
         {
             ["dv01"] = new("number", Operator: "OR", Conditions: [new(Type: "lessThan", Filter: Json("1")), new(Type: "nope")]),
-        })).Filters);
+        })));
 
         // More than two conditions apply in full (AG Grid's maxNumConditions); beyond the cap is a 400, not a cut.
         var three = Sql(new GridRequest(FilterModel: new()
         {
             ["sector"] = new("text", Operator: "OR", Conditions: [new(Type: "equals", Filter: Json("\"A\"")), new(Type: "equals", Filter: Json("\"B\"")), new(Type: "equals", Filter: Json("\"C\""))]),
         }));
-        Assert.Contains("(\"sector\" ILIKE @p4 OR \"sector\" ILIKE @p5 OR \"sector\" ILIKE @p6)", three.Sql);
+        Assert.Contains("(\"sector\" ILIKE @p4 ESCAPE '\\' OR \"sector\" ILIKE @p5 ESCAPE '\\' OR \"sector\" ILIKE @p6 ESCAPE '\\')", three.Sql);
         Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
         {
             ["dv01"] = new("number", Operator: "OR", Conditions: Enumerable.Repeat(new FilterSpec(Type: "blank"), GridQueryNormalizer.MaxConditions + 1).ToArray()),
@@ -301,11 +306,91 @@ public sealed class GridQueryTests
     }
 
     [Fact]
-    public void Filters_are_capped()
+    public void Filters_are_capped_and_more_is_a_400_not_a_cut()
     {
-        var model = ColumnCatalog.PositionSnapshot.Where(c => GridQueryNormalizer.IsNumeric(c.Kind))
-            .ToDictionary(c => c.Name, _ => new FilterSpec("number", "notBlank"));
-        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: model)).Filters.Count);
+        var numeric = ColumnCatalog.PositionSnapshot.Where(c => GridQueryNormalizer.IsNumeric(c.Kind))
+            .OrderBy(c => c.Name, StringComparer.Ordinal).ToList(); // the normalizer walks keys in ordinal order
+        Assert.True(numeric.Count > GridQueryNormalizer.MaxFilters);
+        Dictionary<string, FilterSpec> Model(int n) => numeric.Take(n).ToDictionary(c => c.Name, _ => new FilterSpec("number", "notBlank"));
+        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: Model(GridQueryNormalizer.MaxFilters))).Filters.Count);
+        // Unknown keys don't count; one applicable filter over the cap is refused rather than silently cut (#130 N7).
+        var over = Model(GridQueryNormalizer.MaxFilters + 1);
+        over["no_such_column"] = new FilterSpec("number", "notBlank");
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: over)));
+        // Filters that would be dropped anyway don't count toward the cap.
+        var dropped = Model(GridQueryNormalizer.MaxFilters);
+        foreach (var c in numeric.Skip(GridQueryNormalizer.MaxFilters))
+            dropped[c.Name] = new FilterSpec("number", "nope");
+        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: dropped)).Filters.Count);
+        var empty = Model(GridQueryNormalizer.MaxFilters);
+        empty[numeric[^1].Name] = new FilterSpec("number", "nope", Conditions: []);
+        Assert.Equal(GridQueryNormalizer.MaxFilters, Normalize(new GridRequest(FilterModel: empty)).Filters.Count);
+        // Filter 51 is refused whatever its shape: combined, or single with an empty conditions list. Its key sorts
+        // after the other fifty, so it is the one that meets the cap.
+        foreach (var last in new[]
+        {
+            new FilterSpec("number", Operator: "AND", Conditions: [new(Type: "notBlank"), new(Type: "blank")]),
+            new FilterSpec("number", "notBlank", Conditions: []),
+        })
+        {
+            var full = Model(GridQueryNormalizer.MaxFilters);
+            full[numeric[^1].Name] = last;
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: full)));
+        }
+    }
+
+    [Fact]
+    public void Money_filters_bind_decimal_and_other_numbers_bind_double()
+    {
+        // #130 N4: market_value is numeric(18,2); a double parameter would compare on float8 and lose exactness.
+        var q = Normalize(new GridRequest(FilterModel: new()
+        {
+            ["market_value"] = new("number", "inRange", Json("1000000.10"), FilterTo: Json("\"2000000.20\"")),
+            ["spread_bp"] = new("number", "greaterThan", Json("150.5")),
+        }));
+        var money = q.Filters.Single(f => f.Column.Name == "market_value").Conditions[0];
+        Assert.Equal(1000000.10m, Assert.IsType<decimal>(money.Value));
+        Assert.Equal(2000000.20m, Assert.IsType<decimal>(money.ValueTo));
+        Assert.Equal(150.5, Assert.IsType<double>(q.Filters.Single(f => f.Column.Name == "spread_bp").Conditions[0].Value));
+        // Not a number: dropped, as for any other unusable number filter.
+        foreach (var bad in new[] { "\"lots\"", "true", "\"NaN\"", "\"Infinity\"", "\"-Infinity\"" })
+            Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals", Json(bad)) })).Filters);
+        // A real number beyond decimal's range can't be applied: dropping it would widen the result, so it's a 400.
+        foreach (var huge in new[] { "1e40", "\"-1e40\"", "1e400" })
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "greaterThan", Json(huge)) })));
+        Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals") })).Filters); // no value
+    }
+
+    [Fact]
+    public void Out_of_range_numbers_on_double_and_integer_columns_are_a_400_not_dropped()
+    {
+        // #276: a real number beyond double's range used to be dropped, which widened the result; money already threw.
+        foreach (var column in new[] { "oas_bp", "spread_bp", "vintage", "position_id" })
+        foreach (var huge in new[] { "1e400", "-1e400", "\"1e400\"", "\"-1e400\"" })
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { [column] = new("number", "greaterThan", Json(huge)) })));
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
+        {
+            ["spread_bp"] = new("number", "inRange", Json("1"), FilterTo: Json("1e400")),
+        })));
+
+        // "NaN" and "Infinity" aren't numbers the user typed: still dropped, like any other non-number.
+        foreach (var word in new[] { "\"NaN\"", "\"Infinity\"", "\"-Infinity\"", "\"lots\"", "true" })
+            Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["spread_bp"] = new("number", "equals", Json(word)) })).Filters);
+
+        // Normal values, including integers past int and long range, still bind as the same double.
+        foreach (var (raw, expected) in new[] { ("250", 250d), ("\"-1.5e3\"", -1500d), ("1e308", 1e308), ("99999999999999999999", 1e20) })
+        {
+            var q = Normalize(new GridRequest(FilterModel: new() { ["vintage"] = new("number", "greaterThan", Json(raw)) }));
+            Assert.Equal(expected, Assert.IsType<double>(Assert.Single(q.Filters).Conditions[0].Value));
+        }
+    }
+
+    [Fact]
+    public void Identifiers_double_embedded_quotes()
+    {
+        // #130 N2: catalog names are checked on load; quoting would still not let one end the identifier early.
+        Assert.Equal("\"class\"", GridSqlBuilder.Quote("class"));
+        Assert.Equal("\"a\"\"b\"", GridSqlBuilder.Quote("a\"b"));
     }
 
     [Fact]
@@ -332,6 +417,12 @@ public sealed class GridQueryTests
         Assert.Contains("1.5", dated.CanonicalKey);
         Assert.Contains("\"Or\":true", dated.CanonicalKey);
         Assert.NotEqual(dated.CanonicalKey, dated.SummaryKey);
+
+        // Money values keep no trailing-zero scale: 1000, 1000.0, 1e3 and "1000.00" are one cache entry.
+        var keys = new[] { "1000", "1000.0", "1e3", "\"1000.00\"" }
+            .Select(v => Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "greaterThan", Json(v)) })).CanonicalKey)
+            .Distinct();
+        Assert.Single(keys);
     }
 
     [Fact]

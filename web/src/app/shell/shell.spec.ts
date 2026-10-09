@@ -90,7 +90,18 @@ describe('Shell', () => {
     expect(q('rows')?.textContent).toContain('0 visible / 18342 total');
     expect(q('last-request')?.textContent).toContain('38 ms');
     expect(q('x-cache')?.textContent).toContain('MISS');
-    expect(el.textContent).toContain('23.2 KB');
+    expect(q('bytes')?.textContent?.trim()).toBe('23.2 KB');
+    expect(q('bytes')?.textContent).not.toContain('≈');
+    expect(q('bytes')?.hasAttribute('title')).toBe(false);
+
+    // Overlapping parallel blocks: the size may be a sibling's, so it reads "≈ 23.2 KB" and says so to screen readers.
+    status.lastRequest.set({ ms: 38, cache: 'MISS', bytes: 23756, serverMs: 30, bytesApprox: true });
+    await fixture.whenStable();
+    const approx = q('bytes')!;
+    expect(approx.querySelector('[aria-hidden="true"]')?.textContent).toBe('≈ ');
+    expect(approx.querySelector('.sr-only')?.textContent).toBe('approximately ');
+    expect(approx.textContent?.replace('approximately ', '').replace(/\s+/g, ' ').trim()).toBe('≈ 23.2 KB');
+    expect(approx.getAttribute('title')).toContain('Approximate');
 
     status.visibleRows.set(40);
     status.lastRequest.set({ ms: 2, cache: null, bytes: null, serverMs: null });
@@ -132,19 +143,21 @@ describe('Shell', () => {
     expect(toggle).toBeTruthy();
   });
 
-  it('signs out to the login page', async () => {
+  it('signs out to the login page, with no unconfirmed sign-out notice', async () => {
     const { el, http } = await render();
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     ([...el.querySelectorAll('.user button')].find((b) => b.textContent?.includes('Sign out')) as HTMLButtonElement).click();
     http.expectOne('/api/auth/logout').flush(null);
+    expect(navigate).toHaveBeenCalledTimes(1);
     expect(navigate).toHaveBeenCalledWith(['/login']);
   });
 
   it.each([
     ['a 403 (antiforgery)', (req: TestRequest) => req.flush(null, { status: 403, statusText: 'Forbidden' })],
+    ['a 503 (maintenance)', (req: TestRequest) => req.flush('down', { status: 503, statusText: 'Service Unavailable' })],
     ['a 500', (req: TestRequest) => req.flush('boom', { status: 500, statusText: 'Server Error' })],
     ['a network error', (req: TestRequest) => req.error(new ProgressEvent('error'))],
-  ])('still signs out locally and goes to the login page when logout fails with %s', async (_, fail) => {
+  ])('signs out locally and tells /login the sign-out was unconfirmed when logout fails with %s', async (_, fail) => {
     const { el, http } = await render();
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const auth = TestBed.inject(AuthService);
@@ -153,7 +166,8 @@ describe('Shell', () => {
     fail(http.expectOne('/api/auth/logout'));
     expect(auth.me()).toBeNull();
     expect([scope.dates(), scope.portfolios()]).toEqual([[], []]);
-    expect(navigate).toHaveBeenCalledWith(['/login']);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(['/login'], { queryParams: { signout: 'unconfirmed' } });
   });
 
   it('leaves a 401 on logout to sessionInterceptor: one sign-out, one navigation', async () => {

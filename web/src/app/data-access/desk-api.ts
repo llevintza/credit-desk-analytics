@@ -2,7 +2,7 @@ import { HttpClient, HttpResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, inject } from '@angular/core';
 import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
 import {
-  AsOf, CatalogColumn, GridBlock, GridRequest, Health, Me, Portfolio, Preset, PresetState, RequestInfo,
+  AsOf, CatalogColumn, FundPerformance, FundRange, GridBlock, GridRequest, Health, Me, Portfolio, Preset, PresetState, RequestInfo,
 } from './api.types';
 
 /** A positions request in flight: when it started, and whether another one ran at the same time. */
@@ -62,6 +62,13 @@ export class DeskApi {
 
   deletePreset(page: string, name: string): Observable<void> {
     return this.http.delete<void>(`/api/presets/${encodeURIComponent(page)}`, { params: { name } });
+  }
+
+  /** P2 fund performance for a range (CUSTOM takes from/to as yyyy-MM-dd). */
+  fundPerformance(fundId: number, range: FundRange, from?: string, to?: string): Observable<FundPerformance> {
+    const params: Record<string, string> = { range };
+    if (range === 'CUSTOM' && from && to) Object.assign(params, { from, to });
+    return this.http.get<FundPerformance>(`/api/funds/${fundId}/performance`, { params });
   }
 
   /** One grid block, with what the status bar needs from the response headers and the resource timing. */
