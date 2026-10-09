@@ -31,6 +31,7 @@ public sealed class OpenApiResponsesTests(PostgresApiFactory api)
         ["POST /api/positions/query"] = "200,304,400,401,415,429,503",
         ["POST /api/positions/export"] = "200,400,401,415,429,503",
         ["GET /api/funds/{fundId}/performance"] = "200,304,400,401,404,429,503",
+        ["GET /api/insights/{source}"] = "200,304,400,401,404,429,503",
         ["POST /api/admin/cache/clear"] = "204,400,401,403,429,503",
     };
 
