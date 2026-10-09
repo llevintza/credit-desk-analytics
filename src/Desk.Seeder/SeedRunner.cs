@@ -13,15 +13,25 @@ public static class SeedRunner
     /// <summary>Measured committed size at scale 1.0 (README §5.4). The new-data half of the reseed peak estimate.</summary>
     public const double MeasuredMegabytesAtScale1 = 271;
 
-    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap.</returns>
-    /// <remarks>Cancelling <paramref name="ct"/> aborts the COPY and rolls back the single seeding transaction.</remarks>
+    /// <summary>Exit code for a cancellation, before COMMIT (thrown to Program.cs) or after it (returned here, #285).</summary>
+    public const int CancelledExitCode = 130;
+
+    /// <returns>0 ok (seeded or skipped), 1 not migrated, 2 over the size budget or the peak cap, 130 cancelled after COMMIT.</returns>
+    /// <remarks>Cancelling <paramref name="ct"/> before COMMIT aborts the COPY, rolls back the single seeding transaction and
+    /// throws. A cancellation after COMMIT (during ANALYZE or the size report) keeps the data, says so and returns 130 (#285).</remarks>
     public static Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err, CancellationToken ct = default) =>
         RunAsync(options, connectionString, output, err, DatabaseSizeAsync, ct);
 
     /// <param name="databaseSize">Reads the current database size in bytes for the pre-TRUNCATE peak check. Injectable so
     /// tests can simulate an unreadable size; any failure other than cancellation refuses the reseed (fail closed).</param>
+    public static Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err,
+        Func<NpgsqlConnection, CancellationToken, Task<long>> databaseSize, CancellationToken ct) =>
+        RunAsync(options, connectionString, output, err, databaseSize, AnalyzeAsync, ct);
+
+    /// <param name="analyze">Runs ANALYZE on the seeded tables after COMMIT. Injectable so tests can cancel after COMMIT (#285).</param>
     public static async Task<int> RunAsync(SeedOptions options, string connectionString, TextWriter output, TextWriter err,
-        Func<NpgsqlConnection, CancellationToken, Task<long>> databaseSize, CancellationToken ct)
+        Func<NpgsqlConnection, CancellationToken, Task<long>> databaseSize, Func<NpgsqlConnection, CancellationToken, Task> analyze,
+        CancellationToken ct)
     {
         var total = Stopwatch.StartNew();
         await using (var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
@@ -38,6 +48,7 @@ public static class SeedRunner
         await conn.OpenAsync(ct);
 
         var skipped = false;
+        var committed = false;
         if (!options.SizeReportOnly)
         {
             string? lastVersion = null; decimal lastScale = 0; int lastSeed = 0; DateTimeOffset lastAt = default;
@@ -126,14 +137,12 @@ public static class SeedRunner
                         await ins.ExecuteNonQueryAsync(ct);
                     }
                     await tx.CommitAsync(ct);
+                    committed = true;
                 }
 
-                try
-                {
-                    var analyzeList = string.Join(", ", Loader.SeededTables.Select(Loader.QuoteTable));
-                    await using var analyze = new NpgsqlCommand($"ANALYZE {analyzeList}", conn) { CommandTimeout = 600 };
-                    await analyze.ExecuteNonQueryAsync(ct);
-                }
+                try { await analyze(conn, ct); }
+                // The data is committed: a cancellation (OCE or e.g. an NpgsqlException) must not be reported as a rollback.
+                catch (Exception) when (ct.IsCancellationRequested) { return CancelledAfterCommit(options, err); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     err.WriteLine($"WARN: ANALYZE of seeded tables failed: {ex.GetType().Name}: {ex.Message}");
@@ -147,6 +156,7 @@ public static class SeedRunner
         // Only --size-report, whose whole job is this number, fails on it.
         long bytes;
         try { bytes = await databaseSize(conn, ct); }
+        catch (Exception) when (committed && ct.IsCancellationRequested) { return CancelledAfterCommit(options, err); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             output.WriteLine("DB_SIZE_MB=unknown");
@@ -171,6 +181,20 @@ public static class SeedRunner
                 : $"WARN: pg_database_size is {mb} MB (budget {options.MaxMegabytes} MB); committed data was accepted by the pre-commit guard.");
         }
         return 0;
+    }
+
+    static int CancelledAfterCommit(SeedOptions options, TextWriter err)
+    {
+        err.WriteLine($"ERROR: cancelled after the seed was committed (version {SeedVersion.Current}, scale {options.Scale}); ANALYZE/size report skipped.");
+        return CancelledExitCode;
+    }
+
+    /// <summary>ANALYZE of every seeded table, run after COMMIT so the planner sees the new data.</summary>
+    public static async Task AnalyzeAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var analyzeList = string.Join(", ", Loader.SeededTables.Select(Loader.QuoteTable));
+        await using var analyze = new NpgsqlCommand($"ANALYZE {analyzeList}", conn) { CommandTimeout = 600 };
+        await analyze.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>Peak estimate for a reseed: the current database plus the new dataset (README §5.4, measured 533.8 MB at scale 1.0).

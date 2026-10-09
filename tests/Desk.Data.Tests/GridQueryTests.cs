@@ -94,7 +94,6 @@ public sealed class GridQueryTests
             ["cs01"] = new("number", "explode", Json("1")),
             ["price"] = new("number", "greaterThan", Json("\"98.5\"")),       // numeric string is fine
             ["yield"] = new("number", "inRange", Json("1")),                  // inRange without filterTo
-            ["oas_bp"] = new("number", "equals", Json("1e400")),              // not finite
             ["cusip"] = new("text", "contains", Json("\"\"")),                // empty text
             ["sector"] = new("bogus"),
             ["class"] = null!,
@@ -360,6 +359,30 @@ public sealed class GridQueryTests
         foreach (var huge in new[] { "1e40", "\"-1e40\"", "1e400" })
             Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "greaterThan", Json(huge)) })));
         Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["market_value"] = new("number", "equals") })).Filters); // no value
+    }
+
+    [Fact]
+    public void Out_of_range_numbers_on_double_and_integer_columns_are_a_400_not_dropped()
+    {
+        // #276: a real number beyond double's range used to be dropped, which widened the result; money already threw.
+        foreach (var column in new[] { "oas_bp", "spread_bp", "vintage", "position_id" })
+        foreach (var huge in new[] { "1e400", "-1e400", "\"1e400\"", "\"-1e400\"" })
+            Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new() { [column] = new("number", "greaterThan", Json(huge)) })));
+        Assert.Throws<GridRequestException>(() => Normalize(new GridRequest(FilterModel: new()
+        {
+            ["spread_bp"] = new("number", "inRange", Json("1"), FilterTo: Json("1e400")),
+        })));
+
+        // "NaN" and "Infinity" aren't numbers the user typed: still dropped, like any other non-number.
+        foreach (var word in new[] { "\"NaN\"", "\"Infinity\"", "\"-Infinity\"", "\"lots\"", "true" })
+            Assert.Empty(Normalize(new GridRequest(FilterModel: new() { ["spread_bp"] = new("number", "equals", Json(word)) })).Filters);
+
+        // Normal values, including integers past int and long range, still bind as the same double.
+        foreach (var (raw, expected) in new[] { ("250", 250d), ("\"-1.5e3\"", -1500d), ("1e308", 1e308), ("99999999999999999999", 1e20) })
+        {
+            var q = Normalize(new GridRequest(FilterModel: new() { ["vintage"] = new("number", "greaterThan", Json(raw)) }));
+            Assert.Equal(expected, Assert.IsType<double>(Assert.Single(q.Filters).Conditions[0].Value));
+        }
     }
 
     [Fact]

@@ -31,6 +31,7 @@ export class HealthService {
         }),
         map((h): ApiState => ({ kind: 'ready', version: h.version, maintenance: h.maintenance === true })),
         catchError(() => of<ApiState>({ kind: 'unreachable' })),
+        // eslint-disable-next-line desk/no-unmanaged-subscribe -- inner subscribe of a `new Observable` factory: the teardown below unsubscribes when the consumer does (ADR-0010).
       ).subscribe(subscriber);
       return () => poll.unsubscribe();
     });
