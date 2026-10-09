@@ -97,6 +97,8 @@ flowchart LR
   API -- "per-source queries in parallel" --> MKT & SURV & PRC & REF
 ```
 
+Rendered diagrams for readers without repo access: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png) (SVG sources alongside, in `docs/architecture/`).
+
 **Key decisions (each one gets an ADR, see §15):**
 
 - **One Render web service** serves the built SPA **and** the API from the same origin.
