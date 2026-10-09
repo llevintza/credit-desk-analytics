@@ -191,6 +191,29 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         await PostgresApiFactory.LoginAsync(api.NewClient(), email, oldPassword);
     }
 
+    [Fact]
+    public async Task A_validator_failure_without_errors_still_fails_the_reset()
+    {
+        var email = Email();
+        Assert.Equal(0, (await RunAsync("add", "--email", email, "--role", "viewer", "--expires", "2027-01-01")).Exit);
+        string? hash;
+        await using (var db = api.NewContext())
+            hash = (await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).PasswordHash;
+
+        var run = await RunAsync(s => s.AddScoped<IPasswordValidator<DeskUser>, SilentlyRejectingPasswordValidator>(), "reset", "--email", email);
+
+        Assert.Equal(3, run.Exit);
+        Assert.DoesNotMatch(PasswordLine(), run.Out);
+        await using (var db = api.NewContext())
+            Assert.Equal(hash, (await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct)).PasswordHash);
+    }
+
+    private sealed class SilentlyRejectingPasswordValidator : IPasswordValidator<DeskUser>
+    {
+        public Task<IdentityResult> ValidateAsync(UserManager<DeskUser> manager, DeskUser user, string? password) =>
+            Task.FromResult(IdentityResult.Failed());
+    }
+
     private sealed class RejectingPasswordValidator : IPasswordValidator<DeskUser>
     {
         public const string Reason = "Rejected by the test validator.";
