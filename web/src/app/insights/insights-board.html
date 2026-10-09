@@ -1,0 +1,65 @@
+<section class="toolbar" aria-label="Insights controls">
+  <span class="caption" data-testid="insights-caption">
+    As of {{ scope.asOf() ?? '…' }} · {{ scope.selected().length ? scope.selected().length + ' portfolio' + (scope.selected().length === 1 ? '' : 's') : 'all portfolios' }}
+  </span>
+  <span class="spacer"></span>
+  @if (canNaive()) {
+    <label class="field" title="Fires 20 requests, one per grid (Performance Lab comparison)">
+      <input type="checkbox" data-testid="naive" [checked]="naive()" (change)="toggleNaive()" /> Naive mode
+    </label>
+  }
+</section>
+
+<div class="board" data-testid="insights-board">
+  @for (group of tiles(); track group.source) {
+    @for (tile of group.tiles; track tile.id) {
+      <article class="tile" [attr.data-testid]="'tile-' + group.source + '-' + tile.id" [attr.data-source]="group.source"
+               [attr.data-state]="tile.kind" [attr.aria-busy]="tile.kind === 'loading'">
+        @switch (tile.kind) {
+          @case ('ready') {
+            <header><h3>{{ tile.grid.title }}</h3><span class="chip">{{ group.label }}</span></header>
+            @if (tile.grid.rows.length === 0) {
+              <p class="empty">No positions in scope.</p>
+            } @else {
+              <table>
+                <thead>
+                  <tr>
+                    @for (c of tile.grid.columns; track $index) {
+                      <th scope="col" [class.num]="numeric(tile.grid, $index)">{{ c }}</th>
+                    }
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of tile.grid.rows; track row[0]) {
+                    <tr>
+                      @for (v of row; track $index) {
+                        @if ($first) {
+                          <th scope="row">{{ v }}</th>
+                        } @else {
+                          <td [class.num]="numeric(tile.grid, $index)" [class.neg]="isNegative(v)" [attr.title]="tooltip(tile.grid, $index, v)">
+                            {{ text(tile.grid, $index, v) }}
+                          </td>
+                        }
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            }
+          }
+          @case ('error') {
+            <header><h3>{{ group.label }}</h3><span class="chip">{{ group.label }}</span></header>
+            <div class="error-tile" role="alert">
+              Could not load {{ group.label | lowercase }} data.
+              <button type="button" [attr.data-testid]="'retry-' + group.source" (click)="retry(group.source)">Retry</button>
+            </div>
+          }
+          @default {
+            <header><span class="skeleton-line"></span><span class="chip">{{ group.label }}</span></header>
+            <div class="skeleton" aria-label="Loading"></div>
+          }
+        }
+      </article>
+    }
+  }
+</div>

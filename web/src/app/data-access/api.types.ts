@@ -68,3 +68,20 @@ export interface RequestInfo {
   /** True when overlapping blocks make `bytes` approximate (the status bar shows "≈", #221); absent means exact. */
   bytesApprox?: boolean;
 }
+
+/** P3 data sources: one endpoint each (README §6 P3). */
+export type InsightSource = 'core' | 'market' | 'surveillance' | 'pricing' | 'reference';
+
+/** A display format the API sends per column: text, money0, pct0/1/2, bp1, int, num0/2. */
+export type InsightFormat = string;
+
+/** One small grid: headers, rows whose first cell is the row label, and a format per header. */
+export interface InsightGrid {
+  id: string;
+  title: string;
+  columns: string[];
+  rows: (string | number | null)[][];
+  format: Record<string, InsightFormat>;
+}
+
+export interface InsightsResult { source: InsightSource; asOf: string; grids: InsightGrid[]; }
