@@ -28,6 +28,9 @@ for (const theme of ['dark', 'light'] as const) {
     });
     expect(s.display).not.toBe('none');
     expect(s.visibility).not.toBe('hidden');
-    await expect(page.getByLabel('As-of date', { exact: true })).toHaveJSProperty('tagName', 'SELECT');
+    // The select also has its own aria-label, which getByLabel would match even without the span. Drop it here so the
+    // only label left is the .sr-only text in the wrapping <label>.
+    await page.locator('header .field select').evaluate((e) => e.removeAttribute('aria-label'));
+    await expect(page.getByLabel('As-of date')).toHaveJSProperty('tagName', 'SELECT');
   });
 }
