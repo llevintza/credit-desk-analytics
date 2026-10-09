@@ -984,8 +984,8 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
-| 5 Fund Performance | phase-5/fund-performance | In review |
-| 6 Insights Board | n/a | Not started |
+| 5 Fund Performance | #144 | Merged |
+| 6 Insights Board | phase-6/insights-board | In review |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
