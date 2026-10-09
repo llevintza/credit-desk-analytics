@@ -47,6 +47,21 @@ export interface GridBlock {
   generatedAt: string;
 }
 
+export type FundRange = 'QTD' | 'YTD' | '1Y' | 'ITD' | 'CUSTOM';
+
+export interface FundRow { label: string; format: 'money0' | 'pct2'; values: (number | null)[]; }
+
+/** P2: one value per month in every row (README §6 P2). */
+export interface FundPerformance {
+  fundId: number;
+  fundName: string;
+  range: string;
+  from: string | null;
+  to: string | null;
+  months: string[];
+  rows: FundRow[];
+}
+
 /** What the status bar shows about the last data request (README §9.2). */
 export interface RequestInfo {
   ms: number; cache: 'HIT' | 'MISS' | null; bytes: number | null; serverMs: number | null;
