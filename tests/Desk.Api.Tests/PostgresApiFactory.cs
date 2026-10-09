@@ -46,9 +46,13 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     /// <summary>The instant the shared clock reads for the whole run, and where every <see cref="WithOwnClock"/> clock starts.</summary>
     public static readonly DateTimeOffset Start = new(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
 
-    private readonly FakeTimeProvider _time = new(Start);
+    private readonly TimeProvider _time = new FrozenClock(new FakeTimeProvider(Start));
 
-    /// <summary>The shared host's clock, read-only on purpose: advance time on a <see cref="WithOwnClock"/> host instead.</summary>
+    /// <summary>
+    /// The shared host's clock, read-only on purpose: advance time on a <see cref="WithOwnClock"/> host instead.
+    /// It's a <see cref="FrozenClock"/>, so casting it (or the host's <see cref="TimeProvider"/>) to
+    /// <see cref="FakeTimeProvider"/> throws inside the test that tries (#262).
+    /// </summary>
     public TimeProvider Time => _time;
 
     public string ConnectionString => _pg.GetConnectionString();
@@ -68,13 +72,39 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         if (code != 0) throw new InvalidOperationException($"seed failed ({code}): {output}");
     }
 
-    public override async ValueTask DisposeAsync()
+    public override ValueTask DisposeAsync() => TeardownAsync(_time, () => base.DisposeAsync(), _pg.DisposeAsync);
+
+    /// <summary>
+    /// Order-independent guard: whichever test moved the shared clock, the collection fails here (#226). The clock
+    /// is read before anything is torn down, and every disposal still runs, so a teardown error can neither skip
+    /// the check nor hide it: each failure is reported on its own (#262).
+    /// </summary>
+    internal static async ValueTask TeardownAsync(TimeProvider clock, params Func<ValueTask>[] disposals)
     {
-        await base.DisposeAsync();
-        await _pg.DisposeAsync();
-        // Order-independent guard: whichever test moved the shared clock, the collection fails here.
-        if (_time.GetUtcNow() != Start)
-            throw new InvalidOperationException($"A test moved the shared api-postgres clock to {_time.GetUtcNow():O}; advance time on api.WithOwnClock() instead (#226).");
+        var now = clock.GetUtcNow();
+        var errors = new List<Exception>();
+        if (now != Start)
+            errors.Add(new InvalidOperationException($"A test moved the shared api-postgres clock to {now:O}; advance time on api.WithOwnClock() instead (#226)."));
+        foreach (var dispose in disposals)
+        {
+            try { await dispose(); }
+            catch (Exception e) { errors.Add(e); }
+        }
+        if (errors.Count > 0) throw new AggregateException(errors);
+    }
+
+    /// <summary>
+    /// Hides the shared <see cref="FakeTimeProvider"/> behind a plain <see cref="TimeProvider"/>, so no public path
+    /// hands out the fake and nobody can cast their way to <c>Advance</c> (#262). Every virtual member forwards.
+    /// </summary>
+    private sealed class FrozenClock(TimeProvider inner) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(callback, state, dueTime, period);
     }
 
     public AppDbContext NewContext() => new(new DbContextOptionsBuilder<AppDbContext>()
