@@ -42,7 +42,7 @@ builder.Services.AddSingleton<IPortfolioEntitlements, AllPortfolios>();
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, DeskJsonContext.Default));
 builder.Services.AddProblemDetails();
 // OpenAPI document (README §8) at /openapi/v1.json, browsable at /swagger (admin only).
-builder.Services.AddOpenApi(o => o.AddDocumentTransformer((doc, _, _) =>
+builder.Services.AddOpenApi(o => o.AddOperationTransformer<PipelineResponses>().AddDocumentTransformer((doc, _, _) =>
 {
     doc.Info.Title = "Credit Desk Analytics API";
     doc.Info.Description = "Front-office analytics API for a structured-credit desk. Everything under /api except login needs a session.";
@@ -90,7 +90,7 @@ app.UseDeskSwagger();
 
 var api = app.MapGroup("/api")
     .RequireAuthorization()
-    .AddEndpointFilter<AntiforgeryFilter>();
+    .ValidateAntiforgery();
 app.MapHealthEndpoints(api);
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();
