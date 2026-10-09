@@ -112,6 +112,20 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
     | **Median gap, wrong − unknown** | **5.3** | | | **3.2** | | |
 
     Before, the wrong password was slower at the median, p90 and minimum (the unknown-email p99 is a single outlier, the slowest of 60). After, both sit on the floor, and the 3.2 ms gap is about one standard error of the difference between the two medians (the jitter alone has σ ≈ 14 ms), so it is noise. On a local database the DB difference is only about 5 ms. Against Neon each extra round trip costs a network hop, which is why the floor sits far above it.
+  - **Measured on the compose stack (#306, #230 AC2).** The numbers above came from `dotnet run`. These come from the image `docker compose` builds (`deploy/Dockerfile`, Production mode) with its own `postgres:17-alpine` service, so every query crosses the compose network. Same machine (Apple M5; Docker 29.5.2 with 4 CPUs and 8 GB), one viewer from `Desk.UserAdmin` in that compose database, and the login and anonymous per-caller limits (`RATE_LIMIT_LOGIN_PER_IP_PER_MIN`, `RATE_LIMIT_PER_USER_PER_MIN`, `RATE_LIMIT_PER_USER_BURST`) raised in a local, uncommitted override of the app service only. Two runs of 100 interleaved samples per failed path after 5 warm-up rounds:
+
+    ```
+    BASE_URL=http://localhost:<app port> DESK_EMAIL=… DESK_PASSWORD=… SAMPLES=100 node perf/login-floor.mjs
+    ```
+
+    | Path (ms), run 1 / run 2 | p50 | p95 | p99 | min |
+    |---|---|---|---|---|
+    | Unknown email (401) | 532.4 / 533.4 | 555.2 / 555.7 | 559.9 / 557.6 | 506.2 / 504.6 |
+    | Wrong password, active account (401) | 532.1 / 532.4 | 552.1 / 557.0 | 559.8 / 559.0 | 502.0 / 502.7 |
+    | Success (200, 25 samples) | 49.1 / 47.9 | 53.4 / 52.1 | 59.9 / 56.6 | 29.1 / 29.9 |
+    | **Median gap, wrong − unknown** | **−0.3 / −1.0** | | | |
+
+    Both failed paths sit on the floor (500 ms plus 0–50 ms jitter, so a p50 near 525 ms and a p95 near 550 ms plus the request itself), and the gap changes sign between runs, so it is noise. Success stays under 60 ms at p99 and is never padded.
 
 **Behind Cloudflare and Render's TLS proxy** (corrected in #116)
 - A request travels client → Cloudflare edge → Render's balancer (10.0.0.0/8) → app.

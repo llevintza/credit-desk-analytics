@@ -657,6 +657,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 | P1 first rows painted | < 1.0 s warm | Playwright trace + `performance.mark` | Reported in the PR |
 | P2 response | < 300 ms, < 5 KB | k6 + payload script | Reported |
 | P3 first tile / all tiles | < 500 ms / < 1.5 s | Playwright | Reported |
+| Failed-login floor (#230) | every login 401 ≥ 500 ms (+0–50 ms jitter), success not padded; unknown email vs wrong password within noise | `perf/login-floor.mjs` on the local compose stack (#306): 401 p50 532 ms / p95 552–557 ms for both paths, success p50 48–49 ms / p95 52–53 ms (ADR-0005) | `LoginTimingTests` (CI); the timing is reported |
 | Seeder runtime | < 90 s local at scale 1.0 | the seeder's own timer | Reported |
 | DB size | < 350 MB | the seeder (`pg_database_size`) | **Seeder fails** above 400 MB |
 | Reseed peak (old + new data until COMMIT) | ≤ `--cap-mb` (default 512 MB) | the seeder (`SEED_PEAK_EST_MB`) | **Seeder refuses** before TRUNCATE (exit 2) |
@@ -981,7 +982,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
 | 5 Fund Performance | phase-5/fund-performance | In review |
