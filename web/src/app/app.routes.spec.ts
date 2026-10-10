@@ -12,6 +12,7 @@ describe('app routes and config', () => {
     expect(shell.children?.map((c) => c.path)).toEqual(['', 'positions', 'funds', 'insights', 'deals', 'lab', 'usage']);
     expect(shell.children?.find((c) => c.path === 'positions')?.loadComponent).toBeTypeOf('function');
     expect(shell.children?.find((c) => c.path === 'funds')?.loadComponent).toBeTypeOf('function');
+    expect(shell.children?.find((c) => c.path === 'insights')?.loadComponent).toBeTypeOf('function');
     expect(shell.children?.find((c) => c.path === 'usage')?.canActivate?.length).toBe(1);
   });
 
@@ -22,7 +23,7 @@ describe('app routes and config', () => {
   });
 
   it('lazy routes resolve their components', async () => {
-    for (const path of ['positions', 'funds']) {
+    for (const path of ['positions', 'funds', 'insights']) {
       const load = routes[1].children!.find((c) => c.path === path)!.loadComponent!;
       expect(await (load as () => Promise<unknown>)()).toBeTruthy();
     }

@@ -2,7 +2,8 @@ import { HttpClient, HttpResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, inject } from '@angular/core';
 import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
 import {
-  AsOf, CatalogColumn, FundPerformance, FundRange, GridBlock, GridRequest, Health, Me, Portfolio, Preset, PresetState, RequestInfo,
+  AsOf, CatalogColumn, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, Me, Portfolio, Preset,
+  PresetState, RequestInfo,
 } from './api.types';
 
 /** A positions request in flight: when it started, and whether another one ran at the same time. */
@@ -69,6 +70,18 @@ export class DeskApi {
     const params: Record<string, string> = { range };
     if (range === 'CUSTOM' && from && to) Object.assign(params, { from, to });
     return this.http.get<FundPerformance>(`/api/funds/${fundId}/performance`, { params });
+  }
+
+  /**
+   * P3: one source's grids for an as-of date and portfolios (empty = every entitled one). `grid` asks for a single
+   * grid (naive mode, the Performance Lab comparison).
+   */
+  insights(source: InsightSource, asOf: string | null, portfolioIds: number[], grid?: string): Observable<InsightsResult> {
+    const params: Record<string, string> = {};
+    if (asOf) params['asOf'] = asOf;
+    if (portfolioIds.length) params['portfolioIds'] = portfolioIds.join(',');
+    if (grid) params['grid'] = grid;
+    return this.http.get<InsightsResult>(`/api/insights/${source}`, { params });
   }
 
   /** One grid block, with what the status bar needs from the response headers and the resource timing. */
