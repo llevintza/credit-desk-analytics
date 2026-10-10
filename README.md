@@ -662,7 +662,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 | Seeder runtime | < 90 s local at scale 1.0 | the seeder's own timer | Reported |
 | DB size | < 350 MB | the seeder (`pg_database_size`) | **Seeder fails** above 400 MB |
 | Reseed peak (old + new data until COMMIT) | ≤ `--cap-mb` (default 512 MB) | the seeder (`SEED_PEAK_EST_MB`) | **Seeder refuses** before TRUNCATE (exit 2) |
-| JS bundle (initial) | < 500 KB compressed | `ng build` stats | **CI fails** above budget |
+| JS bundle (initial) | < 500 KB compressed | `web/scripts/bundle-budget.mjs` after `ng build`: Brotli q1 in the API's 16 KB writes (#252) | **CI fails** above budget |
 
 Every PR that touches a measured path **MUST** paste before/after numbers in its body (the PR template has the table).
 
@@ -985,7 +985,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
-| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
+| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | phase-5/fund-performance | In review |
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |

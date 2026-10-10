@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // README §10: initial JS < 500 KB compressed — CI fails above it (#76). angular.json budgets measure raw bytes;
-// this measures what the browser downloads: Brotli at the quality the API serves (BROTLI_QUALITY) of every script and
-// stylesheet the built index.html loads up front. Lazy chunks (the AG Grid page) are reported, not budgeted.
+// this measures what the browser downloads: Brotli at the quality the API serves (BROTLI_QUALITY), in the slices the
+// API writes (SEND_CHUNK), of every script and stylesheet the built index.html loads up front. Lazy chunks (the AG
+// Grid page) are reported, not budgeted.
 // Fails closed (#145): anything that would leave the budget unchecked exits 1 instead of passing.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix, resolve, sep } from 'node:path';
@@ -13,6 +14,12 @@ const limitKb = 500;
 // CompressionLevel.Fastest, which .NET maps to Brotli quality 1. Change both together. q1 output is 9–18% larger
 // than q4 on minified bundles, so measuring at a higher quality would under-report the wire bytes.
 const BROTLI_QUALITY = 1;
+// The slice the API compresses in (#252): UseStaticFiles → ResponseCompressionBody.SendFileAsync →
+// SendFileFallback.SendFileAsync copies the file in 16 KB writes (`const int bufferSize = 1024 * 16`), and at q0/q1
+// libbrotli compresses each write as its own fragment, with no matches across fragments. Compressing each 16 KB slice
+// separately and summing is that wire size or a few bytes over it (one stream header per slice), never under: a
+// one-shot q1 measure was 10–20% under. Change this together with the API's static-file send path.
+const SEND_CHUNK = 16 * 1024;
 const fail = (message) => {
   console.error(`FAIL: ${message}`);
   process.exit(1);
@@ -120,13 +127,19 @@ while (queue.length > 0) {
 
 for (const f of files) if (read(f).length === 0) fail(`${f} is 0 bytes; refusing to pass the budget.`);
 
-const br = (file) => brotliCompressSync(read(file), { params: { [constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }).length / 1024;
+const br = (file) => {
+  const bytes = read(file);
+  let size = 0;
+  for (let at = 0; at < bytes.length; at += SEND_CHUNK)
+    size += brotliCompressSync(bytes.subarray(at, at + SEND_CHUNK), { params: { [constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } }).length;
+  return size / 1024;
+};
 const total = files.reduce((sum, f) => sum + br(f), 0);
 const lazy = readdirSync(dir, { recursive: true })
   .map((f) => f.split(sep).join('/'))
   .filter((f) => f.endsWith('.js') && !files.includes(f));
 
-console.log(`Initial (br q${BROTLI_QUALITY}): ${total.toFixed(1)} KB of ${limitKb} KB budget — ${files.join(', ')}`);
+console.log(`Initial (br q${BROTLI_QUALITY}, ${SEND_CHUNK / 1024} KB writes): ${total.toFixed(1)} KB of ${limitKb} KB budget — ${files.join(', ')}`);
 for (const f of lazy) console.log(`  lazy ${f}: ${br(f).toFixed(1)} KB br q${BROTLI_QUALITY}`);
 // README §10 says "< 500 KB": exactly 500 fails. `!(total < limitKb)` also fails a NaN total (#236).
 if (!(total < limitKb)) fail(`initial bundle ${total.toFixed(1)} KB compressed is at or over the ${limitKb} KB budget (README §10).`);
