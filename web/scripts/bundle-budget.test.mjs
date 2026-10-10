@@ -46,13 +46,20 @@ test('fails an oversize main bundle', () => {
   assert.match(r.stderr, /over the 500 KB budget/);
 });
 
+// The API's wire size (#252): Brotli at `quality`, each 16 KB slice compressed on its own, as the script measures.
+const brotli = (buffer, quality) => brotliCompressSync(buffer, { params: { [constants.BROTLI_PARAM_QUALITY]: quality } }).length;
+const sliced = (buffer, quality) => {
+  let size = 0;
+  for (let at = 0; at < buffer.length; at += 16 * 1024) size += brotli(buffer.subarray(at, at + 16 * 1024), quality);
+  return size;
+};
+
 // #236: README §10 says "< 500 KB", so exactly 500 KB (512000 bytes) fails and one byte under passes. Random bytes
 // barely compress, so trimming the input by the measured overshoot lands the q1 output on the exact byte count.
-const brotliQ1 = (buffer) => brotliCompressSync(buffer, { params: { [constants.BROTLI_PARAM_QUALITY]: 1 } }).length;
 const compressesTo = (bytes) => {
   const pool = randomBytes(bytes + 1024);
   for (let n = bytes, i = 0; i < 20; i++) {
-    const over = brotliQ1(pool.subarray(0, n)) - bytes;
+    const over = sliced(pool.subarray(0, n), 1) - bytes;
     if (over === 0) return pool.subarray(0, n);
     n -= over;
   }
@@ -69,15 +76,53 @@ for (const [label, bytes, status] of [
   });
 }
 
-// #203: the API serves Brotli at CompressionLevel.Fastest (quality 1). A 400 KB random block repeated once is
-// ~600 KB at q1, which misses the distant repeat, but ~300 KB at q4, which finds it: only measuring at q1 fails.
+// Minified-JS-like text from a seeded generator (mulberry32), so the sizes are the same on every run: 512 words with
+// a skewed frequency, separated by punctuation. 1270 KB of it is ~421 KB at q1 one-shot, ~514 KB at q1 in 16 KB
+// slices and ~482 KB at q4 in 16 KB slices.
+const minifiedLike = (kb) => {
+  let seed = 252;
+  const random = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = (chars) => chars[Math.floor(random() * chars.length)];
+  const vocab = Array.from({ length: 512 }, () =>
+    Array.from({ length: 2 + Math.floor(random() * 10) }, () => pick('abcdefghijklmnopqrstuvwxyz')).join(''),
+  );
+  let text = '';
+  while (text.length < kb * 1024) text += vocab[Math.floor(512 * random() ** 3)] + pick('(.,;=)');
+  return Buffer.from(text.slice(0, kb * 1024));
+};
+const KB500 = 500 * 1024;
+
+// #203: the API serves Brotli at CompressionLevel.Fastest (quality 1). The fixture is over 500 KB at q1 but under it
+// at q4 (both in 16 KB slices): only measuring at q1 fails.
 test('measures at the served Brotli quality (q1), not q4', () => {
-  const block = randomBytes(300 * 1024).toString('base64');
-  const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': block + block });
+  const js = minifiedLike(1270);
+  assert.ok(sliced(js, 1) > KB500 && sliced(js, 4) < KB500, 'fixture no longer separates q1 from q4');
+  const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': js });
   assert.equal(r.status, 1, r.stdout);
-  assert.match(r.stdout, /Initial \(br q1\)/);
+  assert.match(r.stdout, /Initial \(br q1, 16 KB writes\)/);
   assert.match(r.stderr, /over the 500 KB budget/);
 });
+
+// #252: the API compresses static files in 16 KB writes (SendFileFallback), and at q1 libbrotli finds no match across
+// writes. Each fixture is under 500 KB at q1 one-shot but over it in 16 KB slices: only measuring the slices fails.
+for (const [label, content] of [
+  ['minified-like text', () => minifiedLike(1270)],
+  // 28 copies of a 32 KB random block: one-shot q1 finds every repeat (~32 KB); no 16 KB slice contains one (~928 KB).
+  ['a block repeated past the 16 KB write', () => Buffer.concat(Array(28).fill(randomBytes(32 * 1024)))],
+]) {
+  test(`measures 16 KB writes, not one-shot: ${label}`, () => {
+    const js = content();
+    assert.ok(brotli(js, 1) < KB500 && sliced(js, 1) > KB500, 'fixture no longer separates one-shot from 16 KB writes');
+    const r = run({ 'index.html': page('<script src="main-A1.js" type="module"></script>'), 'main-A1.js': js });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stderr, /over the 500 KB budget/);
+  });
+}
 
 test('fails when index.html references no assets', () => {
   const r = run({ 'index.html': page(''), 'main-A1.js': big() });
