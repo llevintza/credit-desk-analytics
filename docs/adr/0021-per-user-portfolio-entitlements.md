@@ -182,3 +182,23 @@ migrationBuilder.CreateIndex("IX_portfolio_grant_portfolio_id", schema: "app", t
 - **#124 (commit this ADR).** Its content list matches. Gaps:
   1. No number or path. It should be `docs/adr/0021-per-user-portfolio-entitlements.md`.
   2. The `docs/adr/README.md` index row is missing.
+
+## Amendment (2026-10-09, Leo): the fund performance endpoint
+
+The text above predates phase 5. Its bypass list and the R1 allowlist omit an endpoint that phase 5 added. This amendment adds it. Line numbers are at main `5a2c3c8`.
+
+- **`GET /api/funds/{fundId}/performance`** (`src/Desk.Api/Funds/FundEndpoints.cs:48-54`) is a fourth **bypass of the SQL scoping point**, as an **all-or-nothing entitlement gate**.
+  - Balance and IRR aggregate the whole fund, so the endpoint calls `entitlements.For(http.User, meta)` and reads the fund's portfolios from the unscoped `MetaSnapshot.Portfolios` (`UnscopedPortfolios` after R1's rename).
+  - It serves the fund only when the user is entitled to **every** one of those portfolios. Otherwise it returns 404 **before** any cache lookup, ETag or 304.
+  - `FundRepository` then filters on `fund_id = @fundId`, not on `portfolio_id = ANY(@portfolios)`. That is safe because the gate has already required the whole fund.
+- **Its ETag and cache key carry no portfolio set:** `fund:{id}:{DataVersion}:{label}`. This is an exception to point 4 above ("`PortfolioIds` is part of every cache key and ETag").
+  - The response is identical for every user who passes the gate (all of the fund's portfolios), so there is nothing per-set to key on.
+  - A user who fails the gate is answered 404 before `TryHit`, so a valid ETag never leaks as a 304.
+- **R1 allowlist:** add `src/Desk.Api/Funds/FundEndpoints.cs` ("all-or-nothing fund gate at :48-54; reads the unscoped list only to find the fund's portfolios").
+  - If #122's `EntitlementArchitectureTests` lands after this amendment, it includes that entry.
+  - The test doesn't exist on main yet, so nothing else changes now.
+- **Stub-provider tests (E7):** already present in `tests/Desk.Api.Tests/FundTests.cs`:
+  - `A_fund_is_visible_only_with_every_one_of_its_portfolios` covers all, partial and none, the partial case answering 404 rather than 304 for a valid ETag;
+  - `A_cached_fund_response_never_outlives_the_grant_on_the_same_host`;
+  - `A_fund_with_performance_but_no_portfolios_is_404_for_everyone`.
+- **Insights:** open PR #339's `GET /api/insights/{source}` scopes in SQL (`portfolio_id = ANY(@portfolios)`) and keys its cache and ETag on the set, so it is not a bypass. Name it here once it merges if that changes.
