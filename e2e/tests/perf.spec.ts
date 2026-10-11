@@ -1,4 +1,5 @@
-import { CDPSession, Page, expect, test } from '@playwright/test';
+import { CDPSession, Page } from '@playwright/test';
+import { expect, test } from './session';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { gridReady } from './helpers';
 
@@ -19,6 +20,23 @@ async function heapMb(cdp: CDPSession): Promise<number> {
 }
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/**
+ * A bearer token for the page's own fetches (ADR-0024): refreshes with the tab's refresh token and puts the renewed
+ * one back, as the app would. Same origin, so it is the API the page itself talks to.
+ */
+async function bearer(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refreshToken: sessionStorage.getItem('desk.refresh') }),
+    });
+    const tokens = await res.json();
+    sessionStorage.setItem('desk.refresh', tokens.refreshToken);
+    return `Bearer ${tokens.accessToken}`;
+  });
+}
 
 async function firstRows(page: Page): Promise<number> {
   return page.evaluate(() => performance.getEntriesByName('positions:first-rows')[0]?.startTime ?? -1);
@@ -46,11 +64,11 @@ test('first rows painted (warm) and memory: infinite row model vs loading every 
   // 2. Client-side model's floor: every row of a preset in memory as row objects before anything paints.
   const clientSideFloor: Record<string, unknown> = {};
   for (const preset of ['Risk', 'All']) {
-  const columns: string[] = await page.evaluate(async (name) =>
-    (await (await fetch('/api/presets/positions')).json()).find((p: { name: string }) => p.name === name).state.columns, preset);
+  const authorization = await bearer(page);
+  const columns: string[] = await page.evaluate(async ([name, auth]) =>
+    (await (await fetch('/api/presets/positions', { headers: { authorization: auth } })).json()).find((p: { name: string }) => p.name === name).state.columns, [preset, authorization] as const);
   const before = await heapMb(cdp);
-  const clientSide = await page.evaluate(async (cols) => {
-    const xsrf = decodeURIComponent(document.cookie.match(/XSRF-TOKEN=([^;]+)/)![1]);
+  const clientSide = await page.evaluate(async ([cols, auth]) => {
     const started = performance.now();
     const rows: Record<string, unknown>[] = [];
     let total = Infinity;
@@ -58,7 +76,7 @@ test('first rows painted (warm) and memory: infinite row model vs loading every 
     for (let start = 0; start < total; start += 500) {
       const res = await fetch('/api/positions/query', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-xsrf-token': xsrf },
+        headers: { 'content-type': 'application/json', authorization: auth },
         body: JSON.stringify({ startRow: start, endRow: start + 500, columns: cols }),
       });
       const text = await res.text();
@@ -73,7 +91,7 @@ test('first rows painted (warm) and memory: infinite row model vs loading every 
     }
     (window as unknown as { keep: unknown }).keep = rows; // keep them alive for the heap reading
     return { ms: performance.now() - started, rows: rows.length, requests: Math.ceil(rows.length / 500), rawMb: bytes / 1024 / 1024 };
-  }, columns);
+  }, [columns, authorization] as const);
   const clientHeap = (await heapMb(cdp)) - before;
   clientSideFloor[preset] = { columns: columns.length + 1, allRowsInMemoryMs: Math.round(clientSide.ms), rows: clientSide.rows, requests: clientSide.requests, rawPayloadMb: +clientSide.rawMb.toFixed(1), extraHeapMb: +clientHeap.toFixed(1) };
   await page.evaluate(() => { delete (window as unknown as { keep?: unknown }).keep; });

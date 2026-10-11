@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './session';
 
 /**
  * #253 / #316: the As-of label is visually hidden by .sr-only but still names the select. jsdom does no layout, so the

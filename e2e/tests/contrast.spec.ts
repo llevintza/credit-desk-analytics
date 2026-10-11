@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './session';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { gridReady } from './helpers';
