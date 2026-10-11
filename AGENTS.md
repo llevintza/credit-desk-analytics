@@ -96,7 +96,10 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 ## Definition of done for any PR
 
 - CI is green: build, tests, lint, e2e, budgets (each once it exists).
-- The review gate in Workflow item 6 (clauses 1–3) passes.
+- The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
+  1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+  2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
+  3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 - Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.
