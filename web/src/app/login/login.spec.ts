@@ -56,7 +56,7 @@ describe('Login', () => {
     }
     expect(banner?.getAttribute('role')).toBe('alert');
     expect(banner?.textContent).toContain("Sign-out couldn't be confirmed with the server");
-    expect(banner?.textContent).toContain('sign in and sign out again to end it there too');
+    expect(banner?.textContent).toContain('This browser has forgotten the session');
   });
 
   it('shows the maintenance banner', async () => {
