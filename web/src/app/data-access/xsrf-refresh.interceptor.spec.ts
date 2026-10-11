@@ -40,6 +40,52 @@ describe('xsrfRefreshInterceptor', () => {
     expect(await done).toBeNull();
   });
 
+  it('shares one refresh between concurrent rejections and retries each request', async () => {
+    const logout = settle(http().post('/api/auth/logout', null));
+    const save = settle(http().put('/api/presets/risk', { name: 'a' }));
+    mock().expectOne('/api/auth/logout').flush(rejected, bad);
+    mock().expectOne('/api/presets/risk').flush(rejected, bad);
+    mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 204, statusText: 'No Content' });
+    const retries = [mock().expectOne('/api/auth/logout'), mock().expectOne('/api/presets/risk')];
+    for (const retry of retries) {
+      expect(retry.request.headers.get(XSRF_HEADER)).toBe('fresh');
+      retry.flush(null, { status: 204, statusText: 'No Content' });
+    }
+    expect(await logout).toBeNull();
+    expect(await save).toBeNull();
+  });
+
+  it('keeps the shared refresh going for the others when the first caller cancels', async () => {
+    const first = http().post('/api/auth/logout', null).subscribe({ error: () => undefined });
+    const save = settle(http().put('/api/presets/risk', { name: 'a' }));
+    mock().expectOne('/api/auth/logout').flush(rejected, bad);
+    mock().expectOne('/api/presets/risk').flush(rejected, bad);
+    const refresh = mock().expectOne(ANTIFORGERY_URL);
+    first.unsubscribe();
+    expect(refresh.cancelled).toBe(false);
+    refresh.flush(null, { status: 204, statusText: 'No Content' });
+    mock().expectNone('/api/auth/logout');
+    const retry = mock().expectOne('/api/presets/risk');
+    expect(retry.request.headers.get(XSRF_HEADER)).toBe('fresh');
+    retry.flush(null, { status: 204, statusText: 'No Content' });
+    expect(await save).toBeNull();
+  });
+
+  it('starts a new refresh for a rejection that arrives after the last one failed or succeeded', async () => {
+    const failed = settle(http().post('/api/auth/logout', null));
+    mock().expectOne('/api/auth/logout').flush(rejected, bad);
+    mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 401, statusText: 'Unauthorized' });
+    expect(((await failed) as HttpErrorResponse).status).toBe(401);
+
+    for (const url of ['/api/auth/logout', '/api/presets/risk']) {
+      const done = settle(http().post(url, null));
+      mock().expectOne(url).flush(rejected, bad);
+      mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 204, statusText: 'No Content' });
+      mock().expectOne(url).flush(null, { status: 204, statusText: 'No Content' });
+      expect(await done).toBeNull();
+    }
+  });
+
   it('pins the problem type the API sends (AntiforgeryFilter.ProblemType)', () => {
     expect(ANTIFORGERY_PROBLEM_TYPE).toBe('urn:desk:problem:antiforgery');
   });
@@ -73,15 +119,15 @@ describe('xsrfRefreshInterceptor', () => {
     expect(((await done) as HttpErrorResponse).status).toBe(401);
   });
 
-  it('retries with the request as it was when no token came back', async () => {
+  it('passes the original 400 to the caller when no token came back', async () => {
     token = null;
     const done = settle(http().delete('/api/presets/risk', { headers: { [XSRF_HEADER]: 'stale' } }));
     mock().expectOne('/api/presets/risk').flush(rejected, bad);
     mock().expectOne(ANTIFORGERY_URL).flush(null, { status: 204, statusText: 'No Content' });
-    const retry = mock().expectOne('/api/presets/risk');
-    expect(retry.request.headers.get(XSRF_HEADER)).toBe('stale');
-    retry.flush(null, { status: 204, statusText: 'No Content' });
-    expect(await done).toBeNull();
+    mock().expectNone('/api/presets/risk');
+    const e = (await done) as HttpErrorResponse;
+    expect(e.status).toBe(400);
+    expect(e.error).toEqual(rejected);
   });
 
   it.each([
@@ -108,6 +154,18 @@ describe('xsrfRefreshInterceptor', () => {
     mock().expectOne('/api/me').flush(rejected, bad);
     expect(((await done) as HttpErrorResponse).status).toBe(400);
   });
+
+  it.each(['https://elsewhere.example/api/x', '//elsewhere.example/api/x', 'api/x', '/apix', '/api-foo'])(
+    'never refreshes or retries a URL outside the API (%s)',
+    async (url) => {
+      const done = settle(http().post(url, {}));
+      mock().expectOne(url).flush(rejected, bad);
+      mock().expectNone(ANTIFORGERY_URL);
+      const e = (await done) as HttpErrorResponse;
+      expect(e.status).toBe(400);
+      expect(e.error).toEqual(rejected);
+    },
+  );
 
   it('reads the problem of a blob request (the CSV export) and retries it', async () => {
     const done = settle(http().post('/api/positions/export', {}, { responseType: 'blob' }));
