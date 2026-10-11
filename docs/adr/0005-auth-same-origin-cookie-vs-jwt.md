@@ -1,8 +1,10 @@
 # ADR-0005: Auth: same-origin cookie session vs JWT
 
-- **Status:** Accepted
+- **Status:** Accepted; partially superseded by [ADR-0024](0024-github-pages-frontend-bearer-auth.md) (2026-10-11)
 - **Date:** 2026-10-08
 - **Phase / PR:** phase-2/auth-and-limits
+
+> **Note (2026-10-11, ADR-0024):** the session now travels as an Identity bearer token (5-minute access token, 8 h refresh token, 24 h absolute), because a GitHub Pages front end calls the API from another site, where this cookie would be third-party. The cookie, the antiforgery filter and `GET /api/auth/antiforgery` are gone; CSRF doesn't apply to a header token. Still in force from this ADR: Identity and its `auth` schema, persisted data-protection keys and the removed key-ring preload, lockout and account expiry, one PBKDF2 per failed login, the login floor (#230), the rate-limit and `ClientAddress` rules behind Cloudflare (#116), and the CSP of the API-served app. The measurements below are the cookie's and stay as the baseline ADR-0024 compares against.
 
 ## Context
 
