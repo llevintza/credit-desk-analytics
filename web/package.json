@@ -6,7 +6,8 @@
     "start": "ng serve",
     "build": "ng build && node scripts/bundle-budget.mjs",
     "watch": "ng build --watch --configuration development",
-    "test": "node --test scripts/bundle-budget.test.mjs eslint-rules/no-unmanaged-subscribe.test.mjs && ng test",
+    "test": "npm run test:tooling && ng test",
+    "test:tooling": "node --test --experimental-test-coverage --test-coverage-include='scripts/**/*.mjs' --test-coverage-include='eslint-rules/**/*.js' --test-coverage-exclude='**/*.test.mjs' --test-coverage-lines=80 --test-coverage-branches=80 scripts/bundle-budget.test.mjs eslint-rules/no-unmanaged-subscribe.test.mjs",
     "lint": "ng lint"
   },
   "private": true,

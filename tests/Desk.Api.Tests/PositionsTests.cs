@@ -80,11 +80,11 @@ public sealed class PositionsTests(PostgresApiFactory api)
         var (client, xsrf, _) = await api.SignedInAsync();
         var ids = new List<long>();
         var total = int.MaxValue;
-        for (var start = 0; start < total; start += 500)
+        for (var start = 0; start < total; start += GridQueryNormalizer.MaxBlockRows)
         {
             var doc = await ReadJson(await client.SendAsync(Query(xsrf, new
             {
-                startRow = start, endRow = start + 500, columns = new[] { column },
+                startRow = start, endRow = start + GridQueryNormalizer.MaxBlockRows, columns = new[] { column },
                 sortModel = new[] { new { colId = column, sort = direction } },
             }), Ct));
             total = doc.GetProperty("rowCount").GetInt32();

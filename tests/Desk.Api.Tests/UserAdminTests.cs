@@ -123,10 +123,11 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         var email = Email();
         var added = await RunAsync("add", "--email", email, "--role", "viewer", "--expires", "2027-01-01");
         var oldPassword = PasswordLine().Match(added.Out).Groups[1].Value;
-        // Wall clock on purpose: the login below checks the lockout in Identity's UserManager, which reads the wall clock.
         await using (var db = api.NewContext())
             await db.Users.Where(u => u.Email == email)
-                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, DateTimeOffset.UtcNow.AddMinutes(10)).SetProperty(u => u.AccessFailedCount, 5), Ct);
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, api.Time.GetUtcNow().AddMinutes(10)).SetProperty(u => u.AccessFailedCount, 5), Ct);
+        // Locked on the fixture clock (#261), even for the right password.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(api.NewClient(), email, oldPassword)).StatusCode);
 
         var run = await RunAsync("reset", "--email", email);
         Assert.Equal(0, run.Exit);

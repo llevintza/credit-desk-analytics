@@ -46,8 +46,26 @@ Option 1:
 - **When it's on:** in Development; elsewhere only when `SWAGGER_ENABLED=true`, set in the Render dashboard when the deployed API needs testing.
 - **Metadata:** every endpoint carries a name, summary and tag, and the SPA and `/api` fallbacks are excluded.
 
+### Response convention (#307, 2026-10-09)
+
+Each operation's `responses` lists every status it can return, and every 4xx/5xx is `application/problem+json` with the `ProblemDetails` schema. Two sources fill it, and neither repeats the other:
+
+- **Handler statuses:** the endpoint declares what its own code returns (`Produces`, `ProducesProblem`), for example SavePreset's 409, export's one-at-a-time 429 and Login's failed-sign-in 401.
+- **Pipeline statuses:** the `PipelineResponses` operation transformer (`src/Desk.Api/Hardening/PipelineResponses.cs`) adds them from the endpoint's metadata, so no endpoint declares them by hand:
+
+| Status | Source | Added when |
+|---|---|---|
+| 400 | `AntiforgeryFilter` (problem type `urn:desk:problem:antiforgery`); request binding | the endpoint carries `ValidatesAntiforgery` and not `SkipAntiforgery`, with a method other than GET/HEAD/OPTIONS; or it binds a JSON body or a non-string query parameter |
+| 401 | `RequireAuthorization` | it has authorize data and no `AllowAnonymous` |
+| 403 | a named authorization policy (`admin`) | an authorize entry names a policy |
+| 415 | JSON body binding | it binds a body |
+| 429 | the global `/api` limiters, the login window | its path is under `/api` |
+| 503 | `MaintenanceMode` | its path is under `/api` |
+
+A status the handler already declares keeps the endpoint's entry. Option (b) in #307, one note in the document description and no per-operation pipeline statuses, was rejected: a generated client and Swagger UI read per-operation responses, not prose. 500 (`UseExceptionHandler`) isn't declared on any operation: it's a bug, not a contract. `OpenApiResponsesTests` pins every operation's exact set, fails for an operation that isn't pinned, and checks every 4xx/5xx is problem JSON.
+
 ## Consequences
 
 - **Off by default in production:** the public site exposes no API description unless the owner turns it on.
 - **Phase 2 (#94)** puts both paths behind the `admin` role and adds a CSP exception for Swagger UI's assets on `/swagger` only.
-- **Keeping the document useful:** new endpoints must add OpenAPI metadata. That rule belongs in AGENTS.md, which needs its own `[workflows]` PR.
+- **Keeping the document useful:** new endpoints must add OpenAPI metadata and a row in `OpenApiResponsesTests` (#307). That rule belongs in AGENTS.md, which needs its own `[workflows]` PR.
