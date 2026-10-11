@@ -1,6 +1,7 @@
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, inject } from '@angular/core';
 import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
+import type { Tokens } from '../core/token.store';
 import {
   AsOf, CatalogColumn, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, Me, Portfolio, Preset,
   PresetState, RequestInfo,
@@ -10,8 +11,8 @@ import {
 interface InFlight { started: number; overlapped: boolean; }
 
 /**
- * The typed Desk API client (README §9.4): the only place that knows URLs. Unsafe methods get the antiforgery
- * header from Angular's XSRF interceptor (XSRF-TOKEN cookie → X-XSRF-TOKEN header, ADR-0005).
+ * The typed Desk API client (README §9.4): the only place that knows URLs, all root-relative. apiBaseInterceptor
+ * points them at the API's origin and authInterceptor adds the bearer token (ADR-0024).
  */
 @Injectable({ providedIn: 'root' })
 export class DeskApi {
@@ -25,8 +26,8 @@ export class DeskApi {
     return this.http.get<Health>('/health');
   }
 
-  login(email: string, password: string): Observable<Me> {
-    return this.http.post<Me>('/api/auth/login', { email, password });
+  login(email: string, password: string): Observable<Tokens> {
+    return this.http.post<Tokens>('/api/auth/login', { email, password });
   }
 
   logout(): Observable<void> {

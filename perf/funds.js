@@ -32,16 +32,15 @@ export function setup() {
   const res = http.post(`${base}/api/auth/login`, JSON.stringify({ email: __ENV.DESK_EMAIL, password: __ENV.DESK_PASSWORD }),
     { headers: { 'Content-Type': 'application/json' } });
   check(res, { 'login 200': (r) => r.status === 200 });
-  // Build the header here: cookie objects lose their shape when setup() data is handed to the VUs.
-  const cookie = Object.entries(res.cookies).map(([name, values]) => `${name}=${values[0].value}`).join('; ');
-  const clear = http.post(`${base}/api/admin/cache/clear`, null,
-    { headers: { 'X-XSRF-TOKEN': decodeURIComponent(res.cookies['XSRF-TOKEN'][0].value), Cookie: cookie } });
+  // Bearer token (ADR-0024): the whole run (~35 s) is inside the access token's 5 minutes.
+  const authorization = `Bearer ${res.json('accessToken')}`;
+  const clear = http.post(`${base}/api/admin/cache/clear`, null, { headers: { Authorization: authorization } });
   check(clear, { 'cache cleared (admin)': (r) => r.status === 204 });
-  return { cookie };
+  return { authorization };
 }
 
 function get(data, path, cache) {
-  const res = http.get(`${base}${path}`, { headers: { 'Accept-Encoding': 'br, gzip', Cookie: data.cookie } });
+  const res = http.get(`${base}${path}`, { headers: { 'Accept-Encoding': 'br, gzip', Authorization: data.authorization } });
   if (!check(res, { '200': (r) => r.status === 200 })) throw new Error(`HTTP ${res.status}: ${res.body}`);
   if (cache) check(res, { [cache]: (r) => r.headers['X-Cache'] === cache });
 }

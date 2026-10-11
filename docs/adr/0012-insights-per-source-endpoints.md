@@ -60,7 +60,7 @@ What the numbers say, beyond the table:
 - **20 calls paint first, but cost the most where it matters:**
   - **Rate limits:** one view uses the whole per-user burst of 20, so a second view within the minute is throttled (429). It also takes up to 8 of the global `/api` slots per user.
   - **Round trips:** the 20 requests run on 6 connections, in about 4 waves. Each wave pays a full network round trip to Render (tens of ms), which this in-process run doesn't include.
-  - **Server work:** each of the 20 requests decrypts the cookie, passes both limiters, writes an audit row and gets its own ETag.
+  - **Server work:** each of the 20 requests validates the bearer token (ADR-0024), passes both limiters, writes an audit row and gets its own ETag.
   - **Bytes:** total brotli bytes are 34% higher than per-source (8,558 vs 6,392), and the tail is the worst of the parallel options (p95 194 ms).
 - **Per source is the balance:**
   - Five requests fit inside the burst.

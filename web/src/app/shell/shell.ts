@@ -66,7 +66,7 @@ export class Shell {
 
   /**
    * Any non-401 failure (403, 5xx, network) still signs out locally so the page never looks signed in, but the
-   * server never confirmed it: the session cookie may stay valid until it expires. /login says so (#208).
+   * server never revoked it: the tokens are forgotten here but stay valid until they expire. /login says so (#208).
    * Teardown unsubscribes the logout request on purpose: Shell only goes away on navigation to /login.
    */
   protected logout(): void {

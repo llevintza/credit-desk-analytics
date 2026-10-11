@@ -1,4 +1,5 @@
-import { Page, Request, expect, test } from '@playwright/test';
+import { Page, Request } from '@playwright/test';
+import { expect, test } from './session';
 import { watchConsole } from './helpers';
 
 const sources = ['core', 'market', 'surveillance', 'pricing', 'reference'] as const;

@@ -38,16 +38,6 @@ function request(method, path, { headers = {}, body } = {}) {
   });
 }
 
-const cookies = new Map();
-const keep = (res) => {
-  for (const c of res.headers['set-cookie'] ?? []) {
-    const [pair] = c.split(';');
-    const i = pair.indexOf('=');
-    cookies.set(pair.slice(0, i), pair.slice(i + 1));
-  }
-};
-const cookieHeader = () => [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
-
 const login = await request('POST', '/api/auth/login', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ email, password }),
@@ -56,9 +46,10 @@ if (login.status !== 200) {
   console.error(`login failed: HTTP ${login.status}`);
   process.exit(2);
 }
-keep(login);
+// Bearer token (ADR-0024); the run is far shorter than the token's 5 minutes.
+const authorization = `Bearer ${JSON.parse(login.body).accessToken}`;
 
-const presets = JSON.parse((await request('GET', '/api/presets/positions', { headers: { cookie: cookieHeader() } })).body);
+const presets = JSON.parse((await request('GET', '/api/presets/positions', { headers: { authorization } })).body);
 let failed = false;
 console.log('| Preset | Columns | Encoding | Wire KB | Budget KB | Result |');
 console.log('|---|---:|---|---:|---:|---|');
@@ -69,8 +60,7 @@ for (const { preset, limitKb, failOver } of budgets) {
     headers: {
       'content-type': 'application/json',
       'accept-encoding': 'br, gzip',
-      'x-xsrf-token': decodeURIComponent(cookies.get('XSRF-TOKEN') ?? ''),
-      cookie: cookieHeader(),
+      authorization,
     },
     body: JSON.stringify({ startRow: 0, endRow: 200, columns }),
   });
@@ -83,7 +73,7 @@ for (const { preset, limitKb, failOver } of budgets) {
   if (over && !failOver) console.log(`::warning::${preset} first block is ${kb.toFixed(1)} KB, over the ${limitKb} KB budget`);
 }
 
-const fund = await request('GET', '/api/funds/1/performance?range=ITD', { headers: { 'accept-encoding': 'br, gzip', cookie: cookieHeader() } });
+const fund = await request('GET', '/api/funds/1/performance?range=ITD', { headers: { 'accept-encoding': 'br, gzip', authorization } });
 if (fund.status !== 200) throw new Error(`P2 fund 1 ITD: HTTP ${fund.status} ${fund.body}`);
 const fundKb = fund.body.length / 1024;
 const fundOver = fundKb >= 5;
@@ -92,7 +82,7 @@ console.log(`| P2 fund 1 ITD | – | ${fund.headers['content-encoding'] ?? 'iden
 
 // P3 has no payload budget (README §10): each source's response is reported for the ADR-0012 numbers.
 for (const source of ['core', 'market', 'surveillance', 'pricing', 'reference']) {
-  const res = await request('GET', `/api/insights/${source}`, { headers: { 'accept-encoding': 'br, gzip', cookie: cookieHeader() } });
+  const res = await request('GET', `/api/insights/${source}`, { headers: { 'accept-encoding': 'br, gzip', authorization } });
   if (res.status !== 200) throw new Error(`P3 ${source}: HTTP ${res.status} ${res.body}`);
   console.log(`| P3 insights ${source} | – | ${res.headers['content-encoding'] ?? 'identity'} | ${(res.body.length / 1024).toFixed(1)} | – | report |`);
 }

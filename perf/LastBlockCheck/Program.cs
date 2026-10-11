@@ -31,17 +31,16 @@ using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 var ct = cts.Token;
 
-// Cookies by hand: the session cookie is __Host- (Secure), which a cookie container won't send over plain http.
-using var http = new HttpClient(new HttpClientHandler { UseCookies = false }) { BaseAddress = baseUrl };
+// Bearer token (ADR-0024): the access token lasts 5 minutes, longer than this check's 3-minute deadline.
+using var http = new HttpClient { BaseAddress = baseUrl };
 var login = await http.PostAsJsonAsync("/api/auth/login", new { email, password }, ct);
 if (!login.IsSuccessStatusCode)
 {
     Console.Error.WriteLine($"login failed: HTTP {(int)login.StatusCode}");
     return 2;
 }
-var cookies = login.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0]).ToDictionary(c => c[..c.IndexOf('=')], c => c[(c.IndexOf('=') + 1)..]);
-var cookie = string.Join("; ", cookies.Select(c => $"{c.Key}={c.Value}"));
-var xsrf = Uri.UnescapeDataString(cookies["XSRF-TOKEN"]);
+using (var tokens = JsonDocument.Parse(await login.Content.ReadAsStringAsync(ct)))
+    http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokens.RootElement.GetProperty("accessToken").GetString());
 
 var columns = BuiltInPresets.Risk.ToArray();
 async Task<JsonElement> QueryAsync(int start)
@@ -54,8 +53,6 @@ async Task<JsonElement> QueryAsync(int start)
             sortModel = new[] { new { colId = "market_value", sort = "desc" } },
         }),
     };
-    req.Headers.Add("Cookie", cookie);
-    req.Headers.Add("X-XSRF-TOKEN", xsrf);
     using var res = await http.SendAsync(req, ct);
     res.EnsureSuccessStatusCode();
     return JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct)).RootElement.Clone();
@@ -65,7 +62,6 @@ async Task<JsonElement> QueryAsync(int start)
 int[] portfolios;
 using (var req = new HttpRequestMessage(HttpMethod.Get, "/api/meta/portfolios"))
 {
-    req.Headers.Add("Cookie", cookie);
     using var res = await http.SendAsync(req, ct);
     res.EnsureSuccessStatusCode();
     using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));

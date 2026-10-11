@@ -5,7 +5,7 @@ import { catchError, throwError } from 'rxjs';
 import { AuthService } from './auth.service';
 
 /**
- * A 401 from a data call means the session ended under us (an expired reviewer account, a lapsed cookie):
+ * A 401 from a data call means the session ended under us (an expired reviewer account, a refused refresh):
  * forget it and go to the login page instead of leaving the page retrying forever. The session check and the
  * login call handle their own 401s.
  */

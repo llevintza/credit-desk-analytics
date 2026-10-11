@@ -5,7 +5,7 @@ namespace Desk.Api.Tests;
 
 /// <summary>
 /// ADR-0019 (#254, #307): every operation's response set is pinned exactly. An endpoint declares what its handler
-/// returns; <c>PipelineResponses</c> adds the shared pipeline's statuses (binding and antiforgery 400, 401, 403, 415,
+/// returns; <c>PipelineResponses</c> adds the shared pipeline's statuses (binding 400, 401, 403, 415,
 /// 429, maintenance 503) from the endpoint's metadata. A new or changed operation fails here until it's pinned.
 /// </summary>
 [Collection(ApiCollection.Name)]
@@ -19,20 +19,20 @@ public sealed class OpenApiResponsesTests(PostgresApiFactory api)
         ["GET /health"] = "200",
         ["GET /api/health/db"] = "200,401,403,429,503",
         ["POST /api/auth/login"] = "200,400,401,415,429,503",
-        ["POST /api/auth/logout"] = "204,400,401,429,503",
-        ["GET /api/auth/antiforgery"] = "204,401,429,503",
+        ["POST /api/auth/refresh"] = "200,400,401,415,429,503",
+        ["POST /api/auth/logout"] = "204,401,429,503",
         ["GET /api/me"] = "200,401,429,503",
         ["GET /api/meta/as-of"] = "200,401,429,503",
         ["GET /api/meta/columns"] = "200,401,429,503",
         ["GET /api/meta/portfolios"] = "200,401,429,503",
         ["GET /api/presets/{page}"] = "200,401,404,429,503",
         ["PUT /api/presets/{page}"] = "204,400,401,404,409,415,429,503",
-        ["DELETE /api/presets/{page}"] = "204,400,401,404,429,503",
+        ["DELETE /api/presets/{page}"] = "204,401,404,429,503",
         ["POST /api/positions/query"] = "200,304,400,401,415,429,503",
         ["POST /api/positions/export"] = "200,400,401,415,429,503",
         ["GET /api/funds/{fundId}/performance"] = "200,304,400,401,404,429,503",
         ["GET /api/insights/{source}"] = "200,304,400,401,404,429,503",
-        ["POST /api/admin/cache/clear"] = "204,400,401,403,429,503",
+        ["POST /api/admin/cache/clear"] = "204,401,403,429,503",
     };
 
     public static TheoryData<string> PinnedOperations => [.. Pinned.Keys];

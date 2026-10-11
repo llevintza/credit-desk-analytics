@@ -15,6 +15,8 @@ namespace Desk.Api;
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(GridRequest))]
 [JsonSerializable(typeof(LoginRequest))]
+[JsonSerializable(typeof(RefreshRequest))]
+[JsonSerializable(typeof(Microsoft.AspNetCore.Authentication.BearerToken.AccessTokenResponse))]
 [JsonSerializable(typeof(MeResponse))]
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(DbHealthResponse))]

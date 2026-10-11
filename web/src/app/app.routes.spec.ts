@@ -16,7 +16,7 @@ describe('app routes and config', () => {
     expect(shell.children?.find((c) => c.path === 'usage')?.canActivate?.length).toBe(1);
   });
 
-  it('registers zoneless change detection, router and http with the XSRF names', () => {
+  it('registers zoneless change detection, router and http with the token interceptors', () => {
     TestBed.configureTestingModule({ providers: appConfig.providers });
     expect(TestBed.inject(Router)).toBeTruthy();
     expect(TestBed.inject(HttpClient)).toBeTruthy();
