@@ -57,7 +57,10 @@ jobs:
           echo "API_ORIGIN=$api" >> "$GITHUB_ENV"
       - run: npm ci --no-audit --no-fund
       - name: Build for /credit-desk-analytics/ against the API origin
-        run: npx ng build --base-href /credit-desk-analytics/ --define "DESK_API_BASE_URL=\"$API_ORIGIN\""
+        run: |
+          npx ng build --base-href /credit-desk-analytics/ --define "DESK_API_BASE_URL=\"$API_ORIGIN\""
+          # A missing or renamed define still builds, as a shell that calls its own origin: fail instead.
+          grep -qF "$API_ORIGIN" dist/web/browser/main-*.js || { echo "::error::$API_ORIGIN is not in the bundle (DESK_API_BASE_URL define)."; exit 1; }
       - name: Meta CSP and the deep-link fallback
         working-directory: web/dist/web/browser
         run: |
