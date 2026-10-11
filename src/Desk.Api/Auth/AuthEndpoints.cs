@@ -26,8 +26,7 @@ public static class AuthEndpoints
             .WithName("Login")
             .WithSummary("Signs in with email and password and sets the session and XSRF-TOKEN cookies.")
             .Produces<MeResponse>()
-            .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status429TooManyRequests);
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
 
         auth.MapPost("/logout", (Func<HttpContext, Task<IResult>>)LogoutAsync)
             .WithName("Logout")
@@ -43,8 +42,7 @@ public static class AuthEndpoints
             .WithTags("Account")
             .WithName("GetCurrentUser")
             .WithSummary("Current user, roles and account expiry.")
-            .Produces<MeResponse>()
-            .ProducesProblem(StatusCodes.Status401Unauthorized);
+            .Produces<MeResponse>();
 
         return api;
     }

@@ -97,6 +97,8 @@ flowchart LR
   API -- "per-source queries in parallel" --> MKT & SURV & PRC & REF
 ```
 
+Rendered diagrams for readers without repo access: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png) (SVG sources alongside, in `docs/architecture/`).
+
 **Key decisions (each one gets an ADR, see §15):**
 
 - **One Render web service** serves the built SPA **and** the API from the same origin.
@@ -563,7 +565,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan`, #192), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan` on the `numeric` columns, #192), the `float8` ones reject `'NaN'` and `±'Infinity'` (`ck_snapshot_<column>_finite`, #304), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
@@ -657,10 +659,11 @@ The **website is public** (anyone can reach the login page). The **data is not**
 | P1 first rows painted | < 1.0 s warm | Playwright trace + `performance.mark` | Reported in the PR |
 | P2 response | < 300 ms, < 5 KB | k6 + payload script | Reported |
 | P3 first tile / all tiles | < 500 ms / < 1.5 s | Playwright | Reported |
+| Failed-login floor (#230) | every login 401 ≥ 500 ms (+0–50 ms jitter), success not padded; unknown email vs wrong password within noise | `perf/login-floor.mjs` on the local compose stack (#306): 401 p50 532 ms / p95 552–557 ms for both paths, success p50 48–49 ms / p95 52–53 ms (ADR-0005) | `LoginTimingTests` (CI); the timing is reported |
 | Seeder runtime | < 90 s local at scale 1.0 | the seeder's own timer | Reported |
 | DB size | < 350 MB | the seeder (`pg_database_size`) | **Seeder fails** above 400 MB |
 | Reseed peak (old + new data until COMMIT) | ≤ `--cap-mb` (default 512 MB) | the seeder (`SEED_PEAK_EST_MB`) | **Seeder refuses** before TRUNCATE (exit 2) |
-| JS bundle (initial) | < 500 KB compressed | `ng build` stats | **CI fails** above budget |
+| JS bundle (initial) | < 500 KB compressed | `web/scripts/bundle-budget.mjs` after `ng build`: Brotli q1 in the API's 16 KB writes (#252) | **CI fails** above budget |
 
 Every PR that touches a measured path **MUST** paste before/after numbers in its body (the PR template has the table).
 
@@ -981,9 +984,9 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review) |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
-| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job |
+| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | phase-5/fund-performance | In review |
 | 6 Insights Board | n/a | Not started |
 | 7 Deal Explorer | n/a | Not started |

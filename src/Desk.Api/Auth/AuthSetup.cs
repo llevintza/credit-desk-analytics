@@ -54,6 +54,8 @@ public static class AuthSetup
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<AppDbContext>()
             .AddClaimsPrincipalFactory<DeskClaimsFactory>()
+            // Lockout on the injected clock, like the cookie and stamp checks below (#261).
+            .AddUserManager<DeskUserManager>()
             .AddSignInManager<DeskSignInManager>();
         // Scoped like the hasher it verifies through, so a test's counting hasher sees the decoy checks too.
         services.AddScoped<TimingGuard>();

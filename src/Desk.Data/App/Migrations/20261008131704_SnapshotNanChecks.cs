@@ -27,6 +27,7 @@ namespace Desk.Data.App.Migrations
             "pnl_idiosyncratic", "pnl_fx", "pnl_residual", "pnl_total_mtd", "stress_loss_mv"
         ];
 
+        // SnapshotFiniteChecks (#304) replaces the checks on exactly this list, so it stays frozen for both migrations.
         internal static readonly string[] Float8Measures =
         [
             "factor", "book_price", "price", "price_chg_1d", "price_chg_1w", "price_chg_1m", "yield", "spread_bp",
