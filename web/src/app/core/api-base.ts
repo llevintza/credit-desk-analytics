@@ -5,12 +5,12 @@ import { InjectionToken, inject } from '@angular/core';
  * The API's origin, set at build time (ADR-0024): `ng build --define 'DESK_API_BASE_URL="https://…"'` for the
  * GitHub Pages build. angular.json defines it as "" (same origin: the API-served app, compose, e2e, the dev proxy).
  */
-declare const DESK_API_BASE_URL: string | undefined;
+declare const DESK_API_BASE_URL: string;
 
 /** The API's origin with no trailing slash, or "" for the page's own origin. */
 export const API_BASE_URL = new InjectionToken<string>('API_BASE_URL', {
   providedIn: 'root',
-  factory: () => apiBase(typeof DESK_API_BASE_URL === 'string' ? DESK_API_BASE_URL : ''),
+  factory: () => apiBase(DESK_API_BASE_URL),
 });
 
 export function apiBase(raw: string): string {

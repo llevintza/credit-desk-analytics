@@ -163,7 +163,7 @@ public sealed class CorsTests(PostgresApiFactory api)
     [InlineData("https://LLEVINTZA.github.io/ , http://localhost:4200", new[] { "https://llevintza.github.io", "http://localhost:4200" })]
     [InlineData("https://a.test https://a.test\thttps://b.test:8443", new[] { "https://a.test", "https://b.test:8443" })]
     // Not an origin: a path, a query, credentials, another scheme, a wildcard or a bare host are dropped, never widened.
-    [InlineData("https://a.test/app,https://b.test?x=1,https://u:p@c.test,ftp://d.test,*,e.test", new string[0])]
+    [InlineData("https://a.test/app,https://b.test?x=1,https://u:p@c.test,ftp://d.test,*,e.test,https://f.test/#top", new string[0])]
     public void Only_http_and_https_origins_are_kept(string? value, string[] expected)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection([new(CorsSetup.ConfigKey, value)]).Build();

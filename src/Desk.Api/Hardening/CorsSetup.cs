@@ -31,17 +31,17 @@ public static class CorsSetup
 
     public static IServiceCollection AddDeskCors(this IServiceCollection services, IConfiguration config)
     {
-        var origins = Origins(config);
-        services.AddCors(o => o.AddDefaultPolicy(p => Configure(p, origins)));
-        return services;
+        var policy = Policy(Origins(config));
+        return services.AddCors(o => o.AddDefaultPolicy(policy));
     }
 
-    internal static void Configure(CorsPolicyBuilder p, string[] origins) =>
-        p.WithOrigins(origins)
+    internal static CorsPolicy Policy(string[] origins) =>
+        new CorsPolicyBuilder(origins)
             .WithMethods("GET", "POST", "PUT", "DELETE")
             .WithHeaders(AllowedHeaders)
             .WithExposedHeaders(ExposedHeaders)
-            .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
+            .SetPreflightMaxAge(TimeSpan.FromMinutes(10))
+            .Build();
 
     /// <summary>
     /// Before maintenance mode and the rate limiter: a preflight is answered here (it never takes a token or a
@@ -53,7 +53,9 @@ public static class CorsSetup
         var origins = Origins(app.Configuration).ToHashSet(StringComparer.OrdinalIgnoreCase);
         app.Use((http, next) =>
         {
-            if (http.Request.Headers.Origin is [{ } origin] && origins.Contains(origin))
+            // Absent is "", and several values join with a comma: neither is a configured origin.
+            var origin = http.Request.Headers.Origin.ToString();
+            if (origins.Contains(origin))
                 http.Response.Headers["Timing-Allow-Origin"] = origin;
             return next(http);
         });
