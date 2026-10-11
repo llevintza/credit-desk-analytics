@@ -58,4 +58,31 @@ public sealed class MigrationTests
         Assert.Equal(columns.Count, down.Split("DROP CONSTRAINT IF EXISTS").Length - 1);
         Assert.DoesNotContain("ADD CONSTRAINT", down);
     }
+
+    [Fact]
+    public void The_finite_check_migration_replaces_the_float8_NaN_checks_rerun_safely()
+    {
+        // #304: exactly the float8 measures, each _not_nan check swapped for a _finite one; Down swaps them back.
+        var migration = new SnapshotFiniteChecks();
+        var up = Assert.Single(migration.UpOperations.OfType<SqlOperation>()).Sql;
+        var down = Assert.Single(migration.DownOperations.OfType<SqlOperation>()).Sql;
+
+        Assert.Equal(SnapshotNanChecks.Float8Measures, SnapshotFiniteChecks.Columns);
+        Assert.StartsWith("ALTER TABLE core.position_snapshot\n", up);
+        Assert.StartsWith("ALTER TABLE core.position_snapshot\n", down);
+        foreach (var c in SnapshotFiniteChecks.Columns)
+        {
+            var finite = SnapshotFiniteChecks.ConstraintName(c);
+            var notNan = SnapshotNanChecks.ConstraintName(c);
+            Assert.Equal($"ck_snapshot_{c}_finite", finite);
+            Assert.True(finite.Length <= 63, finite); // Postgres truncates longer identifiers
+            Assert.Contains($"DROP CONSTRAINT IF EXISTS {notNan}, DROP CONSTRAINT IF EXISTS {finite}, " +
+                            $"ADD CONSTRAINT {finite} CHECK ({c} > '-Infinity'::float8 AND {c} < 'Infinity'::float8)", up);
+            Assert.Contains($"DROP CONSTRAINT IF EXISTS {finite}, DROP CONSTRAINT IF EXISTS {notNan}, " +
+                            $"ADD CONSTRAINT {notNan} CHECK ({c} <> 'NaN'::float8)", down);
+        }
+        Assert.Equal(SnapshotFiniteChecks.Columns.Count, up.Split("ADD CONSTRAINT").Length - 1);
+        Assert.Equal(SnapshotFiniteChecks.Columns.Count, down.Split("ADD CONSTRAINT").Length - 1);
+        Assert.DoesNotContain("numeric", up);
+    }
 }
