@@ -1,4 +1,5 @@
-# Render Blueprint (README §13.2). One Docker web service serves the SPA and the API from one origin.
+# Render Blueprint (README §13.2). One Docker web service serves the SPA and the API from one origin; the same SPA
+# is also on GitHub Pages and calls this API cross-origin (ADR-0024).
 # Free tier: spins down after ~15 min idle; first request back takes 30-60 s. Use "starter" for always-on.
 services:
   - type: web
@@ -23,6 +24,10 @@ services:
         value: "true"
       - key: MAINTENANCE_MODE
         value: "false"
+      # The GitHub Pages front end calls this API cross-origin with bearer tokens (ADR-0024). Exact origins only,
+      # comma or space separated; unset allows none. The same-origin SPA served from this service doesn't need it.
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://llevintza.github.io
       # README §7.2 limits; the code defaults match, listed here so they can be tuned in the dashboard.
       - key: RATE_LIMIT_PER_USER_PER_MIN
         value: "60"

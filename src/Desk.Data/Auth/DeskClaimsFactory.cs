@@ -6,8 +6,8 @@ using Microsoft.Extensions.Options;
 namespace Desk.Data.Auth;
 
 /// <summary>
-/// Adds the account expiry to the principal. Runs at login and again whenever the security-stamp validator
-/// refreshes the cookie, so the claim always reflects the database.
+/// Adds the account expiry to the principal. Runs at login and again at every token refresh (ADR-0024), so the
+/// claim reflects the database within one access-token lifetime.
 /// </summary>
 public sealed class DeskClaimsFactory(
     UserManager<DeskUser> users,

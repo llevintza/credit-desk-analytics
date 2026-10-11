@@ -8,8 +8,10 @@ import { KeyboardService } from './keyboard.service';
 import { ScopeService } from './scope.service';
 import { StatusService } from './status.service';
 import { ThemeService } from './theme.service';
+import { REFRESH_TOKEN_KEY, TokenStore } from './token.store';
 
 const me = { email: 'a@example.com', roles: ['admin'], expiresAt: '2026-12-01T00:00:00Z' };
+const tokens = { tokenType: 'Bearer', accessToken: 'access-1', expiresIn: 300, refreshToken: 'refresh-1' };
 
 function setup() {
   TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])] });
@@ -17,10 +19,14 @@ function setup() {
 }
 
 describe('AuthService and guards', () => {
-  afterEach(() => TestBed.inject(HttpTestingController).verify());
+  afterEach(() => {
+    TestBed.inject(HttpTestingController).verify();
+    sessionStorage.clear();
+  });
 
   it('checks the session once and exposes role and expiry', async () => {
     const http = setup();
+    TestBed.inject(TokenStore).set(tokens);
     const auth = TestBed.inject(AuthService);
     expect(auth.isAdmin()).toBe(false);
     expect(auth.expiresAt()).toBeNull();
@@ -32,8 +38,16 @@ describe('AuthService and guards', () => {
     expect(await firstValueFrom(auth.check())).toBe(true); // cached: no second request
   });
 
+  it('is signed out without asking when there is no token at all', async () => {
+    setup();
+    const auth = TestBed.inject(AuthService);
+    expect(await firstValueFrom(auth.check())).toBe(false);
+    expect(auth.me()).toBeNull();
+  });
+
   it('treats 401 as signed out and rethrows other errors', async () => {
     const http = setup();
+    TestBed.inject(TokenStore).set(tokens);
     const auth = TestBed.inject(AuthService);
     const out = firstValueFrom(auth.check());
     http.expectOne('/api/me').flush('no', { status: 401, statusText: 'Unauthorized' });
@@ -52,7 +66,11 @@ describe('AuthService and guards', () => {
     const login = firstValueFrom(auth.login('a@example.com', 'pw'));
     const req = http.expectOne('/api/auth/login');
     expect(req.request.body).toEqual({ email: 'a@example.com', password: 'pw' });
-    req.flush(me);
+    req.flush(tokens);
+    // The tokens are kept before the account is read with them (ADR-0024).
+    expect(TestBed.inject(TokenStore).accessToken()).toBe('access-1');
+    expect(sessionStorage.getItem(REFRESH_TOKEN_KEY)).toBe('refresh-1');
+    http.expectOne('/api/me').flush(me);
     await login;
     expect(auth.me()).toEqual(me);
     const scope = TestBed.inject(ScopeService);
@@ -62,6 +80,8 @@ describe('AuthService and guards', () => {
     http.expectOne('/api/auth/logout').flush(null);
     await logout;
     expect(auth.me()).toBeNull();
+    expect(TestBed.inject(TokenStore).hasSession()).toBe(false);
+    expect(sessionStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
     // The next account must not inherit this one's entitlement-scoped portfolios or selection.
     expect(scope.selected()).toEqual([]);
     expect(scope.portfolios()).toEqual([]);
@@ -69,6 +89,7 @@ describe('AuthService and guards', () => {
 
   it('authGuard lets a session through and sends everyone else to /login', async () => {
     const http = setup();
+    TestBed.inject(TokenStore).set(tokens);
     const run = () => TestBed.runInInjectionContext(() => authGuard({} as never, {} as never)) as Observable<boolean | UrlTree>;
     const denied = firstValueFrom(run());
     http.expectOne('/api/me').flush('no', { status: 401, statusText: 'Unauthorized' });

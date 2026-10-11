@@ -75,6 +75,7 @@ flowchart LR
   subgraph Browser
     UI["Angular 22 SPA<br/>AG Grid Community<br/>signals + OnPush"]
   end
+  PAGES["GitHub Pages<br/>(the same SPA, ADR-0024)"]
   subgraph Render["Render: one Docker web service"]
     direction TB
     STATIC["Static files<br/>(built SPA in wwwroot)"]
@@ -90,8 +91,9 @@ flowchart LR
     REF[(reference)]
     AUTH[(auth)]
   end
-  UI -- "same origin, httpOnly cookie" --> STATIC
-  UI -- "fetch /api (gzip/br, ETag)" --> API
+  UI -- "static shell (CDN)" --> PAGES
+  UI -- "or same origin" --> STATIC
+  UI -- "fetch /api, Authorization: Bearer (CORS from Pages; gzip/br, ETag)" --> API
   API -- "Dapper (dynamic grid SQL)" --> CORE
   API -- "EF Core (presets, accounts)" --> AUTH
   API -- "per-source queries in parallel" --> MKT & SURV & PRC & REF
@@ -101,9 +103,10 @@ Rendered diagrams for readers without repo access: [service architecture](docs/a
 
 **Key decisions (each one gets an ADR, see §15):**
 
-- **One Render web service** serves the built SPA **and** the API from the same origin.
-  - **Why:** the invite-only login uses **same-origin httpOnly `SameSite=Strict` cookies**: no CORS, no third-party-cookie problems, no tokens in JavaScript. It also means only one free instance to keep inside platform limits.
-  - **Rejected:** a Render static site plus a separate API service. (GitHub Pages is out too: it needs a paid plan for a private repo and can't run the API.)
+- **One Render web service** serves the built SPA **and** the API from the same origin, and **GitHub Pages** serves the same SPA at `https://llevintza.github.io/credit-desk-analytics/` (ADR-0024, 2026-10-11).
+  - **Why Pages too:** front-end deploys without a Docker build, a public URL that stays up while the free API sleeps, and a login page that paints at once during a Render cold start.
+  - **Auth:** ASP.NET Core Identity **bearer tokens** (5-minute access token, 8 h refresh token, 24 h absolute). The original same-origin `SameSite=Strict` cookie (ADR-0005) would be a blocked third-party cookie from `github.io`. CORS allows exactly the configured origins, without credentials.
+  - **Rejected:** a Render static site plus a separate API service (a second instance for nothing), and a `SameSite=None` cookie (blocked or partitioned as third-party).
 - **Neon Postgres** in production and **Postgres 17 in Docker** locally: one SQL dialect everywhere.
 - **Five logical data sources** (`core`, `market`, `surveillance`, `pricing`, `reference`), each with **its own connection-string setting**.
   - They live in one Neon database today, as separate schemas.
@@ -487,7 +490,7 @@ An SSE stream (`/api/marks/stream`) of simulated mark changes for a subset of bo
 
 ## 7. Security, accounts and resource protection
 
-The **website is public** (anyone can reach the login page). The **data is not**: everything under `/api` except `/api/auth/login` and `/health` requires an authenticated session.
+The **website is public** (anyone can reach the login page). The **data is not**: everything under `/api` except `/api/auth/login` and `/api/auth/refresh` requires a bearer access token (`/health` is outside `/api` and public).
 
 ### 7.1 Accounts (invite-only)
 
@@ -495,10 +498,14 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Roles:** `viewer` (all pages, read-only) and `admin` (plus the usage page, cache controls, naive-mode toggles).
 - **Each account has an `ExpiresAt`;** login is refused after it. Reviewer accounts get short expiries.
 - **Lockout:** 5 failed attempts gives a 15-minute lockout. Password policy is Identity defaults with a minimum length of 14.
-- **Session:**
-  - Same-origin cookie: `HttpOnly`, `Secure`, `SameSite=Strict`, 8 h sliding, absolute 24 h.
-  - Antiforgery token on state-changing requests (presets save, admin actions).
-  - The data-protection keys are persisted to the database, so sessions survive restarts.
+- **Session (ADR-0024, replacing ADR-0005's cookie):**
+  - `POST /api/auth/login` returns Identity bearer tokens: an access token for **5 minutes**, sent as `Authorization: Bearer`, and a refresh token for **8 hours**, renewed by each `POST /api/auth/refresh` (sliding). Neither can outlive **24 h** from sign-in (absolute). No cookies.
+  - A refresh re-reads the account: a disable or password reset (`Desk.UserAdmin`, which rotates the security stamp), or an expiry, ends the session at the next refresh, within 5 minutes. Account expiry is also checked on every request.
+  - `POST /api/auth/logout` ends that sign-in (its access and refresh tokens) on the running instance. The list is in memory, so a restart forgets it and a copied token lives until it expires. `disable`/`reset` end every session for good.
+  - The SPA keeps the access token in memory and the refresh token in the tab's `sessionStorage`, so closing the tab ends the session. Script on the page can read both: the XSS trade-off is in ADR-0024.
+  - No antiforgery: the browser never attaches a header token by itself, so CSRF doesn't apply.
+  - **CORS:** `CORS_ALLOWED_ORIGINS` (comma or space separated `https://` origins, `http://` only in Development; unset = none) allows a cross-site front end. Production sets `https://llevintza.github.io` (`render.yaml`). No credentials; preflights are answered before maintenance mode and the rate limiter.
+  - The data-protection keys are persisted to the database, so tokens survive restarts.
 - **User admin CLI** (`src/Desk.UserAdmin`):
 
   ```bash
@@ -572,7 +579,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - MessagePack variant on `Accept: application/x-msgpack` (ADR-0007 decides whether it stays on by default).
 - **API docs and testing:** the OpenAPI document is at **`/openapi/v1.json`** (built-in `AddOpenApi`), with **Swagger UI at `/swagger`** for trying every endpoint. Every endpoint has a name, summary and tag.
   - It's on in **Development**. Elsewhere it's off unless `SWAGGER_ENABLED=true`, which you can set in the Render dashboard to try the deployed API.
-  - Phase 2 puts it behind the admin login, since the site is public (#94).
+  - Phase 2 put it behind the admin login, since the site is public (#94). Since bearer tokens (ADR-0024), the OpenAPI document stays admin-only, while the Swagger UI shell (the stock bundle, no API data) loads without a session and signs its calls with the session of the tab it is opened in.
   - The choice is recorded in ADR-0019.
   - The phase-2 CSP must allow Swagger UI's assets on `/swagger` only.
 - **Response compression:** Brotli and gzip, on HTTPS too.
@@ -783,6 +790,8 @@ services:
         value: "false"
       - key: MAINTENANCE_MODE
         value: "false"
+      - key: CORS_ALLOWED_ORIGINS   # the GitHub Pages front end (ADR-0024); unset = no cross-origin access
+        value: https://llevintza.github.io
       - key: DEMO_ACCOUNTS_JSON
         sync: false
 ```
@@ -985,6 +994,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
+| GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | phase-5/fund-performance | In review |

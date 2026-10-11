@@ -31,7 +31,7 @@ export class Login {
     return s.kind === 'ready' && s.maintenance;
   });
   protected readonly unreachable = computed(() => this.api().kind === 'unreachable');
-  /** Shell's logout failed with a 403, 5xx or network error: the server session may still be alive (#208). */
+  /** Shell's logout failed with a 403, 5xx or network error: the server may still accept the tokens (#208). */
   protected readonly signoutUnconfirmed = inject(ActivatedRoute).snapshot.queryParamMap.get('signout') === 'unconfirmed';
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);

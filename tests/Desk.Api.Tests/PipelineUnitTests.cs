@@ -3,9 +3,7 @@ using Desk.Api.Audit;
 using Desk.Api.Auth;
 using Desk.Data.App;
 using Desk.Data.Auth;
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,58 +52,78 @@ public sealed class PipelineUnitTests
         Assert.False(queue.Reader.TryRead(out _));
     }
 
-    [Theory]
-    [InlineData("GET")]
-    [InlineData("HEAD")]
-    [InlineData("OPTIONS")]
-    public async Task Antiforgery_lets_safe_methods_through_without_a_token(string method)
+    private static readonly DateTimeOffset Now = new(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+
+    private static ClaimsPrincipal Session(string? expiresAt = "2026-11-01T00:00:00.0000000+00:00",
+        string? authTime = "2026-10-07T11:00:00.0000000+00:00", string? sid = "abc")
     {
-        var filter = new AntiforgeryFilter(new RejectingAntiforgery());
-        var http = new DefaultHttpContext();
-        http.Request.Method = method;
-        var result = await filter.InvokeAsync(new DefaultEndpointFilterInvocationContext(http), _ => ValueTask.FromResult<object?>("next"));
-        Assert.Equal("next", result);
+        var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test");
+        if (expiresAt is not null) identity.AddClaim(new Claim(DeskClaimsFactory.ExpiresAtClaim, expiresAt));
+        if (authTime is not null) identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, authTime));
+        if (sid is not null) identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, sid));
+        return new ClaimsPrincipal(identity);
     }
 
-    [Fact]
-    public async Task Antiforgery_rejects_an_unsafe_method_without_a_valid_token()
+    public static TheoryData<string?, string?, string?> DeadSessions => new()
     {
-        var filter = new AntiforgeryFilter(new RejectingAntiforgery());
-        var http = new DefaultHttpContext();
-        http.Request.Method = "DELETE";
-        var result = await filter.InvokeAsync(new DefaultEndpointFilterInvocationContext(http), _ => ValueTask.FromResult<object?>("next"));
-        Assert.NotEqual("next", result);
-    }
-
-    public static TheoryData<string?, bool> BadTickets => new()
-    {
-        { null, true },              // no auth_time recorded
-        { "not-a-time", true },      // tampered or garbage auth_time
-        { "2026-10-07T12:00:00.0000000+00:00", false }, // fine time, but no expiry claim
+        { null, "2026-10-07T11:00:00.0000000+00:00", "abc" },                               // no expiry claim
+        { "2026-10-07T12:00:00.0000000+00:00", "2026-10-07T11:00:00.0000000+00:00", "abc" }, // account expires now
+        { "2026-11-01T00:00:00.0000000+00:00", null, "abc" },                               // no sign-in time
+        { "2026-11-01T00:00:00.0000000+00:00", "not-a-time", "abc" },                       // tampered or garbage
+        { "2026-11-01T00:00:00.0000000+00:00", "2026-10-06T12:00:00.0000000+00:00", "abc" }, // exactly 24 h old
+        { "2026-11-01T00:00:00.0000000+00:00", "2026-10-07T11:00:00.0000000+00:00", null },  // no session id
+        { "2026-11-01T00:00:00.0000000+00:00", "2026-10-07T11:00:00.0000000+00:00", "" },    // empty session id
     };
 
     [Theory]
-    [MemberData(nameof(BadTickets))]
-    public async Task A_session_without_a_valid_auth_time_or_expiry_is_rejected(string? authTime, bool withExpiry)
+    [MemberData(nameof(DeadSessions))]
+    public void A_token_without_a_live_expiry_sign_in_time_or_session_id_is_not_live(string? expiresAt, string? authTime, string? sid)
     {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
-        services.AddAuthentication().AddCookie(IdentityConstants.ApplicationScheme);
-        await using var sp = services.BuildServiceProvider();
-        var http = new DefaultHttpContext { RequestServices = sp };
+        Assert.False(SessionLimits.IsLive(Session(expiresAt, authTime, sid), Now, new SessionRevocations()));
+    }
 
-        var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test");
-        if (withExpiry)
-            identity.AddClaim(new Claim(DeskClaimsFactory.ExpiresAtClaim, DateTimeOffset.UtcNow.AddDays(1).ToString("O")));
-        var props = new AuthenticationProperties();
-        if (authTime is not null) props.Items[AuthSetup.AuthTimeKey] = authTime;
-        var scheme = new AuthenticationScheme(IdentityConstants.ApplicationScheme, null, typeof(CookieAuthenticationHandler));
-        var ctx = new CookieValidatePrincipalContext(http, scheme, new CookieAuthenticationOptions(),
-            new AuthenticationTicket(new ClaimsPrincipal(identity), props, scheme.Name));
+    [Fact]
+    public void A_token_is_live_until_its_session_is_logged_out()
+    {
+        var revoked = new SessionRevocations();
+        Assert.True(SessionLimits.IsLive(Session(), Now, revoked));
+        revoked.Revoke("abc", Now.AddHours(1), Now);
+        Assert.False(SessionLimits.IsLive(Session(), Now, revoked));
+        Assert.True(SessionLimits.IsLive(Session(sid: "other"), Now, revoked));
+    }
 
-        await AuthSetup.ValidatePrincipalAsync(ctx);
-        Assert.Null(ctx.Principal);
+    [Fact]
+    public void Revocations_expire_and_are_pruned_on_the_next_logout()
+    {
+        var revoked = new SessionRevocations();
+        revoked.Revoke("a", Now.AddMinutes(10), Now);
+        revoked.Revoke("past", Now, Now); // already past the 24 h limit: nothing to remember
+        Assert.Equal(1, revoked.Count);
+        Assert.True(revoked.IsRevoked("a", Now.AddMinutes(9)));
+        Assert.False(revoked.IsRevoked("a", Now.AddMinutes(10)));
+
+        revoked.Revoke("b", Now.AddHours(2), Now.AddMinutes(10));
+        Assert.False(revoked.IsRevoked("a", Now));
+        Assert.Equal(1, revoked.Count);
+    }
+
+    [Fact]
+    public async Task Session_limits_turn_a_dead_token_into_an_anonymous_caller_and_keep_a_live_one()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(Now);
+        var mw = new SessionLimits(_ => Task.CompletedTask, new SessionRevocations(), time);
+
+        var live = new DefaultHttpContext { User = Session() };
+        await mw.InvokeAsync(live);
+        Assert.True(live.User.IsSignedIn());
+
+        var dead = new DefaultHttpContext { User = Session(sid: null) };
+        await mw.InvokeAsync(dead);
+        Assert.False(dead.User.IsSignedIn());
+
+        var anonymous = new DefaultHttpContext();
+        await mw.InvokeAsync(anonymous);
+        Assert.False(anonymous.User.IsSignedIn());
     }
 
     [Fact]
@@ -125,14 +143,5 @@ public sealed class PipelineUnitTests
         Assert.True(SignedIn().IsSignedIn());
         Assert.False(new ClaimsPrincipal(new ClaimsIdentity()).IsSignedIn());
         Assert.False(new ClaimsPrincipal().IsSignedIn());
-    }
-
-    private sealed class RejectingAntiforgery : IAntiforgery
-    {
-        public AntiforgeryTokenSet GetAndStoreTokens(HttpContext httpContext) => throw new NotSupportedException();
-        public AntiforgeryTokenSet GetTokens(HttpContext httpContext) => throw new NotSupportedException();
-        public Task<bool> IsRequestValidAsync(HttpContext httpContext) => Task.FromResult(false);
-        public void SetCookieTokenAndHeader(HttpContext httpContext) => throw new NotSupportedException();
-        public Task ValidateRequestAsync(HttpContext httpContext) => throw new NotSupportedException();
     }
 }

@@ -1,26 +1,35 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
-import { Observable, catchError, map, of, tap } from 'rxjs';
+import { Observable, catchError, map, of, switchMap, tap } from 'rxjs';
 import { Me } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
 import { ScopeService } from './scope.service';
+import { TokenStore } from './token.store';
 
 /** The signed-in account (README §7.1). `undefined` until checked, `null` when signed out. */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly api = inject(DeskApi);
   private readonly scope = inject(ScopeService);
+  private readonly tokens = inject(TokenStore);
 
   readonly me = signal<Me | null | undefined>(undefined);
   readonly isAdmin = computed(() => this.me()?.roles.includes('admin') ?? false);
   /** Reviewer accounts are short-lived: the user menu shows when access ends. */
   readonly expiresAt = computed(() => this.me()?.expiresAt ?? null);
 
-  /** Resolves the session once (GET /api/me); a 401 means signed out, other errors bubble up. */
+  /**
+   * Resolves the session once (GET /api/me); a 401 means signed out, other errors bubble up. With no token at all
+   * (a new tab, after sign-out) there is nothing to ask: signed out without a request.
+   */
   check(): Observable<boolean> {
     const known = this.me();
     if (known !== undefined) return of(known !== null);
+    if (!this.tokens.hasSession()) {
+      this.me.set(null);
+      return of(false);
+    }
     return this.api.me().pipe(
       tap((me) => this.me.set(me)),
       map(() => true),
@@ -34,17 +43,25 @@ export class AuthService {
     );
   }
 
-  /** A new session starts with a fresh scope: portfolios are entitlement-scoped (README §6), never inherited. */
+  /**
+   * Signs in for a token pair (ADR-0024), then reads the account. A new session starts with a fresh scope:
+   * portfolios are entitlement-scoped (README §6), never inherited.
+   */
   login(email: string, password: string): Observable<Me> {
-    return this.api.login(email, password).pipe(tap((me) => this.signedIn(me)));
+    return this.api.login(email, password).pipe(
+      tap((tokens) => this.tokens.set(tokens)),
+      switchMap(() => this.api.me()),
+      tap((me) => this.signedIn(me)),
+    );
   }
 
   logout(): Observable<void> {
     return this.api.logout().pipe(tap(() => this.signedOut()));
   }
 
-  /** The session ended server-side (expired account, lapsed cookie): forget it without calling the API. */
+  /** The session ended server-side (expired account, refused refresh) or sign-out: forget it and its tokens. */
   signedOut(): void {
+    this.tokens.clear();
     this.me.set(null);
     this.scope.reset();
   }

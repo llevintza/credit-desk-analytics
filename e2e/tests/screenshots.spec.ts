@@ -1,4 +1,5 @@
-import { Page, expect, test } from '@playwright/test';
+import { Page } from '@playwright/test';
+import { expect, test, withSession } from './session';
 import { gridReady } from './helpers';
 
 /** README §11: every page in dark and light, saved to docs/screenshots/ and attached to the PR. */
@@ -43,6 +44,7 @@ for (const theme of ['dark', 'light'] as const) {
     // A fresh context from a copy of the saved session: the 403 route and the local sign-out stay in it, and the
     // fulfilled logout never reaches the server, so the shared session the other tests use stays signed in.
     const context = await browser.newContext({ storageState: '.auth/state.json', viewport: { width: 1600, height: 900 } });
+    await withSession(context);
     const page = await context.newPage();
     await page.route('**/api/auth/logout', (route) =>
       route.request().method() === 'POST' ? route.fulfill({ status: 403, body: '' }) : route.continue(),
