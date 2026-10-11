@@ -8,7 +8,7 @@ namespace Desk.Api.Auth;
 
 /// <summary>
 /// Identity's <see cref="UserManager{TUser}"/> with the lockout stamp and check on the injected <see cref="TimeProvider"/>
-/// (#261), the clock cookie expiry and the security-stamp validator already use. Identity 10 reads
+/// (#261), the clock token expiry and the session limits already use. Identity 10 reads
 /// <see cref="DateTimeOffset.UtcNow"/> in exactly these two members and has no clock option. Behaviour is otherwise the
 /// base's, including the inclusive boundary: an account stays locked at the instant its lockout ends.
 /// </summary>

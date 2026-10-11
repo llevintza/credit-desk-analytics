@@ -1,9 +1,11 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Desk.Api.Auth;
 using Desk.Data;
 using Desk.Data.App;
 using Desk.Data.Auth;
+using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -157,7 +159,6 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     public HttpClient NewClient() => NewClient(this);
 
     public static HttpClient NewClient(WebApplicationFactory<Program> factory) =>
-        // https: the session cookie is Secure (__Host- prefix), so the cookie container only sends it over https.
         factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
 
     public async Task<DeskUser> CreateUserAsync(string role = Roles.Viewer, DateTimeOffset? expiresAt = null, string? password = null)
@@ -176,26 +177,29 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
     public static Task<HttpResponseMessage> PostLoginAsync(HttpClient client, string email, string? password = null) =>
         client.PostAsJsonAsync("/api/auth/login", new LoginRequest(email, password ?? Password), TestContext.Current.CancellationToken);
 
-    /// <summary>Logs in and returns the XSRF token the SPA would echo in <c>X-XSRF-TOKEN</c>.</summary>
-    public static async Task<string> LoginAsync(HttpClient client, string email, string? password = null)
+    /// <summary>Logs in, sends the access token on every later request from <paramref name="client"/>, and returns both tokens.</summary>
+    public static async Task<AccessTokenResponse> LoginAsync(HttpClient client, string email, string? password = null)
     {
         var res = await PostLoginAsync(client, email, password);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        return XsrfToken(res)!;
+        var tokens = (await res.Content.ReadFromJsonAsync<AccessTokenResponse>(TestContext.Current.CancellationToken))!;
+        UseToken(client, tokens.AccessToken);
+        return tokens;
     }
 
-    public async Task<(HttpClient Client, string Xsrf, DeskUser User)> SignedInAsync(string role = Roles.Viewer)
+    /// <summary>Sends <paramref name="accessToken"/> as the bearer token on every later request from <paramref name="client"/>.</summary>
+    public static void UseToken(HttpClient client, string accessToken) =>
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+    public static Task<HttpResponseMessage> PostRefreshAsync(HttpClient client, string? refreshToken) =>
+        client.PostAsJsonAsync("/api/auth/refresh", new RefreshRequest(refreshToken), TestContext.Current.CancellationToken);
+
+    public async Task<(HttpClient Client, AccessTokenResponse Tokens, DeskUser User)> SignedInAsync(string role = Roles.Viewer)
     {
         var user = await CreateUserAsync(role);
         var client = NewClient();
         return (client, await LoginAsync(client, user.Email!), user);
     }
-
-    public static string? XsrfToken(HttpResponseMessage res) =>
-        res.Headers.TryGetValues("Set-Cookie", out var cookies)
-            ? cookies.Select(c => c.Split(';')[0]).Where(c => c.StartsWith(AuthSetup.XsrfCookieName + "=", StringComparison.Ordinal))
-                     .Select(c => Uri.UnescapeDataString(c[(AuthSetup.XsrfCookieName.Length + 1)..])).LastOrDefault()
-            : null;
 
     /// <summary>The audit writer is asynchronous: wait (bounded) for rows to show up.</summary>
     public async Task<List<AuditEntry>> WaitForAuditAsync(Func<AuditEntry, bool> match, int atLeast = 1)

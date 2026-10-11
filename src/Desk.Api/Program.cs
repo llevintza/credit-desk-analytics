@@ -23,7 +23,8 @@ if (!builder.Environment.IsDevelopment())
 }
 
 builder.Services.AddDeskData(builder.Configuration);
-builder.Services.AddDeskAuth(AuthSetup.HttpsOnly(builder.Configuration, builder.Environment));
+builder.Services.AddDeskAuth();
+builder.Services.AddDeskCors(builder.Configuration);
 builder.Services.AddSingleton<DemoAccounts>();
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
@@ -45,7 +46,7 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi(o => o.AddOperationTransformer<PipelineResponses>().AddDocumentTransformer((doc, _, _) =>
 {
     doc.Info.Title = "Credit Desk Analytics API";
-    doc.Info.Description = "Front-office analytics API for a structured-credit desk. Everything under /api except login needs a session.";
+    doc.Info.Description = "Front-office analytics API for a structured-credit desk. Everything under /api except login and refresh needs a bearer access token.";
     // Behind a TLS-terminating proxy the generated server is http://; Swagger UI then
     // "Try it out"s over HTTP. Empty servers make the UI use the page's origin (relative).
     doc.Servers = [];
@@ -62,21 +63,24 @@ builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = Compre
 
 var app = builder.Build();
 
-// Order matters: maintenance answers before anything that can reach the database; rate limiting partitions by
-// the authenticated user; the audit middleware sees only admitted requests; authorization runs last.
+// Order matters: CORS answers preflights before anything else can refuse them; maintenance answers before anything
+// that can reach the database; rate limiting partitions by the authenticated user; the audit middleware sees only
+// admitted requests; authorization runs last.
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeaders>();
 if (!app.Environment.IsDevelopment())
     app.UseHsts();
+app.UseDeskCors();
 app.UseMiddleware<MaintenanceMode>();
 app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseRouting();
-// Only paths that need a session decrypt the cookie: /health and the SPA never load the key ring or run the
-// security-stamp query, so they can't wake the database (maintenance mode, platform probes).
-app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication());
+// Only paths that need a session read the bearer token: /health and the SPA never load the key ring, so they can't
+// wake the database (maintenance mode, platform probes). SessionLimits drops a token past the account's expiry,
+// the 24 h limit or a logout, before the rate limiter keys on the user.
+app.UseWhen(MaintenanceMode.IsSessionPath, b => b.UseAuthentication().UseMiddleware<SessionLimits>());
 // UseAuthentication on a branch doesn't mark the app, and WebApplication would then add a global one at the very
 // start of the pipeline (before maintenance mode). Mark it so the path-scoped one above is the only one.
 ((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
@@ -88,9 +92,10 @@ app.UseMiddleware<AuditMiddleware>();
 app.UseAuthorization();
 app.UseDeskSwagger();
 
+// No antiforgery: a bearer token in Authorization is never sent by the browser on its own, so there is no CSRF to
+// defend against (ADR-0024).
 var api = app.MapGroup("/api")
-    .RequireAuthorization()
-    .ValidateAntiforgery();
+    .RequireAuthorization();
 app.MapHealthEndpoints(api);
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();

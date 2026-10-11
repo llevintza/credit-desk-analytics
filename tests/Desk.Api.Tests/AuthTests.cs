@@ -3,23 +3,23 @@ using System.Net.Http.Json;
 using Desk.Api.Auth;
 using Desk.Data.App;
 using Desk.Data.Auth;
+using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
-/// <summary>README §11 auth list and §7.1 session rules.</summary>
+/// <summary>README §11 auth list and §7.1 session rules, on bearer tokens (ADR-0024).</summary>
 [Collection(ApiCollection.Name)]
 public sealed class AuthTests(PostgresApiFactory api)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task No_session_is_401_problem_details()
+    public async Task No_token_is_401_problem_details()
     {
         var res = await api.NewClient().GetAsync("/api/me", Ct);
         Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
@@ -27,27 +27,23 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task Login_sets_a_strict_host_only_session_cookie_and_me_returns_the_account()
+    public async Task Login_returns_bearer_tokens_and_no_cookies_and_me_returns_the_account()
     {
         var user = await api.CreateUserAsync(Roles.Admin);
         var client = api.NewClient();
 
         var login = await PostgresApiFactory.PostLoginAsync(client, user.Email!);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
-        var session = login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(AuthSetup.CookieName + "=", StringComparison.Ordinal));
-        Assert.Contains("httponly", session, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("secure", session, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("samesite=strict", session, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("path=/", session, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("domain=", session, StringComparison.OrdinalIgnoreCase);
-        // Readable by the SPA (no HttpOnly), still Secure + Strict.
-        var xsrf = login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(AuthSetup.XsrfCookieName + "=", StringComparison.Ordinal));
-        Assert.DoesNotContain("httponly", xsrf, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("samesite=strict", xsrf, StringComparison.OrdinalIgnoreCase);
+        Assert.False(login.Headers.Contains("Set-Cookie"));
+        var tokens = (await login.Content.ReadFromJsonAsync<AccessTokenResponse>(Ct))!;
+        Assert.Equal("Bearer", tokens.TokenType);
+        Assert.Equal((long)AuthSetup.AccessTokenLifetime.TotalSeconds, tokens.ExpiresIn);
+        Assert.False(string.IsNullOrEmpty(tokens.AccessToken));
+        Assert.False(string.IsNullOrEmpty(tokens.RefreshToken));
+        Assert.NotEqual(tokens.AccessToken, tokens.RefreshToken);
 
-        var body = await login.Content.ReadFromJsonAsync<MeResponse>(Ct);
-        Assert.Equal(user.Email, body!.Email);
-
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        PostgresApiFactory.UseToken(client, tokens.AccessToken);
         var me = await client.GetFromJsonAsync<MeResponse>("/api/me", Ct);
         Assert.Equal(user.Email, me!.Email);
         Assert.Equal([Roles.Admin], me.Roles);
@@ -59,9 +55,19 @@ public sealed class AuthTests(PostgresApiFactory api)
     {
         var user = await api.CreateUserAsync();
         var client = api.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { BaseAddress = new Uri("http://localhost") });
-        var res = await PostgresApiFactory.PostLoginAsync(client, user.Email!);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.NotNull(PostgresApiFactory.XsrfToken(res));
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("Bearer not-a-token")]
+    [InlineData("Basic dXNlcjpwYXNz")]
+    [InlineData("Bearer")]
+    public async Task A_bad_or_foreign_authorization_header_is_401(string header)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/me");
+        req.Headers.TryAddWithoutValidation("Authorization", header);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().SendAsync(req, Ct)).StatusCode);
     }
 
     [Fact]
@@ -74,87 +80,6 @@ public sealed class AuthTests(PostgresApiFactory api)
         req.Headers.Add("X-Forwarded-Proto", "https");
         var res = await client.SendAsync(req, Ct);
         Assert.True(res.Headers.Contains("Strict-Transport-Security"));
-    }
-
-    [Fact]
-    public async Task Behind_the_proxy_the_antiforgery_cookie_is_host_prefixed_and_always_secure()
-    {
-        // Render: the proxy sends X-Forwarded-Proto: https. Cookies are carried by hand, as a browser would on https.
-        await using var host = api.WithSettings(("FORWARDEDHEADERS_ENABLED", "true"));
-        var client = host.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
-            { BaseAddress = new Uri("http://desk.example.test"), HandleCookies = false, AllowAutoRedirect = false });
-        var user = await api.CreateUserAsync();
-
-        using var login = Forwarded(HttpMethod.Post, "/api/auth/login");
-        login.Content = JsonContent.Create(new LoginRequest(user.Email, PostgresApiFactory.Password));
-        var res = await client.SendAsync(login, Ct);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-
-        var af = SetCookie(res, AuthSetup.AntiforgeryCookieName);
-        Assert.Contains("secure", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("httponly", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("path=/", af, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("domain=", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Null(SetCookieOrNull(res, AuthSetup.PlainHttpAntiforgeryCookieName));
-
-        // The token validates against the __Host- cookie.
-        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: true)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Off_the_proxy_plain_http_keeps_the_plain_antiforgery_cookie_and_it_validates()
-    {
-        // Local compose and the CI e2e/budgets stacks: Production over plain http://localhost:8080, no proxy setting.
-        var client = api.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
-            { BaseAddress = new Uri("http://localhost"), HandleCookies = false, AllowAutoRedirect = false });
-        var user = await api.CreateUserAsync();
-
-        var res = await PostgresApiFactory.PostLoginAsync(client, user.Email!);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-
-        var af = SetCookie(res, AuthSetup.PlainHttpAntiforgeryCookieName);
-        Assert.DoesNotContain("secure", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("samesite=strict", af, StringComparison.OrdinalIgnoreCase);
-        Assert.Null(SetCookieOrNull(res, AuthSetup.AntiforgeryCookieName));
-
-        Assert.Equal(HttpStatusCode.NoContent, (await LogoutAsync(client, res, forwardedHttps: false)).StatusCode);
-    }
-
-    [Theory]
-    [InlineData("Production", "true", true)]   // Render
-    [InlineData("Production", null, false)]    // local compose, CI e2e and budgets
-    [InlineData("Production", "false", false)]
-    [InlineData("Development", "true", false)] // the dev proxy serves plain HTTP
-    [InlineData("Development", null, false)]
-    public void The_https_only_antiforgery_cookie_is_for_the_proxy_outside_development(string environment, string? forwarded, bool httpsOnly)
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection([new("FORWARDEDHEADERS_ENABLED", forwarded)]).Build();
-        var env = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environment };
-        Assert.Equal(httpsOnly, AuthSetup.HttpsOnly(config, env));
-    }
-
-    private static HttpRequestMessage Forwarded(HttpMethod method, string path)
-    {
-        var req = new HttpRequestMessage(method, path);
-        req.Headers.Add("X-Forwarded-Proto", "https");
-        return req;
-    }
-
-    private static string? SetCookieOrNull(HttpResponseMessage res, string name) =>
-        res.Headers.GetValues("Set-Cookie").SingleOrDefault(c => c.StartsWith(name + "=", StringComparison.Ordinal));
-
-    private static string SetCookie(HttpResponseMessage res, string name) =>
-        SetCookieOrNull(res, name) ?? throw new Xunit.Sdk.XunitException($"No {name} cookie was set.");
-
-    /// <summary>Sends every cookie the login set, plus the XSRF token in the header, to the logout endpoint.</summary>
-    private static Task<HttpResponseMessage> LogoutAsync(HttpClient client, HttpResponseMessage login, bool forwardedHttps)
-    {
-        var req = forwardedHttps ? Forwarded(HttpMethod.Post, "/api/auth/logout") : new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
-        req.Headers.Add("Cookie", string.Join("; ", login.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0])));
-        req.Headers.Add(AuthSetup.AntiforgeryHeaderName, PostgresApiFactory.XsrfToken(login));
-        return client.SendAsync(req, Ct);
     }
 
     [Theory]
@@ -259,128 +184,236 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task Session_slides_for_8_hours_of_idle_time()
+    public async Task The_access_token_lasts_5_minutes_and_a_refresh_issues_a_new_pair()
     {
         var (host, clock) = api.WithOwnClock();
         await using var _ = host;
-        var client = await SignedInAsync(host);
+        var (client, tokens) = await SignedInAsync(host);
 
-        clock.Advance(TimeSpan.FromHours(7));
+        clock.Advance(AuthSetup.AccessTokenLifetime - TimeSpan.FromSeconds(1));
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
-
-        clock.Advance(TimeSpan.FromHours(8) + TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+
+        var fresh = await RefreshAsync(client, tokens.RefreshToken);
+        Assert.Equal("Bearer", fresh.TokenType);
+        Assert.NotEqual(tokens.AccessToken, fresh.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
-    public async Task Session_ends_after_24_hours_even_when_active()
+    public async Task Refresh_slides_the_session_for_8_hours_of_idle_time()
     {
         var (host, clock) = api.WithOwnClock();
         await using var _ = host;
-        var client = await SignedInAsync(host);
-        // Stay active every 4 h: sliding expiry alone would keep the session alive forever.
+        var (client, tokens) = await SignedInAsync(host);
+
+        clock.Advance(AuthSetup.SlidingExpiry - TimeSpan.FromMinutes(1));
+        var renewed = await RefreshAsync(client, tokens.RefreshToken);
+
+        // The renewed refresh token starts its own 8 h; the first one has run out.
+        clock.Advance(TimeSpan.FromHours(7));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+        renewed = await RefreshAsync(client, renewed.RefreshToken);
+
+        clock.Advance(AuthSetup.SlidingExpiry);
+        var idle = await PostgresApiFactory.PostRefreshAsync(client, renewed.RefreshToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, idle.StatusCode);
+        Assert.Equal(AuthEndpoints.RefreshFailedDetail, (await idle.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+    }
+
+    [Fact]
+    public async Task Session_ends_after_24_hours_even_when_refreshed()
+    {
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var (client, tokens) = await SignedInAsync(host);
+        // Refresh every 4 h: the sliding limit alone would keep the session alive forever.
+        var refresh = tokens.RefreshToken;
         for (var i = 0; i < 5; i++)
         {
             clock.Advance(TimeSpan.FromHours(4));
-            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+            refresh = (await RefreshAsync(client, refresh)).RefreshToken;
         }
 
-        clock.Advance(TimeSpan.FromHours(4) + TimeSpan.FromMinutes(1));
+        // 20 h in. A token issued at 23 h 59 min still stops at the 24 h mark, before its own 5 minutes are up.
+        clock.Advance(TimeSpan.FromHours(4) - TimeSpan.FromMinutes(1));
+        refresh = (await RefreshAsync(client, refresh)).RefreshToken;
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, refresh)).StatusCode);
     }
 
     [Fact]
-    public async Task Session_ends_when_the_account_expires()
+    public async Task Session_ends_on_every_request_when_the_account_expires()
     {
         var (host, clock) = api.WithOwnClock();
         await using var _ = host;
-        var user = await api.CreateUserAsync(expiresAt: clock.GetUtcNow().AddHours(1));
+        var user = await api.CreateUserAsync(expiresAt: clock.GetUtcNow().AddMinutes(2));
         var client = PostgresApiFactory.NewClient(host);
-        await PostgresApiFactory.LoginAsync(client, user.Email!);
+        var tokens = await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        clock.Advance(TimeSpan.FromMinutes(61));
+        // The access token has 3 of its 5 minutes left, but the account is over.
+        clock.Advance(TimeSpan.FromMinutes(2));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
     }
 
     [Fact]
-    public async Task Disabling_ends_a_live_session_at_the_next_stamp_check()
+    public async Task Refresh_reads_the_expiry_from_the_database_not_the_token()
     {
         var (host, clock) = api.WithOwnClock();
         await using var _ = host;
-        var user = await api.CreateUserAsync();
+        var user = await api.CreateUserAsync(expiresAt: clock.GetUtcNow().AddDays(1));
         var client = PostgresApiFactory.NewClient(host);
-        await PostgresApiFactory.LoginAsync(client, user.Email!);
+        var tokens = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        // An admin shortens the account (Desk.UserAdmin) to the past; the token still says tomorrow.
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id).ExecuteUpdateAsync(s => s.SetProperty(u => u.ExpiresAt, clock.GetUtcNow().AddMinutes(-1)), Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData(true)]  // the admin CLI also rotates the stamp
+    [InlineData(false)] // the flag alone: the refresh still refuses an account that can't sign in
+    public async Task Disabling_ends_the_session_at_the_next_refresh(bool rotateStamp)
+    {
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var (client, tokens, user) = await SignedInWithUserAsync(host);
         await using (var scope = api.Services.CreateAsyncScope())
         {
             var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
-            var tracked = await users.FindByIdAsync(user.Id.ToString());
-            tracked!.IsDisabled = true;
+            var tracked = (await users.FindByIdAsync(user.Id.ToString()))!;
+            tracked.IsDisabled = true;
             await users.UpdateAsync(tracked);
-            await users.UpdateSecurityStampAsync(tracked);
+            if (rotateStamp) await users.UpdateSecurityStampAsync(tracked);
         }
 
-        clock.Advance(AuthSetup.SecurityStampInterval + TimeSpan.FromSeconds(1));
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Logout_needs_the_antiforgery_token()
-    {
-        var (client, xsrf, _) = await api.SignedInAsync();
-
-        var without = await client.PostAsync("/api/auth/logout", null, Ct);
-        Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
-        // The SPA's XSRF refresh (#233) tells this 400 from the others by its type (#282); the title is its fallback.
-        var problem = (await without.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!;
-        Assert.Equal("urn:desk:problem:antiforgery", problem.Type);
-        Assert.Equal("Missing or invalid antiforgery token", problem.Title);
+        // Limit (ADR-0024): the access token already issued runs out its 5 minutes; the refresh is refused.
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        clock.Advance(AuthSetup.AccessTokenLifetime);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+    }
 
-        using var forged = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
-        forged.Headers.Add(AuthSetup.AntiforgeryHeaderName, "not-a-token");
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(forged, Ct)).StatusCode);
+    [Fact]
+    public async Task A_password_reset_ends_every_session_at_the_next_refresh()
+    {
+        var (host, _) = api.WithOwnClock();
+        await using var __ = host;
+        var (client, tokens, user) = await SignedInWithUserAsync(host);
+        var other = PostgresApiFactory.NewClient(host);
+        var otherTokens = await PostgresApiFactory.LoginAsync(other, user.Email!);
+        await using (var scope = api.Services.CreateAsyncScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
+            var tracked = (await users.FindByIdAsync(user.Id.ToString()))!;
+            // As `Desk.UserAdmin reset` does it: a new hash and a new stamp in one write.
+            tracked.PasswordHash = users.PasswordHasher.HashPassword(tracked, PasswordGenerator.Generate());
+            Assert.True((await users.UpdateSecurityStampAsync(tracked)).Succeeded);
+        }
 
-        using var ok = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
-        ok.Headers.Add(AuthSetup.AntiforgeryHeaderName, xsrf);
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(ok, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(other, otherTokens.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_lockout_does_not_end_a_live_session()
+    {
+        // Lockout counts failed passwords, which anyone can send: it must not let a stranger sign a user out.
+        var (client, tokens, user) = await api.SignedInAsync();
+        var stranger = api.NewClient();
+        for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
+            await PostgresApiFactory.PostLoginAsync(stranger, user.Email!, "wrong-password-123456");
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-token")]
+    public async Task Refresh_refuses_a_missing_or_garbage_token(string? token)
+    {
+        var res = await PostgresApiFactory.PostRefreshAsync(api.NewClient(), token);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Equal(AuthEndpoints.RefreshFailedDetail, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+    }
+
+    [Fact]
+    public async Task Tokens_are_not_interchangeable()
+    {
+        var (client, tokens, _) = await api.SignedInAsync();
+        // Different data-protection purposes: an access token is no refresh token, and the reverse.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.AccessToken)).StatusCode);
+        PostgresApiFactory.UseToken(client, tokens.RefreshToken);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     [Fact]
-    public async Task Antiforgery_endpoint_refreshes_the_token_for_a_session()
+    public async Task Refresh_keeps_the_roles_current_and_the_sign_in_identity()
     {
-        var (client, _, _) = await api.SignedInAsync();
-        var res = await client.GetAsync("/api/auth/antiforgery", Ct);
-        Assert.Equal(HttpStatusCode.NoContent, res.StatusCode);
-        var fresh = PostgresApiFactory.XsrfToken(res);
-        Assert.False(string.IsNullOrEmpty(fresh));
+        var (client, tokens, user) = await api.SignedInAsync();
+        await using (var scope = api.Services.CreateAsyncScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>();
+            Assert.True((await users.AddToRoleAsync((await users.FindByIdAsync(user.Id.ToString()))!, Roles.Admin)).Succeeded);
+        }
 
-        using var logout = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
-        logout.Headers.Add(AuthSetup.AntiforgeryHeaderName, fresh);
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(logout, Ct)).StatusCode);
+        await RefreshAsync(client, tokens.RefreshToken);
+        var me = await client.GetFromJsonAsync<MeResponse>("/api/me", Ct);
+        Assert.Equal(user.Email, me!.Email);
+        Assert.Equal([Roles.Admin, Roles.Viewer], me.Roles);
     }
 
     [Fact]
-    public async Task Antiforgery_endpoint_needs_a_session()
+    public async Task Logout_ends_this_sign_in_and_only_this_one()
     {
-        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().GetAsync("/api/auth/antiforgery", Ct)).StatusCode);
+        var (client, tokens, user) = await api.SignedInAsync();
+        var other = api.NewClient();
+        var otherTokens = await PostgresApiFactory.LoginAsync(other, user.Email!);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null, Ct)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(other, otherTokens.RefreshToken)).StatusCode);
     }
 
     [Fact]
-    public async Task Data_protection_keys_are_persisted_so_sessions_survive_a_restart()
+    public async Task Logout_ends_tokens_refreshed_from_the_same_sign_in()
     {
-        var user = await api.CreateUserAsync();
-        var login = await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!);
-        var sessionCookie = login.Headers.GetValues("Set-Cookie")
-            .Single(c => c.StartsWith(AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+        var (client, tokens, _) = await api.SignedInAsync();
+        var renewed = await RefreshAsync(client, tokens.RefreshToken);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, renewed.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_needs_a_token()
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().PostAsync("/api/auth/logout", null, Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Data_protection_keys_are_persisted_so_tokens_survive_a_restart()
+    {
+        var (_, tokens, _) = await api.SignedInAsync();
         await using (var db = api.NewContext())
             Assert.True(await db.DataProtectionKeys.AnyAsync(Ct));
 
-        // A second host on the same database stands in for a restarted instance: it reads the first one's cookie.
+        // A second host on the same database stands in for a restarted instance: it reads the first one's tokens.
         await using var restarted = api.WithSettings();
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/me");
-        req.Headers.Add("Cookie", sessionCookie);
-        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.NewClient(restarted).SendAsync(req, Ct)).StatusCode);
+        var client = PostgresApiFactory.NewClient(restarted);
+        PostgresApiFactory.UseToken(client, tokens.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(client, tokens.RefreshToken)).StatusCode);
     }
 
     [Fact]
@@ -474,18 +507,33 @@ public sealed class AuthTests(PostgresApiFactory api)
         var (host, clock) = api.WithOwnClock();
         await using var _ = host;
         Assert.Equal(PostgresApiFactory.Start, clock.GetUtcNow());
-        var client = await SignedInAsync(host);
+        var (client, _) = await SignedInAsync(host);
 
         clock.Advance(AuthSetup.AbsoluteExpiry + TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
         Assert.Equal(PostgresApiFactory.Start, api.Time.GetUtcNow());
     }
 
-    private async Task<HttpClient> SignedInAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)
+    private async Task<(HttpClient Client, AccessTokenResponse Tokens)> SignedInAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)
+    {
+        var (client, tokens, _) = await SignedInWithUserAsync(host);
+        return (client, tokens);
+    }
+
+    private async Task<(HttpClient Client, AccessTokenResponse Tokens, DeskUser User)> SignedInWithUserAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> host)
     {
         var user = await api.CreateUserAsync();
         var client = PostgresApiFactory.NewClient(host);
-        await PostgresApiFactory.LoginAsync(client, user.Email!);
-        return client;
+        return (client, await PostgresApiFactory.LoginAsync(client, user.Email!), user);
+    }
+
+    /// <summary>Refreshes, asserts success, and sends the new access token from <paramref name="client"/> from now on.</summary>
+    private static async Task<AccessTokenResponse> RefreshAsync(HttpClient client, string refreshToken)
+    {
+        var res = await PostgresApiFactory.PostRefreshAsync(client, refreshToken);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var tokens = (await res.Content.ReadFromJsonAsync<AccessTokenResponse>(Ct))!;
+        PostgresApiFactory.UseToken(client, tokens.AccessToken);
+        return tokens;
     }
 }

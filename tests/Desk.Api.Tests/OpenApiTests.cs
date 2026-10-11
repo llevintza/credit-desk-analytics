@@ -11,19 +11,21 @@ public sealed class OpenApiTests(WebApplicationFactory<Program> factory) : IClas
     [Theory]
     [InlineData("Development", null)]   // on by default in Development
     [InlineData("Production", "true")]  // opted in elsewhere
-    public async Task Enabled_swagger_and_openapi_still_need_a_session(string environment, string? setting)
+    public async Task Enabled_openapi_still_needs_a_session_and_the_ui_shell_loads_without_one(string environment, string? setting)
     {
         var client = factory.WithWebHostBuilder(b =>
         {
             b.UseEnvironment(environment);
             if (setting is not null) b.UseSetting("SWAGGER_ENABLED", setting);
         }).CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
-        foreach (var path in new[] { "/openapi/v1.json", "/swagger", "/swagger/index.html" })
-        {
-            var res = await client.GetAsync(path, TestContext.Current.CancellationToken);
-            Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-            Assert.DoesNotContain("swagger-ui", await res.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
-        }
+        var doc = await client.GetAsync("/openapi/v1.json", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, doc.StatusCode);
+        Assert.DoesNotContain("paths", await doc.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        // ADR-0024: a page navigation carries no bearer token, so the stock UI shell is public when Swagger is on.
+        Assert.Equal(HttpStatusCode.MovedPermanently, (await client.GetAsync("/swagger", TestContext.Current.CancellationToken)).StatusCode);
+        var ui = await client.GetAsync("/swagger/index.html", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, ui.StatusCode);
+        Assert.Contains("swagger-ui", await ui.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

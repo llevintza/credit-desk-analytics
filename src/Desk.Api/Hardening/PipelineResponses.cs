@@ -1,4 +1,3 @@
-using Desk.Api.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
@@ -16,7 +15,6 @@ namespace Desk.Api.Hardening;
 public sealed class PipelineResponses : IOpenApiOperationTransformer
 {
     private const string ProblemJson = "application/problem+json";
-    private static readonly HashSet<string> SafeMethods = new(["GET", "HEAD", "OPTIONS"], StringComparer.OrdinalIgnoreCase);
 
     public async Task TransformAsync(OpenApiOperation operation, OpenApiOperationTransformerContext context, CancellationToken cancellationToken)
     {
@@ -47,18 +45,10 @@ public sealed class PipelineResponses : IOpenApiOperationTransformer
         var needsSession = authorize.Count > 0 && !metadata.OfType<IAllowAnonymous>().Any();
         var body = api.ParameterDescriptions.Any(p => p.Source == BindingSource.Body);
         var parsedQuery = api.ParameterDescriptions.Any(p => p.Source == BindingSource.Query && p.Type != typeof(string));
-        var antiforgery = metadata.OfType<ValidatesAntiforgery>().Any() && !metadata.OfType<SkipAntiforgery>().Any()
-            && !SafeMethods.Contains(api.HttpMethod!);
-
-        var badRequest = new List<string>();
-        if (antiforgery)
-            badRequest.Add($"a missing or invalid {AuthSetup.AntiforgeryHeaderName} (problem type {AntiforgeryFilter.ProblemType})");
         if (body || parsedQuery)
-            badRequest.Add("a request that doesn't bind");
-        if (badRequest.Count > 0)
-            yield return ("400", $"Bad request: {string.Join(", or ", badRequest)}.");
+            yield return ("400", "Bad request: a request that doesn't bind.");
         if (needsSession)
-            yield return ("401", "Not signed in, or the session has ended.");
+            yield return ("401", "No valid bearer access token: missing, expired, or the session has ended.");
         if (needsSession && authorize.Any(a => a.Policy is not null))
             yield return ("403", "Signed in without the role this operation's policy needs.");
         if (body)

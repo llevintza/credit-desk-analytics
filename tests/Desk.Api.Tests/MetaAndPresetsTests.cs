@@ -20,12 +20,8 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static HttpRequestMessage Send(HttpMethod method, string path, string? xsrf, object? body = null)
-    {
-        var req = new HttpRequestMessage(method, path) { Content = body is null ? null : JsonContent.Create(body) };
-        if (xsrf is not null) req.Headers.Add("X-XSRF-TOKEN", xsrf);
-        return req;
-    }
+    private static HttpRequestMessage Send(HttpMethod method, string path, object? body = null) =>
+        new(method, path) { Content = body is null ? null : JsonContent.Create(body) };
 
     [Fact]
     public async Task As_of_dates_are_newest_first()
@@ -39,8 +35,8 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     [Fact]
     public async Task Meta_reports_a_miss_when_it_loads_and_a_hit_after()
     {
-        var (admin, xsrf, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
-        using var clear = Send(HttpMethod.Post, "/api/admin/cache/clear", xsrf);
+        var (admin, _, _) = await api.SignedInAsync(Desk.Data.Auth.Roles.Admin);
+        using var clear = Send(HttpMethod.Post, "/api/admin/cache/clear");
         await admin.SendAsync(clear, Ct);
         var first = await admin.GetAsync("/api/meta/columns", Ct);
         Assert.Equal("MISS", first.Headers.GetValues("X-Cache").Single());
@@ -71,36 +67,36 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     [Fact]
     public async Task Presets_list_built_ins_then_save_update_and_delete_own()
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
         var initial = (await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!;
         Assert.Equal(["Risk", "Surveillance", "Scenarios", "All"], initial.Select(p => p.Name));
         Assert.All(initial, p => Assert.True(p.BuiltIn));
         Assert.Equal(BuiltInPresets.Risk.Count, initial[0].State.GetProperty("columns").GetArrayLength());
 
         var state = new { columns = new[] { "deal_name", "dv01" }, sort = new[] { new { colId = "dv01", sort = "desc" } } };
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "My risk", state }), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "My risk", state = new { columns = new[] { "cs01" } } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "My risk", state }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "My risk", state = new { columns = new[] { "cs01" } } }), Ct)).StatusCode);
 
         var saved = (await client.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!.Single(p => !p.BuiltIn);
         Assert.Equal("My risk", saved.Name);
         Assert.Equal("cs01", saved.State.GetProperty("columns")[0].GetString());
         Assert.NotNull(saved.UpdatedAt);
 
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk", xsrf), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk", xsrf), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions?name=My%20risk"), Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Every_preset_response_carries_server_timing()
     {
         // #44 / #130 N9-timing: Server-Timing on every data endpoint, success or not.
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
         foreach (var req in new[]
         {
-            Send(HttpMethod.Get, "/api/presets/positions", null),
-            Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "Timed", state = new { columns = new[] { "dv01" } } }),
-            Send(HttpMethod.Delete, "/api/presets/positions?name=Timed", xsrf),
-            Send(HttpMethod.Get, "/api/presets/nope", null),
+            Send(HttpMethod.Get, "/api/presets/positions"),
+            Send(HttpMethod.Put, "/api/presets/positions", new { name = "Timed", state = new { columns = new[] { "dv01" } } }),
+            Send(HttpMethod.Delete, "/api/presets/positions?name=Timed"),
+            Send(HttpMethod.Get, "/api/presets/nope"),
         })
         {
             var res = await client.SendAsync(req, Ct);
@@ -111,8 +107,8 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     [Fact]
     public async Task Presets_are_per_user()
     {
-        var (alice, xsrf, _) = await api.SignedInAsync();
-        await alice.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "Mine", state = new { columns = new[] { "dv01" } } }), Ct);
+        var (alice, _, _) = await api.SignedInAsync();
+        await alice.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "Mine", state = new { columns = new[] { "dv01" } } }), Ct);
 
         var (bob, _, _) = await api.SignedInAsync();
         Assert.DoesNotContain((await bob.GetFromJsonAsync<PresetResponse[]>("/api/presets/positions", Ct))!, p => p.Name == "Mine");
@@ -127,37 +123,36 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     [InlineData("""{"name":"x","state":{"a":"\u0000"}}""")]
     public async Task Invalid_presets_are_400(string json)
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
         var req = new HttpRequestMessage(HttpMethod.Put, "/api/presets/positions") { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
-        req.Headers.Add("X-XSRF-TOKEN", xsrf);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(req, Ct)).StatusCode);
     }
 
     [Fact]
     public async Task Oversized_state_names_and_too_many_presets_are_refused()
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
         var big = new { name = "big", state = new { blob = new string('x', MetaEndpoints.MaxPresetStateBytes) } };
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, big), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = new string('n', 65), state = new { } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", big), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = new string('n', 65), state = new { } }), Ct)).StatusCode);
 
         for (var i = 0; i < PresetRepository.MaxPresetsPerPage; i++)
-            Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = $"p{i}", state = new { } }), Ct)).StatusCode);
-        var over = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "one too many", state = new { } }), Ct);
+            Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = $"p{i}", state = new { } }), Ct)).StatusCode);
+        var over = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "one too many", state = new { } }), Ct);
         Assert.Equal(HttpStatusCode.BadRequest, over.StatusCode);
         // Replacing an existing one is still fine at the limit.
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "p0", state = new { a = 1 } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "p0", state = new { a = 1 } }), Ct)).StatusCode);
     }
 
     [Fact]
-    public async Task Unknown_pages_are_404_and_writes_need_antiforgery()
+    public async Task Unknown_pages_are_404_and_writes_need_a_token()
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/presets/funds", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/funds", xsrf, new { name = "x", state = new { } }), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions", xsrf), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/funds?name=x", xsrf), Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", null, new { name = "x", state = new { } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/funds", new { name = "x", state = new { } }), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/funds?name=x"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "x", state = new { } }), Ct)).StatusCode);
     }
 
     [Theory]
@@ -170,9 +165,9 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var user = await api.CreateUserAsync();
         race.UserId = user.Id;
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        var res = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", xsrf, new { name = "race", state = new { mine = true } }), Ct);
+        var res = await client.SendAsync(Send(HttpMethod.Put, "/api/presets/positions", new { name = "race", state = new { mine = true } }), Ct);
         Assert.Equal(expected, res.StatusCode);
         Assert.True(race.Raced);
     }
@@ -247,18 +242,15 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         Assert.Empty(await emptyRepo.AsOfDatesAsync(Ct));
 
         var user = await api.CreateUserAsync();
-        var cookie = (await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!)).Headers.GetValues("Set-Cookie")
-            .Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+        var tokens = await PostgresApiFactory.LoginAsync(api.NewClient(), user.Email!);
 
-        // Sessions are validated against the users table, so keep App on the seeded DB and point Core at the empty one.
+        // Accounts live in the App database, so keep App on the seeded DB and point Core at the empty one.
         await using var host = api.WithSettings(("DATABASE_URL", empty), ("ConnectionStrings:Core", empty));
         var client = PostgresApiFactory.NewClient(host);
-        using var asOf = new HttpRequestMessage(HttpMethod.Get, "/api/meta/as-of");
-        asOf.Headers.Add("Cookie", cookie);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.SendAsync(asOf, Ct)).StatusCode);
+        PostgresApiFactory.UseToken(client, tokens.AccessToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await client.GetAsync("/api/meta/as-of", Ct)).StatusCode);
 
-        var xsrf = PostgresApiFactory.XsrfToken(await SendWithCookie(client, cookie, HttpMethod.Get, "/api/auth/antiforgery"))!;
-        var query = await SendWithCookie(client, cookie, HttpMethod.Post, "/api/positions/query", xsrf, new { });
+        var query = await client.SendAsync(Send(HttpMethod.Post, "/api/positions/query", new { }), Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, query.StatusCode);
         Assert.Equal("No data loaded", (await query.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
     }
@@ -312,12 +304,5 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var problem = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(PositionsEndpoints.Unavailable(snapshot, new GridRequest()));
         Assert.Equal(503, problem.StatusCode);
         Assert.Equal("Column catalog invalid", problem.ProblemDetails.Title);
-    }
-
-    private static Task<HttpResponseMessage> SendWithCookie(HttpClient client, string cookie, HttpMethod method, string path, string? xsrf = null, object? body = null)
-    {
-        var req = Send(method, path, xsrf, body);
-        req.Headers.Add("Cookie", cookie);
-        return client.SendAsync(req, Ct);
     }
 }

@@ -10,7 +10,7 @@ public static class AdminEndpoints
         var admin = api.MapGroup("/admin").WithTags("Admin").RequireAuthorization(AuthSetup.AdminPolicy);
         admin.MapPost("/cache/clear", ClearCache)
             .WithName("ClearCache")
-            .WithSummary("Drops cached reference data and grid blocks (after a manual reseed). Needs X-XSRF-TOKEN.")
+            .WithSummary("Drops cached reference data and grid blocks (after a manual reseed).")
             .Produces(StatusCodes.Status204NoContent);
         return api;
     }

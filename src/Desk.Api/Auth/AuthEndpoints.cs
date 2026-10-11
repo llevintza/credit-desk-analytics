@@ -1,12 +1,15 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using Desk.Api.Audit;
 using Desk.Api.Limits;
 using Desk.Data.App;
 using Desk.Data.Auth;
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Options;
 
 namespace Desk.Api.Auth;
 
@@ -14,6 +17,8 @@ public static class AuthEndpoints
 {
     /// <summary>Same message for every failure (unknown email, wrong password, locked, expired, disabled): no account probing.</summary>
     public const string LoginFailedDetail = "Invalid email or password, or the account is locked, disabled or expired.";
+    /// <summary>Same message for every refresh failure (bad, expired or logged-out token, disabled, reset or expired account).</summary>
+    public const string RefreshFailedDetail = "The session has ended. Sign in again.";
 
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
@@ -21,21 +26,23 @@ public static class AuthEndpoints
 
         auth.MapPost("/login", LoginAsync)
             .AllowAnonymous()
-            .WithMetadata(SkipAntiforgery.Instance, SkipRequestAudit.Instance, LoginFloorMetadata.Instance)
+            .WithMetadata(SkipRequestAudit.Instance, LoginFloorMetadata.Instance)
             .RequireRateLimiting(RateLimiting.LoginPolicy)
             .WithName("Login")
-            .WithSummary("Signs in with email and password and sets the session and XSRF-TOKEN cookies.")
-            .Produces<MeResponse>()
+            .WithSummary("Signs in with email and password and returns a bearer access token and a refresh token.")
+            .Produces<AccessTokenResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
-        auth.MapPost("/logout", (Func<HttpContext, Task<IResult>>)LogoutAsync)
-            .WithName("Logout")
-            .WithSummary("Ends the session. Needs the X-XSRF-TOKEN header.")
-            .Produces(StatusCodes.Status204NoContent);
+        auth.MapPost("/refresh", RefreshAsync)
+            .AllowAnonymous()
+            .WithName("RefreshToken")
+            .WithSummary("Swaps a refresh token for a new access token and refresh token, while the session is still valid.")
+            .Produces<AccessTokenResponse>()
+            .ProducesProblem(StatusCodes.Status401Unauthorized);
 
-        auth.MapGet("/antiforgery", IssueAntiforgery)
-            .WithName("GetAntiforgeryToken")
-            .WithSummary("Refreshes the XSRF-TOKEN cookie that state-changing requests echo in X-XSRF-TOKEN.")
+        auth.MapPost("/logout", Logout)
+            .WithName("Logout")
+            .WithSummary("Ends this sign-in: its access and refresh tokens stop working on this instance.")
             .Produces(StatusCodes.Status204NoContent);
 
         api.MapGet("/me", GetMe)
@@ -52,7 +59,6 @@ public static class AuthEndpoints
         HttpContext http,
         SignInManager<DeskUser> signIn,
         DemoAccounts demo,
-        IAntiforgery antiforgery,
         AuditQueue audit,
         TimingGuard guard,
         AppDbContext db,
@@ -86,28 +92,53 @@ public static class AuthEndpoints
         }
 
         var principal = await signIn.CreateUserPrincipalAsync(user!);
-        var props = new AuthenticationProperties { IsPersistent = false };
-        props.Items[AuthSetup.AuthTimeKey] = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture);
-        await http.SignInAsync(IdentityConstants.ApplicationScheme, principal, props);
-
-        // Antiforgery tokens are bound to the identity: issue one for the new session.
-        http.User = principal;
-        AppendXsrfCookie(http, antiforgery);
+        var identity = (ClaimsIdentity)principal.Identity!;
+        identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
+        identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, Convert.ToHexString(RandomNumberGenerator.GetBytes(16))));
 
         audit.Enqueue(AuditKinds.LoginSuccess, user!.Email, "/api/auth/login", StatusCodes.Status200OK, started, time);
-        return Results.Ok(new MeResponse(user.Email!, [.. await signIn.UserManager.GetRolesAsync(user)], user.ExpiresAt));
+        // The bearer handler writes the AccessTokenResponse body itself.
+        await http.SignInAsync(AuthSetup.Scheme, principal);
+        return Results.Empty;
     }
 
-    internal static async Task<IResult> LogoutAsync(HttpContext http)
+    /// <summary>
+    /// Identity's refresh (as <c>MapIdentityApi</c> does it), plus this app's session rules: the token must be
+    /// unexpired (8 h idle), the session under 24 h and not logged out, the security stamp unchanged (disable,
+    /// password reset), and the account still allowed to sign in (not disabled or expired). The new tokens keep the
+    /// original sign-in time and session id, so neither limit can be extended by refreshing.
+    /// </summary>
+    internal static async Task<IResult> RefreshAsync(
+        RefreshRequest request,
+        HttpContext http,
+        SignInManager<DeskUser> signIn,
+        IOptionsMonitor<BearerTokenOptions> bearer,
+        SessionRevocations revoked,
+        TimeProvider time)
     {
-        await http.SignOutAsync(IdentityConstants.ApplicationScheme);
-        http.Response.Cookies.Delete(AuthSetup.XsrfCookieName, new CookieOptions { Path = "/", Secure = true, SameSite = SameSiteMode.Strict });
-        return Results.NoContent();
+        var now = time.GetUtcNow();
+        var ticket = string.IsNullOrEmpty(request.RefreshToken) ? null : bearer.Get(AuthSetup.Scheme).RefreshTokenProtector.Unprotect(request.RefreshToken);
+        if (ticket?.Properties.ExpiresUtc is not { } expires || now >= expires || !SessionLimits.IsLive(ticket.Principal, now, revoked)
+            || await signIn.ValidateSecurityStampAsync(ticket.Principal) is not { } user
+            || !await signIn.CanSignInAsync(user))
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Refresh failed", detail: RefreshFailedDetail);
+        }
+
+        var principal = await signIn.CreateUserPrincipalAsync(user);
+        var identity = (ClaimsIdentity)principal.Identity!;
+        identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.AuthTimeClaim)!.Clone());
+        identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.SessionIdClaim)!.Clone());
+        await http.SignInAsync(AuthSetup.Scheme, principal);
+        return Results.Empty;
     }
 
-    internal static IResult IssueAntiforgery(HttpContext http, IAntiforgery antiforgery)
+    internal static IResult Logout(HttpContext http, SessionRevocations revoked, TimeProvider time)
     {
-        AppendXsrfCookie(http, antiforgery);
+        // Signed in here means SessionLimits found both claims valid.
+        var sid = http.User.FindFirstValue(AuthSetup.SessionIdClaim)!;
+        var authTime = SessionLimits.ReadAuthTime(http.User)!.Value;
+        revoked.Revoke(sid, authTime + AuthSetup.AbsoluteExpiry, time.GetUtcNow());
         return Results.NoContent();
     }
 
@@ -117,20 +148,10 @@ public static class AuthEndpoints
         var roles = user.Claims.Where(c => c.Type == user.Identities.First().RoleClaimType).Select(c => c.Value).Order().ToArray();
         return Results.Ok(new MeResponse(user.Identity!.Name!, roles, DeskClaimsFactory.ReadExpiry(user)!.Value));
     }
-
-    private static void AppendXsrfCookie(HttpContext http, IAntiforgery antiforgery)
-    {
-        var tokens = antiforgery.GetAndStoreTokens(http);
-        http.Response.Cookies.Append(AuthSetup.XsrfCookieName, tokens.RequestToken!, new CookieOptions
-        {
-            HttpOnly = false, // the SPA reads it and echoes it in X-XSRF-TOKEN
-            Secure = true,
-            SameSite = SameSiteMode.Strict,
-            Path = "/",
-        });
-    }
 }
 
 public sealed record LoginRequest(string? Email, string? Password);
+
+public sealed record RefreshRequest(string? RefreshToken);
 
 public sealed record MeResponse(string Email, string[] Roles, DateTimeOffset ExpiresAt);

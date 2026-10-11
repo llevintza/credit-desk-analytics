@@ -68,46 +68,47 @@ public sealed class HardeningTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task OpenApi_and_swagger_ui_need_an_admin()
+    public async Task OpenApi_needs_an_admin_and_the_swagger_ui_shell_needs_no_session()
     {
         var anonymous = api.NewClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/openapi/v1.json", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/swagger/index.html", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/swagger", Ct)).StatusCode);
+        // A page navigation carries no bearer token (ADR-0024): the stock UI shell loads, the document doesn't.
+        var shell = await anonymous.GetAsync("/swagger/index.html", Ct);
+        Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
+        Assert.Contains("swagger-ui", await shell.Content.ReadAsStringAsync(Ct), StringComparison.OrdinalIgnoreCase);
 
         var (viewer, _, _) = await api.SignedInAsync(Roles.Viewer);
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync("/openapi/v1.json", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync("/swagger/index.html", Ct)).StatusCode);
 
         var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
         Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync("/openapi/v1.json", Ct)).StatusCode);
-        var ui = await admin.GetAsync("/swagger/index.html", Ct);
-        Assert.Equal(HttpStatusCode.OK, ui.StatusCode);
-        Assert.Contains("swagger-ui", await ui.Content.ReadAsStringAsync(Ct), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Swagger_ui_has_its_own_csp_and_sends_the_xsrf_header_without_eval()
+    public async Task Swagger_ui_has_its_own_csp_and_signs_requests_from_the_tab_session_without_eval()
     {
-        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
-        var ui = await admin.GetAsync("/swagger/index.html", Ct);
+        var client = api.NewClient();
+        var ui = await client.GetAsync("/swagger/index.html", Ct);
         Assert.Equal(SecurityHeaders.SwaggerCsp, ui.Headers.GetValues("Content-Security-Policy").Single());
         Assert.DoesNotContain("unsafe-eval", SecurityHeaders.SwaggerCsp);
         var html = await ui.Content.ReadAsStringAsync(Ct);
-        Assert.Contains(SwaggerSetup.XsrfScriptPath, html);
+        Assert.Contains(SwaggerSetup.AuthScriptPath, html);
         Assert.DoesNotContain("<script>", html); // no inline scripts: the CSP would block them
 
-        var script = await admin.GetAsync(SwaggerSetup.XsrfScriptPath, Ct);
+        var script = await client.GetAsync(SwaggerSetup.AuthScriptPath, Ct);
         Assert.Equal(HttpStatusCode.OK, script.StatusCode);
         Assert.Equal("text/javascript", script.Content.Headers.ContentType?.MediaType);
-        Assert.Contains("X-XSRF-TOKEN", await script.Content.ReadAsStringAsync(Ct));
+        var js = await script.Content.ReadAsStringAsync(Ct);
+        Assert.Contains("'Authorization', 'Bearer '", js);
+        Assert.Contains("/api/auth/refresh", js);
+        Assert.Contains($"'{SwaggerSetup.RefreshTokenKey}'", js);
+        Assert.Contains("sessionStorage", js);
     }
 
     [Fact]
-    public async Task Swagger_redirects_an_admin_to_index_html()
+    public async Task Swagger_redirects_to_index_html()
     {
-        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
-        var res = await admin.GetAsync("/swagger", Ct);
+        var res = await api.NewClient().GetAsync("/swagger", Ct);
         Assert.Equal(HttpStatusCode.MovedPermanently, res.StatusCode);
         Assert.EndsWith("swagger/index.html", res.Headers.Location!.OriginalString);
     }
@@ -120,7 +121,7 @@ public sealed class HardeningTests(PostgresApiFactory api)
         var paths = doc.RootElement.GetProperty("paths").EnumerateObject().Select(p => p.Name).Order().ToArray();
         Assert.Equal(
         [
-            "/api/admin/cache/clear", "/api/auth/antiforgery", "/api/auth/login", "/api/auth/logout", "/api/funds/{fundId}/performance", "/api/health/db", "/api/me",
+            "/api/admin/cache/clear", "/api/auth/login", "/api/auth/logout", "/api/auth/refresh", "/api/funds/{fundId}/performance", "/api/health/db", "/api/me",
             "/api/meta/as-of", "/api/meta/columns", "/api/meta/portfolios",
             "/api/positions/export", "/api/positions/query", "/api/presets/{page}", "/health",
         ], paths);

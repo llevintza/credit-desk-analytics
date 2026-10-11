@@ -208,6 +208,26 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Refresh_and_logged_out_tokens_draw_on_the_callers_ip_bucket_not_a_users()
+    {
+        // ADR-0024: a refresh is anonymous until it succeeds, and a token SessionLimits rejects is no user at all,
+        // so neither can spend (or hide behind) a signed-in user's bucket.
+        await using var host = api.WithSettings(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "3"));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        var anonymous = PostgresApiFactory.NewClient(host);
+        var tokens = await PostgresApiFactory.LoginAsync(client, user.Email!); // IP bucket: 1 of 3
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(anonymous, tokens.RefreshToken)).StatusCode); // 2 of 3
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/me", Ct)).StatusCode); // 3 of 3
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostgresApiFactory.PostRefreshAsync(anonymous, tokens.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);                    // user bucket: 1 of 3
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null, Ct)).StatusCode); // 2 of 3
+        // The same token after logout is anonymous, so it lands in the empty IP bucket, not the user's.
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Login_also_waits_for_the_shared_database_limit()
     {
         var gate = new BlockingCommands();
@@ -288,15 +308,14 @@ public sealed class LimitsTests(PostgresApiFactory api)
             Assert.Equal(MaintenanceMode.Detail, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
         }
 
-        // A signed-in browser still sends its session cookie: /health, the SPA and Swagger must not decrypt it
-        // (key ring + security-stamp query would wake the database).
+        // A signed-in client may send its bearer token anywhere: /health, the SPA and Swagger must not read it
+        // (the key ring load would wake the database).
         var user = await api.CreateUserAsync(Roles.Admin);
-        var cookie = (await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!)).Headers.GetValues("Set-Cookie")
-            .Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), user.Email!)).AccessToken;
         foreach (var path in new[] { "/health", "/positions", "/swagger/index.html", "/openapi/v1.json" })
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, path);
-            req.Headers.Add("Cookie", cookie);
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var res = await client.SendAsync(req, Ct);
             Assert.Equal(path.StartsWith("/health") || path == "/positions" ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, res.StatusCode);
         }
@@ -335,12 +354,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task Health_db_is_503_when_the_database_is_unreachable()
     {
         var admin = await api.CreateUserAsync(Roles.Admin);
-        // Same session cookie, a host whose database is gone (the cookie and keys were read at login).
+        // A token from a healthy host, sent to a host whose database is gone (the keys were read at login).
         await using var broken = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(new FailingCommands())));
-        var cookie = await SessionCookieAsync(admin.Email!);
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/health/db");
-        req.Headers.Add("Cookie", cookie);
-        var res = await PostgresApiFactory.NewClient(broken).SendAsync(req, Ct);
+        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), admin.Email!)).AccessToken;
+        var client = PostgresApiFactory.NewClient(broken);
+        PostgresApiFactory.UseToken(client, token);
+        var res = await client.GetAsync("/api/health/db", Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
         Assert.DoesNotContain("Host=", await res.Content.ReadAsStringAsync(Ct));
     }
@@ -356,12 +375,6 @@ public sealed class LimitsTests(PostgresApiFactory api)
             ["RATE_LIMIT_PER_USER_BURST"] = "40",
         }).Build();
         Assert.Equal(new LimitsOptions(60, 40, 5, 8, 32), LimitsOptions.From(config));
-    }
-
-    private async Task<string> SessionCookieAsync(string email)
-    {
-        var login = await PostgresApiFactory.PostLoginAsync(api.NewClient(), email);
-        return login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
     }
 
     /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
