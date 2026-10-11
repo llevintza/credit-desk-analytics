@@ -579,7 +579,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - MessagePack variant on `Accept: application/x-msgpack` (ADR-0007 decides whether it stays on by default).
 - **API docs and testing:** the OpenAPI document is at **`/openapi/v1.json`** (built-in `AddOpenApi`), with **Swagger UI at `/swagger`** for trying every endpoint. Every endpoint has a name, summary and tag.
   - It's on in **Development**. Elsewhere it's off unless `SWAGGER_ENABLED=true`, which you can set in the Render dashboard to try the deployed API.
-  - Phase 2 puts it behind the admin login, since the site is public (#94).
+  - Phase 2 put it behind the admin login, since the site is public (#94). Since bearer tokens (ADR-0024), the OpenAPI document stays admin-only, while the Swagger UI shell (the stock bundle, no API data) loads without a session and signs its calls with the session of the tab it is opened in.
   - The choice is recorded in ADR-0019.
   - The phase-2 CSP must allow Swagger UI's assets on `/swagger` only.
 - **Response compression:** Brotli and gzip, on HTTPS too.
@@ -994,7 +994,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
-| GitHub Pages front end + bearer auth | `feat/bearer-auth-pages` | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
+| GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | phase-5/fund-performance | In review |
