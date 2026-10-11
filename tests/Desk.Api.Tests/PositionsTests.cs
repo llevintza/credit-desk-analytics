@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Desk.Api.Positions;
+using Desk.Data.App;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -373,9 +375,18 @@ public sealed class PositionsTests(PostgresApiFactory api)
     public async Task Concurrent_first_requests_share_one_meta_load_and_invalidate_reloads()
     {
         var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(api.Time.GetUtcNow());
-        var cache = new MetaCache(api.Services.GetRequiredService<MetaRepository>(), time);
+        // The first load is held open until both calls are in, so the second always queues on the gate and takes the
+        // re-check under it (#319: left to the scheduler, it sometimes found the snapshot on the fast path instead).
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var repo = new MetaRepository(
+            new HeldContextFactory(api.Services.GetRequiredService<IDbContextFactory<AppDbContext>>(), release.Task),
+            api.Services.GetRequiredService<Desk.Data.Sources.IDataSourceRegistry>());
+        var cache = new MetaCache(repo, time);
         var first = cache.GetWithStatusAsync(Ct).AsTask();
         var second = cache.GetWithStatusAsync(Ct).AsTask(); // waits on the gate, then finds the fresh snapshot
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        release.SetResult();
         Assert.Same((await first).Snapshot, (await second).Snapshot);
         Assert.NotNull((await first).LoadMs);
         Assert.Null((await second).LoadMs);
@@ -389,6 +400,18 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.True(reloaded.ExpiresAt <= reloaded.BatchEndsAt);
         time.Advance(MetaCache.Revalidate);
         Assert.NotSame(reloaded, await cache.GetAsync(Ct));
+    }
+
+    /// <summary>Hands out contexts only once <paramref name="release"/> completes, so a meta load can be held mid-flight.</summary>
+    private sealed class HeldContextFactory(IDbContextFactory<AppDbContext> inner, Task release) : IDbContextFactory<AppDbContext>
+    {
+        public AppDbContext CreateDbContext() => throw new NotSupportedException("The meta cache creates contexts asynchronously.");
+
+        public async Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            await release.WaitAsync(cancellationToken);
+            return await inner.CreateDbContextAsync(cancellationToken);
+        }
     }
 
     [Fact]
