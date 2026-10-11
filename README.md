@@ -923,13 +923,14 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
-### 14.6 Front end on GitHub Pages: `.github/workflows/pages.yml`, on push to `main` touching `web/` (or `workflow_dispatch`)
+### 14.6 Front end on GitHub Pages: `.github/workflows/pages.yml`, after CI passes on `main` (or `workflow_dispatch`)
 
-The same SPA that Render serves from `wwwroot` is also published to `https://llevintza.github.io/credit-desk-analytics/` and calls the Render API cross-origin with bearer tokens (ADR-0024). It doesn't wait for CI or the Render deploy: the static shell is independent of the API version, and the API keeps accepting the previous shell's calls.
+The same SPA that Render serves from `wwwroot` is also published to `https://llevintza.github.io/credit-desk-analytics/` and calls the Render API cross-origin with bearer tokens (ADR-0024). It is gated on CI like the Render deploy (§14.2): `workflow_run` of CI with `conclusion == success`, for a `push` to `main` in this repository. A `gate` job (no environment, no secrets) then checks that the commit is still the tip of `main`, and `build` checks out exactly that commit. A green run for an older commit is skipped with a summary, because the tip's own run publishes. A dispatch is allowed from `refs/heads/main` only. It republishes after every green `main` push, not only `web/` changes; that is cheap and idempotent. It doesn't wait for the Render deploy: the static shell is independent of the API version, and the API keeps accepting the previous shell's calls.
 
 | Job | Steps |
 |---|---|
-| **build** (`contents: read`, no environment, no secrets) | Checks the repository variable `APP_URL`: an `https://` origin with no path, or the run fails. Then `npm ci`, and `ng build --base-href /credit-desk-analytics/ --define DESK_API_BASE_URL="<APP_URL>"`. Adds a `<meta http-equiv="Content-Security-Policy">`, because Pages can't send headers: the app's CSP with `APP_URL` in `connect-src`. Copies `index.html` to `404.html`, so deep links open the router. Then `actions/upload-pages-artifact`. |
+| **gate** (`contents: read`) | Event, branch, repository and exact-tip checks, as in `deploy.yml`. |
+| **build** (`contents: read`, no environment, no secrets) | Checks out the gated commit. Checks the repository variable `APP_URL`: an `https://` origin with no path, or the run fails. Then `npm ci`, and `ng build --base-href /credit-desk-analytics/ --define DESK_API_BASE_URL="<APP_URL>"`. Adds a `<meta http-equiv="Content-Security-Policy">`, because Pages can't send headers: the app's CSP with `APP_URL` in `connect-src`. Copies `index.html` to `404.html`, so deep links open the router. Then `actions/upload-pages-artifact`. |
 | **deploy** (`pages: write`, `id-token: write`, environment `github-pages`) | `actions/deploy-pages`. Nothing else runs with these permissions. |
 
 - **Concurrency:** `group: pages`, `cancel-in-progress: false`. A deployment is never cut off, and the newest pending run wins.
