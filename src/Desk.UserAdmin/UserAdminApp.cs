@@ -20,6 +20,9 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
     private readonly ILoggerFactory _loggers = loggerFactory ?? NullLoggerFactory.Instance;
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
+    /// <summary>Test seam: extra registrations applied after the defaults (e.g. a failing password validator).</summary>
+    internal Action<IServiceCollection>? ConfigureServices { get; init; }
+
     public async Task<int> RunAsync(IReadOnlyList<string> args, IConfiguration config, CancellationToken ct)
     {
         UserAdminOptions options;
@@ -81,6 +84,7 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         services.AddIdentityCore<DeskUser>(IdentityPolicy.Apply)
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<AppDbContext>();
+        ConfigureServices?.Invoke(services);
         return services.BuildServiceProvider();
     }
 
@@ -158,11 +162,25 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
             return await FailAsync($"No account for {email}.");
         ct.ThrowIfCancellationRequested();
         var password = PasswordGenerator.Generate();
-        if (await users.HasPasswordAsync(user))
-            Check(await users.RemovePasswordAsync(user));
-        Check(await users.AddPasswordAsync(user, password)); // also rotates the security stamp
-        Check(await users.SetLockoutEndDateAsync(user, null));
-        Check(await users.ResetAccessFailedCountAsync(user));
+        // Validate first, then one write (#314): separate remove/add writes could leave the account with no
+        // password hash if the add failed. A rejected password throws before anything is saved.
+        // Every validator runs and all reasons are reported, as UserManager.ValidatePasswordAsync does.
+        // A failure with no errors still rejects: Succeeded decides, not the error count.
+        var errors = new List<IdentityError>();
+        var valid = true;
+        foreach (var validator in users.PasswordValidators)
+        {
+            var result = await validator.ValidateAsync(users, user, password);
+            valid &= result.Succeeded;
+            errors.AddRange(result.Errors);
+        }
+        Check(valid ? IdentityResult.Success : IdentityResult.Failed([.. errors]));
+        ct.ThrowIfCancellationRequested();
+        user.PasswordHash = users.PasswordHasher.HashPassword(user, password);
+        user.LockoutEnd = null;
+        user.AccessFailedCount = 0;
+        // The stamp update saves the whole user, as in DisableAsync; the new stamp ends live sessions.
+        Check(await users.UpdateSecurityStampAsync(user));
 
         await stdout.WriteLineAsync($"Reset the password for {email} and cleared any lockout.");
         await PrintPasswordOnceAsync(password);
