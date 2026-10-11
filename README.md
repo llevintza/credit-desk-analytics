@@ -932,6 +932,21 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
+### 14.6 Front end on GitHub Pages: `.github/workflows/pages.yml`, after CI passes on `main` (or `workflow_dispatch`)
+
+The same SPA that Render serves from `wwwroot` is also published to `https://llevintza.github.io/credit-desk-analytics/` and calls the Render API cross-origin with bearer tokens (ADR-0024). It is gated on CI like the Render deploy (§14.2): `workflow_run` of CI with `conclusion == success`, for a `push` to `main` in this repository. A `gate` job (no environment, no secrets) then checks that the commit is still the tip of `main`, and `build` checks out exactly that commit. A green run for an older commit is skipped with a summary, because the tip's own run publishes. A dispatch is allowed from `refs/heads/main` only. It republishes after every green `main` push, not only `web/` changes; that is cheap and idempotent. It doesn't wait for the Render deploy: the static shell is independent of the API version, and the API keeps accepting the previous shell's calls.
+
+| Job | Steps |
+|---|---|
+| **gate** (`contents: read`) | Event, branch, repository and exact-tip checks, as in `deploy.yml`. |
+| **build** (`contents: read`, no environment, no secrets) | Checks out the gated commit. Checks the repository variable `APP_URL`: an `https://` origin with no path, or the run fails. Then `npm ci`, and `ng build --base-href /credit-desk-analytics/ --define DESK_API_BASE_URL="<APP_URL>"`. Adds a `<meta http-equiv="Content-Security-Policy">`, because Pages can't send headers: the app's CSP with `APP_URL` in `connect-src`. Copies `index.html` to `404.html`, so deep links open the router. Then `actions/upload-pages-artifact`. |
+| **deploy** (`pages: write`, `id-token: write`, environment `github-pages`) | `actions/deploy-pages`. Nothing else runs with these permissions. |
+
+- **Concurrency:** `group: pages`, `cancel-in-progress: false`. A deployment is never cut off, and the newest pending run wins.
+- **Set by hand** (agents can't change settings): Settings → Pages → Source = **GitHub Actions**; a **repository** variable `APP_URL` (not a secret). The `production` environment's `APP_URL` can't be read by a job outside that environment, and this workflow stays outside it. On Render, `CORS_ALLOWED_ORIGINS` must include `https://llevintza.github.io` (README §7.1, `render.yaml`).
+- **One origin for the whole account** (accepted by Leo, 2026-10-11, ADR-0024): every Pages site under `https://llevintza.github.io` (today also `/energlens`) shares this app's origin. That means each one passes the API's CORS check and can read the tab's `sessionStorage`, refresh token included. Rule: **no Pages site on the account loads untrusted third-party scripts.**
+- **Limits on Pages:** no response headers, so no HSTS from us, no `frame-ancestors` (a meta CSP ignores it) and no `Permissions-Policy`. A deep link's document is served with HTTP 404 (the `404.html` fallback), and the app then routes normally.
+
 ---
 
 ## 15. Delivery plan: one PR per phase
@@ -991,6 +1006,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Spec | #1 | Merged |
 | 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review); follow-up #207: every main push gets its own CI run, only the tip deploys (in review) |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
+| GitHub Pages deploy (`[workflows]`) | #350 | In review: `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024); needs the bearer-auth PR merged first |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
