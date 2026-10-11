@@ -1,8 +1,8 @@
 # ADR-0024: GitHub Pages front end and bearer-token auth
 
-- **Status:** Proposed. The direction (Pages front end, bearer tokens) is Leo's decision of 2026-10-11; this ADR records how. Partially supersedes ADR-0002 (where the SPA is served) and ADR-0005 (how a session is carried).
+- **Status:** Accepted (2026-10-11, decided by Leo, repo owner, acting for Tech Coordinator and Helms). Supersedes ADR-0005 (the session moves from an `HttpOnly` cookie to bearer tokens readable by page script); partially supersedes ADR-0002 (where the SPA is served).
 - **Date:** 2026-10-11
-- **Phase / PR:** cross-cutting, `feat/bearer-auth-pages` (this PR: API and web). The Pages deploy workflow is its own `[workflows]` PR (`workflows/github-pages-deploy`).
+- **Phase / PR:** cross-cutting, #349 (API and web). The Pages deploy workflow is its own `[workflows]` PR, #350.
 
 ## Context
 

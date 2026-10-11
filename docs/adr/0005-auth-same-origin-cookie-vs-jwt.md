@@ -1,6 +1,6 @@
 # ADR-0005: Auth: same-origin cookie session vs JWT
 
-- **Status:** Accepted; partially superseded by [ADR-0024](0024-github-pages-frontend-bearer-auth.md) (2026-10-11)
+- **Status:** Superseded by [ADR-0024](0024-github-pages-frontend-bearer-auth.md) (2026-10-11, Leo)
 - **Date:** 2026-10-08
 - **Phase / PR:** phase-2/auth-and-limits
 
