@@ -6,7 +6,7 @@
     @if (signoutUnconfirmed) {
       <div class="banner" role="alert" data-testid="signout-unconfirmed">
         Sign-out couldn't be confirmed with the server. This browser has forgotten the session, but a copy of its
-        tokens could still be used until they expire (8 hours at most).
+        tokens could still be used until the session's limit (24 hours from sign-in at most).
       </div>
     }
     @if (maintenance()) {
