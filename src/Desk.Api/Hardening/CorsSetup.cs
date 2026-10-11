@@ -4,7 +4,8 @@ namespace Desk.Api.Hardening;
 
 /// <summary>
 /// Cross-origin access for a front end on another site (GitHub Pages, ADR-0024). Only the origins in
-/// <c>CORS_ALLOWED_ORIGINS</c> (comma or space separated, scheme + host [+ port], no path) are allowed; unset or
+/// <c>CORS_ALLOWED_ORIGINS</c> (comma or space separated, scheme + host [+ port], no path; https only outside
+/// Development, where the dev server's http://localhost may be listed) are allowed; unset or
 /// empty allows none, which is the same-origin app's setting. No credentials: the API takes bearer tokens in
 /// <c>Authorization</c>, never cookies.
 /// </summary>
@@ -17,11 +18,14 @@ public static class CorsSetup
     /// <summary>Response headers the SPA reads: the 429 wait, the status bar's cache and server time, the grid's ETag.</summary>
     public static readonly string[] ExposedHeaders = ["Retry-After", "X-Cache", "Server-Timing", "ETag"];
 
-    /// <summary>The configured origins, normalised (no trailing slash, lower case); anything that isn't an http(s) origin is dropped.</summary>
-    public static string[] Origins(IConfiguration config) =>
+    /// <summary>
+    /// The configured origins, normalised (no trailing slash, lower case). Anything that isn't an https origin is
+    /// dropped, and so is an http one unless <paramref name="allowHttp"/> (Development only).
+    /// </summary>
+    public static string[] Origins(IConfiguration config, bool allowHttp) =>
         (config[ConfigKey] ?? "")
             .Split([',', ' ', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(o => Uri.TryCreate(o, UriKind.Absolute, out var uri) && uri.Scheme is "https" or "http"
+            .Select(o => Uri.TryCreate(o, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || (allowHttp && uri.Scheme == "http"))
                 && uri.AbsolutePath == "/" && uri.Query.Length == 0 && uri.Fragment.Length == 0 && uri.UserInfo.Length == 0
                 ? uri.GetLeftPart(UriPartial.Authority).ToLowerInvariant()
                 : null)
@@ -29,19 +33,28 @@ public static class CorsSetup
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-    public static IServiceCollection AddDeskCors(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddDeskCors(this IServiceCollection services, IConfiguration config, IHostEnvironment env)
     {
-        var policy = Policy(Origins(config));
+        var policy = Policy(Origins(config, env.IsDevelopment()));
         return services.AddCors(o => o.AddDefaultPolicy(policy));
     }
 
-    internal static CorsPolicy Policy(string[] origins) =>
-        new CorsPolicyBuilder(origins)
+    /// <remarks>
+    /// The exact-match check is set explicitly, so ASP.NET Core always sends <c>Vary: Origin</c>. With the default
+    /// check it varies only when more than one origin is listed, and one origin (production) would let a cache
+    /// hand a response without CORS headers to the cross-origin SPA.
+    /// </remarks>
+    internal static CorsPolicy Policy(string[] origins)
+    {
+        var allowed = origins.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new CorsPolicyBuilder(origins)
+            .SetIsOriginAllowed(allowed.Contains)
             .WithMethods("GET", "POST", "PUT", "DELETE")
             .WithHeaders(AllowedHeaders)
             .WithExposedHeaders(ExposedHeaders)
             .SetPreflightMaxAge(TimeSpan.FromMinutes(10))
             .Build();
+    }
 
     /// <summary>
     /// Before maintenance mode and the rate limiter: a preflight is answered here (it never takes a token or a
@@ -50,7 +63,7 @@ public static class CorsSetup
     /// </summary>
     public static void UseDeskCors(this WebApplication app)
     {
-        var origins = Origins(app.Configuration).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var origins = Origins(app.Configuration, app.Environment.IsDevelopment()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         app.Use((http, next) =>
         {
             // Absent is "", and several values join with a comma: neither is a configured origin.

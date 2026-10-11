@@ -119,7 +119,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - CSRF rides on credentials the browser attaches by itself (cookies, HTTP auth). Nothing here does: the token only goes out when the SPA's own code puts it in `Authorization`, and no cookie authenticates anything. A cross-site form or `fetch` can't add that header without the token, and with CORS it can't read a response either.
 
 **CORS**
-- `CORS_ALLOWED_ORIGINS` lists the allowed origins, comma or space separated (scheme, host and port only). Anything with a path, query, credentials, another scheme or a wildcard is dropped, never widened.
+- `CORS_ALLOWED_ORIGINS` lists the allowed origins, comma or space separated (scheme, host and port only). Only `https` origins count outside Development, where `http://localhost` is allowed for the dev server. Anything with a path, query, credentials, another scheme or a wildcard is dropped, never widened. `Vary: Origin` is always sent.
 - It is unset by default, which allows no origin. `render.yaml` sets `https://llevintza.github.io`.
 - Allowed methods: GET, POST, PUT, DELETE. Allowed request headers: `Authorization`, `Content-Type`, `If-None-Match`. Exposed response headers: `Retry-After`, `X-Cache`, `Server-Timing`, `ETag`.
 - No `Access-Control-Allow-Credentials`. Preflights are cached for 10 minutes.

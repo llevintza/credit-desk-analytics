@@ -160,13 +160,30 @@ public sealed class CorsTests(PostgresApiFactory api)
     [InlineData(null, new string[0])]
     [InlineData("", new string[0])]
     [InlineData("https://llevintza.github.io", new[] { "https://llevintza.github.io" })]
-    [InlineData("https://LLEVINTZA.github.io/ , http://localhost:4200", new[] { "https://llevintza.github.io", "http://localhost:4200" })]
+    [InlineData("https://LLEVINTZA.github.io/ , http://localhost:4200", new[] { "https://llevintza.github.io" })] // http: Development only
     [InlineData("https://a.test https://a.test\thttps://b.test:8443", new[] { "https://a.test", "https://b.test:8443" })]
     // Not an origin: a path, a query, credentials, another scheme, a wildcard or a bare host are dropped, never widened.
     [InlineData("https://a.test/app,https://b.test?x=1,https://u:p@c.test,ftp://d.test,*,e.test,https://f.test/#top", new string[0])]
-    public void Only_http_and_https_origins_are_kept(string? value, string[] expected)
+    public void Only_https_origins_are_kept_outside_development(string? value, string[] expected)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection([new(CorsSetup.ConfigKey, value)]).Build();
-        Assert.Equal(expected, CorsSetup.Origins(config));
+        Assert.Equal(expected, CorsSetup.Origins(config, allowHttp: false));
+    }
+
+    [Fact]
+    public void Development_also_keeps_http_origins_for_the_dev_server()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection([new(CorsSetup.ConfigKey, "https://a.test, http://localhost:4200, ftp://b.test")]).Build();
+        Assert.Equal(["https://a.test", "http://localhost:4200"], CorsSetup.Origins(config, allowHttp: true));
+    }
+
+    [Fact]
+    public async Task A_production_host_ignores_an_http_origin()
+    {
+        await using var host = api.WithSettings((CorsSetup.ConfigKey, "http://pages.example.test"));
+        using var req = new HttpRequestMessage(HttpMethod.Get, "/health");
+        req.Headers.Add("Origin", "http://pages.example.test");
+        var res = await PostgresApiFactory.NewClient(host).SendAsync(req, Ct);
+        Assert.Null(Header(res, "Access-Control-Allow-Origin"));
     }
 }

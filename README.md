@@ -504,7 +504,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - `POST /api/auth/logout` ends that sign-in (its access and refresh tokens) on the running instance. The list is in memory, so a restart forgets it and a copied token lives until it expires. `disable`/`reset` end every session for good.
   - The SPA keeps the access token in memory and the refresh token in the tab's `sessionStorage`, so closing the tab ends the session. Script on the page can read both: the XSS trade-off is in ADR-0024.
   - No antiforgery: the browser never attaches a header token by itself, so CSRF doesn't apply.
-  - **CORS:** `CORS_ALLOWED_ORIGINS` (comma or space separated origins; unset = none) allows a cross-site front end. Production sets `https://llevintza.github.io` (`render.yaml`). No credentials; preflights are answered before maintenance mode and the rate limiter.
+  - **CORS:** `CORS_ALLOWED_ORIGINS` (comma or space separated `https://` origins, `http://` only in Development; unset = none) allows a cross-site front end. Production sets `https://llevintza.github.io` (`render.yaml`). No credentials; preflights are answered before maintenance mode and the rate limiter.
   - The data-protection keys are persisted to the database, so tokens survive restarts.
 - **User admin CLI** (`src/Desk.UserAdmin`):
 
