@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './session';
 import { watchConsole } from './helpers';
 
 test.describe('P2 fund performance (README §6 acceptance)', () => {

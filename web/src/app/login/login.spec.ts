@@ -44,7 +44,7 @@ describe('Login', () => {
   it.each([
     ['/login?signout=unconfirmed', true],
     ['/login?signout=other', false],
-    ['/login', false],
+    ['/login?signout=UNCONFIRMED', false], // the match is exact, not case-insensitive
   ])('on %s, warns that sign-out could not be confirmed: %s', async (url, shown) => {
     TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'login', component: Login }])] });
     const harness = await RouterTestingHarness.create();
@@ -56,7 +56,7 @@ describe('Login', () => {
     }
     expect(banner?.getAttribute('role')).toBe('alert');
     expect(banner?.textContent).toContain("Sign-out couldn't be confirmed with the server");
-    expect(banner?.textContent).toContain('close the browser, or sign in and sign out again');
+    expect(banner?.textContent).toContain('This browser has forgotten the session');
   });
 
   it('shows the maintenance banner', async () => {
@@ -89,8 +89,10 @@ describe('Login', () => {
     expect((q('sign-in') as HTMLButtonElement).disabled).toBe(true);
     const req = http.expectOne('/api/auth/login');
     expect(req.request.body).toEqual({ email: 'a@example.com', password: 'pw' });
-    req.flush({ email: 'a@example.com', roles: ['viewer'], expiresAt: 'x' });
+    req.flush({ tokenType: 'Bearer', accessToken: 'a', expiresIn: 300, refreshToken: 'r' });
+    http.expectOne('/api/me').flush({ email: 'a@example.com', roles: ['viewer'], expiresAt: 'x' });
     expect(navigate).toHaveBeenCalledWith(['/positions']);
+    sessionStorage.clear();
   });
 
   for (const [status, message] of [

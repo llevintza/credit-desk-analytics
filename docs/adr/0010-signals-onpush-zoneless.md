@@ -32,7 +32,7 @@ Re-rendering the whole tree on every async event (zone.js) is wasted work. It al
 | Testing timers | `vi.useFakeTimers()` works directly (the debounce test) | `fakeAsync` | `fakeAsync` |
 
 **Measured outcome of the chosen setup:**
-- The initial bundle is **103 KB Brotli** at the quality the API serves (`CompressionLevel.Fastest` = q1; 91 KB at q4 before #203): `scripts/bundle-budget.mjs`, run as part of `npm run build`.
+- The initial bundle is **114 KB Brotli** as the API sends it: q1 (`CompressionLevel.Fastest`) in the 16 KB writes of its static-file send path (#252; 102 KB measured one-shot at q1 before #252, 91 KB at q4 before #203). `scripts/bundle-budget.mjs` measures it as part of `npm run build`; `perf/bundle-wire-bytes.mjs` matched it to the API's wire bytes within 76 bytes per file, never under.
 - The positions page paints its first rows in **167 ms** warm (ADR-0009).
 - The 300 ms quick-filter debounce and the `switchMap` cancellation are unit-tested with plain Vitest fake timers (`positions-query.spec.ts`).
 

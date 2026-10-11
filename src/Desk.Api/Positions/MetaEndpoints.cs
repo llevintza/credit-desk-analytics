@@ -41,11 +41,11 @@ public static class MetaEndpoints
             .WithName("ListPresets").WithSummary("Built-in presets plus the current user's saved presets for a page.")
             .Produces<PresetResponse[]>().ProducesProblem(StatusCodes.Status404NotFound);
         presets.MapPut("/{page}", SavePresetAsync)
-            .WithName("SavePreset").WithSummary("Creates or replaces one of the current user's presets. Needs X-XSRF-TOKEN.")
+            .WithName("SavePreset").WithSummary("Creates or replaces one of the current user's presets.")
             .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
         presets.MapDelete("/{page}", DeletePresetAsync)
-            .WithName("DeletePreset").WithSummary("Deletes one of the current user's presets (?name=). Needs X-XSRF-TOKEN.")
+            .WithName("DeletePreset").WithSummary("Deletes one of the current user's presets (?name=).")
             .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound);
         return api;
     }

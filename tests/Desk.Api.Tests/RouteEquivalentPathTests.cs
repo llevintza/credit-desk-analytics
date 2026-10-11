@@ -12,7 +12,7 @@ namespace Desk.Api.Tests;
 /// <summary>
 /// #284 (R279-01): routing matches a path in any casing and with a trailing slash, so every middleware that decides
 /// by the path string must treat those spellings as the endpoint they route to. Login and one data endpoint, each in
-/// every spelling routing accepts, get the same maintenance, limiter, authentication and antiforgery behaviour as the
+/// every spelling routing accepts, get the same maintenance, limiter, and authentication behaviour as the
 /// canonical path. The login floor's own spelling theory is in <see cref="LoginTimingTests"/>.
 /// </summary>
 [Collection(ApiCollection.Name)]
@@ -42,12 +42,8 @@ public sealed class RouteEquivalentPathTests(PostgresApiFactory api)
         "/api/./positions/query",
     ];
 
-    private static HttpRequestMessage Post(string path, object body, string? xsrf = null)
-    {
-        var req = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
-        if (xsrf is not null) req.Headers.Add(AuthSetup.AntiforgeryHeaderName, xsrf);
-        return req;
-    }
+    private static HttpRequestMessage Post(string path, object body) =>
+        new(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
 
     private static HttpRequestMessage WrongLogin(string path) => Post(path, new LoginRequest("nobody@example.com", "not-the-password"));
 
@@ -89,10 +85,10 @@ public sealed class RouteEquivalentPathTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "1"));
         var user = await api.CreateUserAsync();
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Post(Query, new { }, xsrf), Ct)).StatusCode);
-        var limited = await client.SendAsync(Post(path, new { }, xsrf), Ct);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Post(Query, new { }), Ct)).StatusCode);
+        var limited = await client.SendAsync(Post(path, new { }), Ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Equal("Too many requests", (await limited.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
@@ -100,18 +96,14 @@ public sealed class RouteEquivalentPathTests(PostgresApiFactory api)
 
     [Theory]
     [MemberData(nameof(QuerySpellings))]
-    public async Task Every_spelling_of_a_data_endpoint_needs_a_session_and_an_antiforgery_token(string path)
+    public async Task Every_spelling_of_a_data_endpoint_needs_a_bearer_token(string path)
     {
-        var (client, xsrf, _) = await api.SignedInAsync();
+        var (client, _, _) = await api.SignedInAsync();
 
-        // The session cookie is only read on session paths (Program.cs): a spelling outside them would be anonymous.
-        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Post(path, new { }, xsrf), Ct)).StatusCode);
+        // The bearer token is only read on session paths (Program.cs): a spelling outside them would be anonymous.
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Post(path, new { }), Ct)).StatusCode);
 
-        var noToken = await client.SendAsync(Post(path, new { }), Ct);
-        Assert.Equal(HttpStatusCode.BadRequest, noToken.StatusCode);
-        Assert.Equal(AntiforgeryFilter.ProblemTitle, (await noToken.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().SendAsync(Post(path, new { }, xsrf), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().SendAsync(Post(path, new { }), Ct)).StatusCode);
     }
 
     /// <summary>

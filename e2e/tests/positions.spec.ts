@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './session';
 import { gridReady, watchConsole, watchQueries } from './helpers';
 
 test.describe('P1 positions (README §6 acceptance)', () => {

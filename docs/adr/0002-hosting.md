@@ -1,8 +1,10 @@
 # ADR-0002: Hosting: single Render web service + Neon Postgres
 
-- **Status:** Accepted
+- **Status:** Accepted; partially superseded by [ADR-0024](0024-github-pages-frontend-bearer-auth.md) (2026-10-11)
 - **Date:** 2026-10-07
 - **Phase / PR:** phase-0/scaffold
+
+> **Note (2026-10-11, ADR-0024):** the SPA is also published to GitHub Pages (`https://llevintza.github.io/credit-desk-analytics/`), calling this Render service cross-origin with bearer tokens and CORS. The repository has been public since 2026-10-09, so option 1's "private repo" row no longer applies, and bearer tokens remove its cookie row. The Render service still serves the same SPA from `wwwroot` (same origin), and the API, Neon and the connection budget below are unchanged.
 
 ## Context
 

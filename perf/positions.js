@@ -53,10 +53,9 @@ export function setup() {
   const res = http.post(`${base}/api/auth/login`, JSON.stringify({ email: __ENV.DESK_EMAIL, password: __ENV.DESK_PASSWORD }),
     { headers: { 'Content-Type': 'application/json' } });
   check(res, { 'login 200': (r) => r.status === 200 });
-  // Build the header here: cookie objects lose their shape when setup() data is handed to the VUs.
+  // Bearer token (ADR-0024): the whole run (~92 s) is inside the access token's 5 minutes.
   const data = {
-    cookie: Object.entries(res.cookies).map(([name, values]) => `${name}=${values[0].value}`).join('; '),
-    xsrf: decodeURIComponent(res.cookies['XSRF-TOKEN'][0].value),
+    authorization: `Bearer ${res.json('accessToken')}`,
     run: Date.now() % 1e6, // a per-run offset, so no MISS key repeats one from an earlier run (#202)
   };
   data.book = post(data, wholeBook).json('rowCount');
@@ -65,10 +64,8 @@ export function setup() {
 }
 
 function post(data, body) {
-  // Every cookie from login (session, antiforgery cookie, XSRF-TOKEN) goes as a header: the jar won't send the
-  // Secure __Host- cookie over plain http.
   const res = http.post(`${base}/api/positions/query`, JSON.stringify(body), {
-    headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': data.xsrf, 'Accept-Encoding': 'br, gzip', Cookie: data.cookie },
+    headers: { 'Content-Type': 'application/json', 'Accept-Encoding': 'br, gzip', Authorization: data.authorization },
   });
   if (!check(res, { '200': (r) => r.status === 200 })) throw new Error(`HTTP ${res.status}: ${res.body}`);
   return res;
@@ -105,7 +102,7 @@ let allColumns;
 let allCounter = 0;
 export function all(data) {
   if (!allColumns) {
-    const res = http.get(`${base}/api/presets/positions`, { headers: { Cookie: data.cookie } });
+    const res = http.get(`${base}/api/presets/positions`, { headers: { Authorization: data.authorization } });
     allColumns = res.json().find((p) => p.name === 'All').state.columns;
   }
   allCounter += 1;

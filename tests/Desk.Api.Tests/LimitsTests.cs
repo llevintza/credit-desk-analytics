@@ -239,6 +239,26 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Refresh_and_logged_out_tokens_draw_on_the_callers_ip_bucket_not_a_users()
+    {
+        // ADR-0024: a refresh is anonymous until it succeeds, and a token SessionLimits rejects is no user at all,
+        // so neither can spend (or hide behind) a signed-in user's bucket.
+        await using var host = api.WithSettings(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "3"));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        var anonymous = PostgresApiFactory.NewClient(host);
+        var tokens = await PostgresApiFactory.LoginAsync(client, user.Email!); // IP bucket: 1 of 3
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(anonymous, tokens.RefreshToken)).StatusCode); // 2 of 3
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/me", Ct)).StatusCode); // 3 of 3
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await PostgresApiFactory.PostRefreshAsync(anonymous, tokens.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);                    // user bucket: 1 of 3
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("/api/auth/logout", null, Ct)).StatusCode); // 2 of 3
+        // The same token after logout is anonymous, so it lands in the empty IP bucket, not the user's.
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Login_also_waits_for_the_shared_database_limit()
     {
         var gate = new BlockingCommands();
@@ -326,15 +346,14 @@ public sealed class LimitsTests(PostgresApiFactory api)
             Assert.Equal(MaintenanceMode.Detail, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
         }
 
-        // A signed-in browser still sends its session cookie: /health, the SPA and Swagger must not decrypt it
-        // (key ring + security-stamp query would wake the database).
+        // A signed-in client may send its bearer token anywhere: /health, the SPA and Swagger must not read it
+        // (the key ring load would wake the database).
         var user = await api.CreateUserAsync(Roles.Admin);
-        var cookie = (await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!)).Headers.GetValues("Set-Cookie")
-            .Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
+        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), user.Email!)).AccessToken;
         foreach (var path in new[] { "/health", "/positions", "/swagger/index.html", "/openapi/v1.json" })
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, path);
-            req.Headers.Add("Cookie", cookie);
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var res = await client.SendAsync(req, Ct);
             Assert.Equal(path.StartsWith("/health") || path == "/positions" ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, res.StatusCode);
         }
@@ -373,12 +392,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task Health_db_is_503_when_the_database_is_unreachable()
     {
         var admin = await api.CreateUserAsync(Roles.Admin);
-        // Same session cookie, a host whose database is gone (the cookie and keys were read at login).
+        // A token from a healthy host, sent to a host whose database is gone (the keys were read at login).
         await using var broken = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(new FailingCommands())));
-        var cookie = await SessionCookieAsync(admin.Email!);
-        using var req = new HttpRequestMessage(HttpMethod.Get, "/api/health/db");
-        req.Headers.Add("Cookie", cookie);
-        var res = await PostgresApiFactory.NewClient(broken).SendAsync(req, Ct);
+        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), admin.Email!)).AccessToken;
+        var client = PostgresApiFactory.NewClient(broken);
+        PostgresApiFactory.UseToken(client, token);
+        var res = await client.GetAsync("/api/health/db", Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
         Assert.DoesNotContain("Host=", await res.Content.ReadAsStringAsync(Ct));
     }
@@ -426,12 +445,6 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(0, gate.Running);
     }
 
-    private async Task<string> SessionCookieAsync(string email)
-    {
-        var login = await PostgresApiFactory.PostLoginAsync(api.NewClient(), email);
-        return login.Headers.GetValues("Set-Cookie").Single(c => c.StartsWith(Auth.AuthSetup.CookieName + "=", StringComparison.Ordinal)).Split(';')[0];
-    }
-
     // ---- #127: per-user concurrency, export cap and deadline, cold meta load ----
 
     [Fact]
@@ -445,7 +458,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, admin.Email!);
+        await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
         var running = client.GetAsync("/api/health/db", Ct);   // the user's one permit, held in the database
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
@@ -463,13 +476,11 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // Nor is the same user's export: exports are capped by the export gate, not by this queue.
         using (var export = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns = new[] { "deal_name" } }) })
         {
-            export.Headers.Add("X-XSRF-TOKEN", xsrf);
             Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(export, Ct)).StatusCode);
         }
         // However routing lets the path be spelled.
         using (var export = new HttpRequestMessage(HttpMethod.Post, "/API/Positions/Export/") { Content = JsonContent.Create(new { columns = new[] { "deal_name" } }) })
         {
-            export.Headers.Add("X-XSRF-TOKEN", xsrf);
             Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(export, Ct)).StatusCode);
         }
 
@@ -580,12 +591,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.True(RateLimiting.IsExport(export));
     }
 
-    private static HttpRequestMessage Export(string xsrf, params string[] columns)
-    {
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns }) };
-        req.Headers.Add("X-XSRF-TOKEN", xsrf);
-        return req;
-    }
+    private static HttpRequestMessage Export(params string[] columns) =>
+        new(HttpMethod.Post, "/api/positions/export") { Content = JsonContent.Create(new { columns }) };
 
     private static async Task WaitUntilAsync(Func<bool> done)
     {
@@ -604,8 +611,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
         try
         {
             var client = PostgresApiFactory.NewClient(host);
-            var xsrf = await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
-            var res = await client.SendAsync(Export(xsrf, "deal_name"), Ct);
+            await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+            var res = await client.SendAsync(Export("deal_name"), Ct);
             Assert.Equal(HttpStatusCode.TooManyRequests, res.StatusCode);
             Assert.Equal("10", res.Headers.GetValues("Retry-After").Single());
             Assert.Equal("Too many exports", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
@@ -624,9 +631,9 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "0.001"));
         var user = await api.CreateUserAsync();
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
 
-        var res = await client.SendAsync(Export(xsrf, "deal_name"), Ct);
+        var res = await client.SendAsync(Export("deal_name"), Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
         Assert.Equal("Export timed out", (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
         Assert.Null(res.Content.Headers.ContentDisposition); // a problem, not a file
@@ -648,12 +655,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "1"));
         var user = await api.CreateUserAsync();
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
         var gate = host.Services.GetRequiredService<ExportGate>();
 
         // Headers arrive with the first flushed chunk; then nothing is read, so the server's writes block (backpressure)
         // until the deadline fires.
-        using var res = await client.SendAsync(Export(xsrf, await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
+        using var res = await client.SendAsync(Export(await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         Assert.True(gate.IsRunning(user.Email!));
         await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
@@ -668,16 +675,16 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "60"));
         var user = await api.CreateUserAsync();
         var client = PostgresApiFactory.NewClient(host);
-        var xsrf = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
         var gate = host.Services.GetRequiredService<ExportGate>();
 
-        var res = await client.SendAsync(Export(xsrf, await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
+        var res = await client.SendAsync(Export(await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
         Assert.True(gate.IsRunning(user.Email!));
         res.Dispose(); // the browser tab closed: the request is aborted while the server is blocked writing
         await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
 
         // And the user can export again straight away.
-        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Export(xsrf, "deal_name"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Export("deal_name"), Ct)).StatusCode);
     }
 
     /// <summary>Tracks how many database connections are open at once, EF (interceptor) and Dapper (registry) alike.</summary>

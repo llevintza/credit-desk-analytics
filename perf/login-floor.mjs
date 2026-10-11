@@ -4,11 +4,13 @@
 //   unknown   a random email that has no account (1 SELECT + the decoy PBKDF2)
 //   wrong     DESK_EMAIL with a wrong password (PBKDF2 + the failure-count writes)
 //   success   DESK_EMAIL with DESK_PASSWORD (also resets the failure count before lockout; reported, not compared)
-// and prints the median, p90 and p99 of each, plus the unknown-vs-wrong median gap.
+// and prints the median, p90, p95 and p99 of each, plus the unknown-vs-wrong median gap.
 //
 // Usage (local stack only, a throwaway account created with Desk.UserAdmin; raise the login limit for this local
 // process only, e.g. RATE_LIMIT_LOGIN_PER_IP_PER_MIN=100000, never on Render):
 //   BASE_URL=http://localhost:5180 DESK_EMAIL=… DESK_PASSWORD=… SAMPLES=60 node perf/login-floor.mjs
+// On the compose stack (#306) set RATE_LIMIT_LOGIN_PER_IP_PER_MIN on the app service of a local override, never in
+// docker-compose.yml, and point BASE_URL at its published port.
 // The password comes from the environment and is never printed.
 import http from 'node:http';
 import https from 'node:https';
@@ -84,9 +86,9 @@ const quantile = (xs, q) => {
 };
 const fmt = (x) => x.toFixed(1).padStart(7);
 console.log(`${base.origin}, ${samples} samples per failed path (after ${warmup} warm-up rounds)`);
-console.log('path        n   median      p90      p99      min      max   (ms)');
+console.log('path        n   median      p90      p95      p99      min      max   (ms)');
 for (const [name, xs] of Object.entries(times)) {
-  console.log(`${name.padEnd(8)} ${String(xs.length).padStart(4)} ${fmt(quantile(xs, 0.5))}  ${fmt(quantile(xs, 0.9))}  ${fmt(quantile(xs, 0.99))}  ${fmt(Math.min(...xs))}  ${fmt(Math.max(...xs))}`);
+  console.log(`${name.padEnd(8)} ${String(xs.length).padStart(4)} ${fmt(quantile(xs, 0.5))}  ${fmt(quantile(xs, 0.9))}  ${fmt(quantile(xs, 0.95))}  ${fmt(quantile(xs, 0.99))}  ${fmt(Math.min(...xs))}  ${fmt(Math.max(...xs))}`);
 }
 const gap = quantile(times.wrong, 0.5) - quantile(times.unknown, 0.5);
 console.log(`median gap, wrong - unknown: ${gap.toFixed(1)} ms`);
