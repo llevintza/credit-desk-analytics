@@ -103,6 +103,9 @@ public sealed class HardeningTests(PostgresApiFactory api)
         Assert.Contains("/api/auth/refresh", js);
         Assert.Contains($"'{SwaggerSetup.RefreshTokenKey}'", js);
         Assert.Contains("sessionStorage", js);
+        // The access token lasts 5 minutes: the script renews it before then instead of keeping the first one.
+        Assert.Contains("Date.now() < expires", js);
+        Assert.Contains("t.expiresIn", js);
     }
 
     [Fact]

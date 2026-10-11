@@ -26,6 +26,7 @@ public static class SwaggerSetup
           var original = window.fetch;
           var key = 'desk.refresh';
           var access = null;
+          var expires = 0;
           var pending = null;
           function refresh() {
             var token = null;
@@ -38,6 +39,8 @@ public static class SwaggerSetup
             }).then(function (r) { return r.ok ? r.json() : null; }).then(function (t) {
               pending = null;
               access = t ? t.accessToken : null;
+              // Renewed 30 s before it runs out, so a call never goes with an expired token.
+              expires = t ? Date.now() + (t.expiresIn - 30) * 1000 : 0;
               try { if (t) sessionStorage.setItem(key, t.refreshToken); } catch (e) { /* storage blocked */ }
               return access;
             }, function () { pending = null; return null; });
@@ -48,7 +51,7 @@ public static class SwaggerSetup
             var ours = url.origin === location.origin && /^\/(api|openapi)\//.test(url.pathname) && url.pathname !== '/api/auth/refresh';
             if (!ours) return original.call(this, input, init);
             var self = this;
-            return (access ? Promise.resolve(access) : refresh()).then(function (token) {
+            return (access && Date.now() < expires ? Promise.resolve(access) : refresh()).then(function (token) {
               init = init || {};
               var headers = new Headers(init.headers || (typeof input !== 'string' && input.headers) || {});
               if (token) headers.set('Authorization', 'Bearer ' + token);
