@@ -934,6 +934,7 @@ The same SPA that Render serves from `wwwroot` is also published to `https://lle
 
 - **Concurrency:** `group: pages`, `cancel-in-progress: false`. A deployment is never cut off, and the newest pending run wins.
 - **Set by hand** (agents can't change settings): Settings → Pages → Source = **GitHub Actions**; a **repository** variable `APP_URL` (not a secret). The `production` environment's `APP_URL` can't be read by a job outside that environment, and this workflow stays outside it. On Render, `CORS_ALLOWED_ORIGINS` must include `https://llevintza.github.io` (README §7.1, `render.yaml`).
+- **One origin for the whole account** (accepted by Leo, 2026-10-11, ADR-0024): every Pages site under `https://llevintza.github.io` (today also `/energlens`) shares this app's origin. That means each one passes the API's CORS check and can read the tab's `sessionStorage`, refresh token included. Rule: **no Pages site on the account loads untrusted third-party scripts.**
 - **Limits on Pages:** no response headers, so no HSTS from us, no `frame-ancestors` (a meta CSP ignores it) and no `Permissions-Policy`. A deep link's document is served with HTTP 404 (the `404.html` fallback), and the app then routes normally.
 
 ---
