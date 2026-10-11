@@ -102,6 +102,8 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - `POST /api/auth/login` returns Identity's `AccessTokenResponse`: `tokenType` `Bearer`, `accessToken`, `expiresIn` 300, `refreshToken`. No cookie is set. Lockout, `ExpiresAt`, the timing guard and the login floor are unchanged.
 - The access token lasts **5 minutes**, the old stamp interval. It is checked without the database. On every authenticated request, `SessionLimits` also drops a token whose account expiry has passed (from the claim), whose sign-in is 24 h old, or whose session was logged out.
 - The refresh token lasts **8 hours**, and each refresh issues a new one. That is the old sliding limit.
+  - Refresh tokens are **not single-use**. They are stateless data-protected tickets, so the one a refresh replaces stays valid until its own 8 h run out. There is no reuse detection.
+  - The refresh endpoint is anonymous and has no policy of its own: it draws on the global limiter's per-client-IP token bucket (`ClientAddress`, 60/min, burst 20) and the shared concurrency limit, like any anonymous `/api` call (tested).
 - `POST /api/auth/refresh` (anonymous, keyed on the client IP by the rate limiter) renews both tokens only if all of these hold:
   - the refresh token unprotects and hasn't expired;
   - the session is under 24 h and not logged out;
@@ -157,6 +159,10 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - The deploy workflow adds a `<meta http-equiv="Content-Security-Policy">` with `script-src 'self'`, `connect-src 'self' <API origin>`, `object-src 'none'` and `base-uri 'self'`.
   - A meta CSP can't set `frame-ancestors`, so the Pages copy can be framed (clickjacking). The risk is low: there are no state-changing one-click actions, and the token never goes into a frame's URL.
   - The API-served copy keeps the full header set (README §7.3).
+- **A stolen refresh token:**
+  - Whoever holds it can keep refreshing until the session's 24 h cap from sign-in. Each refresh renews the 8 h idle limit, and rotation doesn't kill the stolen copy.
+  - What ends it sooner: a logout from the session it belongs to (on the running instance only; see below), or `Desk.UserAdmin disable` or `reset`, which rotate the security stamp and end every session of that account at its next refresh.
+  - Reuse detection (one-time refresh tokens, revoking the whole session when an old one comes back) would need server-side token state. It is left out for the same reason as a revocation table, and should be revisited together with it.
 - **Logout limits:**
   - The revocation list is per process. A restart, a redeploy, or a free-tier spin-down after about 15 min idle forgets it. A logged-out token copied elsewhere then works again until it expires: up to 5 min for an access token, up to 8 h (and never past 24 h from sign-in) for a refresh token.
   - The SPA always forgets the tokens locally, so the browser that signed out is signed out.
