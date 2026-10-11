@@ -143,6 +143,15 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - A script injected into the SPA can read the access token from memory and the refresh token from `sessionStorage`. It can then use them from anywhere until the refresh token's 8 h (at most 24 h) runs out, or until a disable or reset.
   - With `HttpOnly` cookies, XSS could act only inside the open page.
   - Mitigations: Angular's template escaping; no `innerHTML` with API data; `script-src 'self'` and no inline scripts; access tokens that last 5 minutes; refresh tokens in `sessionStorage`, not `localStorage` (gone when the tab closes, never shared across tabs); and `Desk.UserAdmin disable` / `reset` to end a stolen session at its next refresh.
+- **One origin for every Pages site on the account (accepted by Leo, 2026-10-11):**
+  - An origin has no path, so every GitHub Pages site under `https://llevintza.github.io` shares it. Today that is this app and `llevintza.github.io/energlens`.
+  - Any of those sites passes the API's CORS check. In the same tab it can also read `sessionStorage`, including `desk.refresh`.
+  - So a script running on any of them (an XSS hole, or a compromised dependency) could take a signed-in user's refresh token and call the API until the session ends.
+  - Leo accepts this because he controls every Pages site on the account.
+  - **Mitigations:**
+    - The refresh token lasts **8 hours** idle and never past **24 hours** from sign-in. The access token lasts **5 minutes**.
+    - Rule: **no Pages site on the `llevintza` account loads untrusted third-party scripts.**
+  - Revisit with a custom domain (option 1), which gives this app an origin of its own.
 - **No HTTP security headers on Pages:**
   - GitHub Pages doesn't let a site set response headers, so the Pages copy gets no CSP, `frame-ancestors`, HSTS preload, `Permissions-Policy` or `X-Frame-Options` from us.
   - The deploy workflow adds a `<meta http-equiv="Content-Security-Policy">` with `script-src 'self'`, `connect-src 'self' <API origin>`, `object-src 'none'` and `base-uri 'self'`.
