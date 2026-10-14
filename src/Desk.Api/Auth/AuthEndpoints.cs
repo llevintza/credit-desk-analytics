@@ -62,6 +62,7 @@ public static class AuthEndpoints
         AuditQueue audit,
         TimingGuard guard,
         AppDbContext db,
+        RefreshRotations rotations,
         TimeProvider time,
         CancellationToken ct)
     {
@@ -93,8 +94,13 @@ public static class AuthEndpoints
 
         var principal = await signIn.CreateUserPrincipalAsync(user!);
         var identity = (ClaimsIdentity)principal.Identity!;
-        identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, Convert.ToHexString(RandomNumberGenerator.GetBytes(16))));
+        var now = time.GetUtcNow();
+        var sid = NewId();
+        var rid = NewId();
+        identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, now.ToString("O", CultureInfo.InvariantCulture)));
+        identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, sid));
+        identity.AddClaim(new Claim(AuthSetup.RefreshIdClaim, rid));
+        rotations.Issue(sid, rid, now + AuthSetup.AbsoluteExpiry, now);
 
         audit.Enqueue(AuditKinds.LoginSuccess, user!.Email, "/api/auth/login", StatusCodes.Status200OK, started, time);
         // The bearer handler writes the AccessTokenResponse body itself.
@@ -106,7 +112,8 @@ public static class AuthEndpoints
     /// Identity's refresh (as <c>MapIdentityApi</c> does it), plus this app's session rules: the token must be
     /// unexpired (8 h idle), the session under 24 h and not logged out, the security stamp unchanged (disable,
     /// password reset), and the account still allowed to sign in (not disabled or expired). The new tokens keep the
-    /// original sign-in time and session id, so neither limit can be extended by refreshing.
+    /// original sign-in time and session id, so neither limit can be extended by refreshing. Each refresh token works
+    /// once: one that comes back after it was swapped ends the session (#353, <see cref="RefreshRotations"/>).
     /// </summary>
     internal static async Task<IResult> RefreshAsync(
         RefreshRequest request,
@@ -114,6 +121,8 @@ public static class AuthEndpoints
         SignInManager<DeskUser> signIn,
         IOptionsMonitor<BearerTokenOptions> bearer,
         SessionRevocations revoked,
+        RefreshRotations rotations,
+        ILogger<RefreshRotations> logger,
         TimeProvider time)
     {
         var now = time.GetUtcNow();
@@ -122,16 +131,33 @@ public static class AuthEndpoints
             || await signIn.ValidateSecurityStampAsync(ticket.Principal) is not { } user
             || !await signIn.CanSignInAsync(user))
         {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Refresh failed", detail: RefreshFailedDetail);
+            return Refused();
+        }
+
+        // Checked last, so an expired or otherwise dead token is just refused: only a live token can be a replay.
+        var sid = ticket.Principal.FindFirstValue(AuthSetup.SessionIdClaim)!;
+        var end = SessionLimits.ReadAuthTime(ticket.Principal)!.Value + AuthSetup.AbsoluteExpiry;
+        var rid = NewId();
+        if (!rotations.TryRotate(sid, ticket.Principal.FindFirstValue(AuthSetup.RefreshIdClaim), rid, end))
+        {
+            revoked.Revoke(sid, end, now);
+            logger.LogWarning("A refresh token was used again after it was swapped; the session was ended. UserId={UserId}", user.Id);
+            return Refused();
         }
 
         var principal = await signIn.CreateUserPrincipalAsync(user);
         var identity = (ClaimsIdentity)principal.Identity!;
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.AuthTimeClaim)!.Clone());
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.SessionIdClaim)!.Clone());
+        identity.AddClaim(new Claim(AuthSetup.RefreshIdClaim, rid));
         await http.SignInAsync(AuthSetup.Scheme, principal);
         return Results.Empty;
+
+        static IResult Refused() =>
+            Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Refresh failed", detail: RefreshFailedDetail);
     }
+
+    private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
 
     internal static IResult Logout(HttpContext http, SessionRevocations revoked, TimeProvider time)
     {

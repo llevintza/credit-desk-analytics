@@ -144,4 +144,32 @@ public sealed class PipelineUnitTests
         Assert.False(new ClaimsPrincipal(new ClaimsIdentity()).IsSignedIn());
         Assert.False(new ClaimsPrincipal().IsSignedIn());
     }
+
+    [Fact]
+    public void Refresh_rotations_let_each_id_swap_once()
+    {
+        var now = DateTimeOffset.UnixEpoch;
+        var rotations = new RefreshRotations();
+        rotations.Issue("s1", "r0", now.AddHours(24), now);
+
+        Assert.True(rotations.TryRotate("s1", "r0", "r1", now.AddHours(24)));
+        Assert.False(rotations.TryRotate("s1", "r0", "r2", now.AddHours(24)));  // r0 again: reuse
+        Assert.False(rotations.TryRotate("s1", null, "r2", now.AddHours(24)));  // a token without an id, once a chain is known
+        Assert.True(rotations.TryRotate("s1", "r1", "r2", now.AddHours(24)));
+
+        // Unknown here (a restart forgot it, or a token from before #353): believed once, then single-use.
+        Assert.True(rotations.TryRotate("s2", null, "q1", now.AddHours(24)));
+        Assert.False(rotations.TryRotate("s2", null, "q2", now.AddHours(24)));
+        Assert.Equal(2, rotations.Count);
+    }
+
+    [Fact]
+    public void Refresh_rotations_are_pruned_past_the_session_limit_at_the_next_sign_in()
+    {
+        var now = DateTimeOffset.UnixEpoch;
+        var rotations = new RefreshRotations();
+        rotations.Issue("old", "r0", now.AddHours(1), now);
+        rotations.Issue("new", "r0", now.AddHours(26), now.AddHours(2));
+        Assert.Equal(1, rotations.Count);
+    }
 }

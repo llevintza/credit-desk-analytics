@@ -396,6 +396,46 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_refresh_token_works_once_and_its_reuse_ends_the_session()
+    {
+        // #353: a swapped refresh token that comes back is a stolen copy (or the owner's, after the thief swapped it).
+        // Either way the session ends for both holders: every token of that sign-in stops working.
+        var (client, tokens, user) = await api.SignedInAsync();
+        var other = api.NewClient();
+        var otherTokens = await PostgresApiFactory.LoginAsync(other, user.Email!);
+        var renewed = await RefreshAsync(client, tokens.RefreshToken);
+
+        var replay = await PostgresApiFactory.PostRefreshAsync(api.NewClient(), tokens.RefreshToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal(AuthEndpoints.RefreshFailedDetail, (await replay.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, renewed.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        // Another sign-in of the same account is a different session and goes on.
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(other, otherTokens.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Two_concurrent_refreshes_with_one_token_swap_it_once()
+    {
+        var (_, tokens, _) = await api.SignedInAsync();
+        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => PostgresApiFactory.PostRefreshAsync(api.NewClient(), tokens.RefreshToken)));
+        Assert.Single(results, r => r.StatusCode == HttpStatusCode.OK);
+        Assert.Single(results, r => r.StatusCode == HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Each_refresh_token_of_a_chain_works_once_in_turn()
+    {
+        var (client, tokens, _) = await api.SignedInAsync();
+        var refresh = tokens.RefreshToken;
+        for (var i = 0; i < 3; i++)
+            refresh = (await RefreshAsync(client, refresh)).RefreshToken;
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Logout_needs_a_token()
     {
         Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().PostAsync("/api/auth/logout", null, Ct)).StatusCode);

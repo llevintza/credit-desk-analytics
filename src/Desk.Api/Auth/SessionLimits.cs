@@ -53,3 +53,48 @@ public sealed class SessionRevocations
 
     public int Count => _until.Count;
 }
+
+/// <summary>
+/// Single-use refresh tokens with reuse detection (#353, ADR-0024). Each token pair carries a refresh id
+/// (<see cref="AuthSetup.RefreshIdClaim"/>); this holds, per session, the one id whose refresh token may still be
+/// swapped. A refresh that presents any other id replays a token already swapped: a stolen copy, or the owner's own
+/// after a thief swapped it first. The caller then ends the whole session, for both holders.
+/// Per process, like <see cref="SessionRevocations"/>: after a restart a session's first refresh is believed and its
+/// new id becomes the current one.
+/// </summary>
+public sealed class RefreshRotations
+{
+    private readonly ConcurrentDictionary<string, (string Rid, DateTimeOffset Until)> _current = new(StringComparer.Ordinal);
+
+    /// <summary>A new sign-in: <paramref name="rid"/> is its current id until <paramref name="until"/> (its 24 h limit).</summary>
+    public void Issue(string sid, string rid, DateTimeOffset until, DateTimeOffset now)
+    {
+        // Every sign-in prunes, so the map holds at most the sessions started in the last 24 h.
+        foreach (var (key, entry) in _current)
+            if (entry.Until <= now) _current.TryRemove(key, out _);
+        _current[sid] = (rid, until);
+    }
+
+    /// <summary>
+    /// Swaps <paramref name="presented"/> for <paramref name="next"/>. False when the session's current id is another
+    /// one (reuse); of two concurrent refreshes with one token, exactly one wins.
+    /// </summary>
+    public bool TryRotate(string sid, string? presented, string next, DateTimeOffset until)
+    {
+        while (true)
+        {
+            if (!_current.TryGetValue(sid, out var entry))
+            {
+                if (_current.TryAdd(sid, (next, until)))
+                    return true;
+                continue;
+            }
+            if (!string.Equals(entry.Rid, presented, StringComparison.Ordinal))
+                return false;
+            if (_current.TryUpdate(sid, (next, until), entry))
+                return true;
+        }
+    }
+
+    public int Count => _current.Count;
+}

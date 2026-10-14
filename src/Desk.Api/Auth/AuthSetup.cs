@@ -19,6 +19,8 @@ public static class AuthSetup
     public const string AuthTimeClaim = "desk:auth_time";
     /// <summary>Claim set at login and carried by every refresh: one id per sign-in, so logout can revoke that session only.</summary>
     public const string SessionIdClaim = "desk:sid";
+    /// <summary>Claim on every issued token pair: the id that makes its refresh token single-use (#353, <see cref="RefreshRotations"/>).</summary>
+    public const string RefreshIdClaim = "desk:rid";
 
     /// <summary>
     /// The access token's life. Short, because a bearer token is checked without the database: a disable, password
@@ -43,6 +45,7 @@ public static class AuthSetup
         services.AddScoped<TimingGuard>();
         services.AddSingleton(LoginFloorOptions.Default);
         services.AddSingleton<SessionRevocations>();
+        services.AddSingleton<RefreshRotations>();
 
         services.AddAuthentication(Scheme).AddBearerToken(Scheme, o =>
         {
