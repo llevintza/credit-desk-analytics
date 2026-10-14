@@ -520,6 +520,39 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_request_queued_for_the_shared_database_limit_spends_one_token()
+    {
+        // #184: the middleware tries a synchronous acquire before it queues. A token spent on that failed attempt is
+        // never given back, so a request that waits for a database permit would cost its caller two.
+        var gate = new BlockingCommands();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
+            b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
+            b.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "1");
+            b.UseSetting("RATE_LIMIT_PER_USER_BURST", "3");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+        });
+        var admin = await api.CreateUserAsync(Roles.Admin);
+        var holder = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(holder, admin.Email!);
+        var user = await SignedInOnAsync(host); // before the only permit is taken: login needs one
+
+        var running = holder.GetAsync("/api/health/db", Ct); // holds the only database permit
+        await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        var queued = user.GetAsync("/api/me", Ct);           // waits in the shared queue: token 1 of 3
+        await Task.Delay(100, Ct);
+        Assert.False(queued.IsCompleted);
+
+        gate.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await queued).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await user.GetAsync("/api/me", Ct)).StatusCode); // 2 of 3
+        Assert.Equal(HttpStatusCode.OK, (await user.GetAsync("/api/me", Ct)).StatusCode); // 3 of 3
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await user.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Anonymous_callers_are_not_held_to_one_request_in_flight()
     {
         // Anonymous calls from one address share a key; with a per-key cap of 1 and a queue of 1, the third would be
