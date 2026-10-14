@@ -747,6 +747,118 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(1, open.Max);
     }
 
+    // ---- #127 follow-up to #339: /api/insights/{source} is held to the same per-user cap ----
+
+    /// <summary>Holds every connection to one source until released, so an insights call keeps its permits in the database.</summary>
+    private sealed class GatedSources(Desk.Data.Sources.DataSourceRegistry inner, string gated) : Desk.Data.Sources.IDataSourceRegistry
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Npgsql.NpgsqlDataSource Get(string source) => inner.Get(source);
+
+        public async ValueTask<Npgsql.NpgsqlConnection> OpenAsync(string source, CancellationToken ct)
+        {
+            if (source == gated)
+            {
+                Entered.TrySetResult();
+                await Release.Task.WaitAsync(ct);
+            }
+            return await inner.OpenAsync(source, ct);
+        }
+    }
+
+    private WebApplicationFactory<Program> WithGatedSurveillance(GatedSources[] gate, params (string Key, string Value)[] settings) =>
+        api.WithWebHostBuilder(b =>
+        {
+            foreach (var (key, value) in settings)
+                b.UseSetting(key, value);
+            b.ConfigureTestServices(s =>
+            {
+                s.AddSingleton<Desk.Data.Sources.DataSourceRegistry>();
+                s.AddSingleton<Desk.Data.Sources.IDataSourceRegistry>(sp => gate[0] = new GatedSources(
+                    sp.GetRequiredService<Desk.Data.Sources.DataSourceRegistry>(), ConnectionStrings.Surveillance));
+            });
+        });
+
+    private static async Task<GatedSources> HoldSurveillanceAsync(WebApplicationFactory<Program> host, GatedSources[] gate)
+    {
+        for (var i = 0; i < 200 && gate[0] is null; i++)
+            await Task.Delay(25, Ct);
+        Assert.NotNull(gate[0]);
+        await gate[0].Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        return gate[0];
+    }
+
+    [Fact]
+    public async Task Insights_calls_are_one_in_flight_per_user_then_queued_then_429()
+    {
+        var gate = new GatedSources[1];
+        await using var host = WithGatedSurveillance(gate, ("RATE_LIMIT_PER_USER_QUEUE", "1"));
+        var client = await SignedInOnAsync(host);
+        var other = await SignedInOnAsync(host);
+
+        var running = client.GetAsync("/api/insights/surveillance", Ct); // the user's one permit, held opening its connections
+        var held = await HoldSurveillanceAsync(host, gate);
+        var queued = client.GetAsync("/api/insights/core", Ct);          // the user's one queue place
+        await Task.Delay(100, Ct);
+        var rejected = await client.GetAsync("/api/insights/market", Ct);
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.Equal("1", rejected.Headers.RetryAfter?.ToString());
+        Assert.False(queued.IsCompleted);
+
+        // Another user's board isn't behind this one.
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/insights/market", Ct)).StatusCode);
+
+        held.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await queued).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_insights_call_waiting_in_its_users_queue_holds_no_database_permit()
+    {
+        var gate = new GatedSources[1];
+        await using var host = WithGatedSurveillance(gate, ("RATE_LIMIT_GLOBAL_CONCURRENCY", "2"), ("RATE_LIMIT_GLOBAL_QUEUE", "1"));
+        var client = await SignedInOnAsync(host);
+        var other = await SignedInOnAsync(host); // before any permit is taken: login needs one
+
+        var running = client.GetAsync("/api/insights/surveillance", Ct); // A's one permit, and one of the two database permits
+        var held = await HoldSurveillanceAsync(host, gate);
+        var queued = new[] { client.GetAsync("/api/insights/core", Ct), client.GetAsync("/api/insights/market", Ct) }; // in A's own queue
+        await Task.Delay(100, Ct);
+
+        // Had A's queued calls taken the second database permit and the shared queue place, B would get a 429.
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/insights/reference", Ct)).StatusCode);
+        Assert.All(queued, q => Assert.False(q.IsCompleted));
+
+        held.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        foreach (var q in queued)
+            Assert.Equal(HttpStatusCode.OK, (await q).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_insights_call_queued_behind_its_own_user_spends_one_token()
+    {
+        // No refill during the test: 3 tokens are all this user gets, one per call. With the token bucket before the
+        // per-user cap, each queued call would pay twice and the third would be a 429.
+        var gate = new GatedSources[1];
+        await using var host = WithGatedSurveillance(gate, ("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "3"));
+        var client = await SignedInOnAsync(host);
+
+        var running = client.GetAsync("/api/insights/surveillance", Ct);
+        var held = await HoldSurveillanceAsync(host, gate);
+        var second = client.GetAsync("/api/insights/core", Ct);
+        var third = client.GetAsync("/api/insights/market", Ct);
+        await Task.Delay(100, Ct);
+
+        held.Release.TrySetResult();
+        Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await second).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
+    }
+
     /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
     private sealed class BlockingCommands : DbCommandInterceptor
     {
