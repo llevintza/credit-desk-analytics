@@ -218,5 +218,5 @@ pr174 round 3  firstRowsPaintedMs median 176  all 181,172,176,173,176
 - No token ever reaches JavaScript, and there is no refresh-token code to get wrong.
 - The cost is a CSRF defence on every state-changing endpoint. New endpoints get it automatically from the `/api` group filter.
 - Disabling an account takes effect within 5 minutes (the stamp interval), not instantly. This is accepted for an invite-only demo.
-- The per-IP login limit and the anonymous token bucket key on the client IP that `ClientAddress` resolves. Off the proxy (`ASPNETCORE_FORWARDEDHEADERS_ENABLED` unset, as in local, compose and CI), that is the socket peer. On Render, it is Cloudflare's view of the client, believed only through the Render → Cloudflare hops.
+- The per-IP login limit and the anonymous token bucket key on the client IP that `ClientAddress` resolves. Off the proxy (`ASPNETCORE_FORWARDEDHEADERS_ENABLED` unset, as in local, compose and CI), that is the socket peer. On Render, it is Cloudflare's view of the client, believed only through the Render → Cloudflare hops. An IPv6 client is keyed on its /64, the normal end-user allocation, and an IPv4-mapped IPv6 address on its IPv4 address (#164).
 - Revisit if the API ever serves a second origin or a non-browser client (then bearer tokens for that client), or for SSO (README §16).

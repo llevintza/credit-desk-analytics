@@ -121,7 +121,7 @@ public sealed class ClientAddressDiagnostics(
             string.Join('>', chain.Select(Classify)),
             Hashed(headers["CF-Connecting-IP"].ToString()),
             headers.ContainsKey("True-Client-IP") ? "present" : "absent",
-            address is null ? "unknown" : Hash(address.ToString()),
+            address is null ? "unknown" : Hash(ClientAddress.Key(address)),
             suppressed);
     }
 
