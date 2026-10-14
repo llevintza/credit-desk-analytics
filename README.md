@@ -1015,8 +1015,8 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
-| 5 Fund Performance | phase-5/fund-performance | In review |
-| 6 Insights Board | n/a | Not started |
+| 5 Fund Performance | #144 | Merged |
+| 6 Insights Board | phase-6/insights-board | In review |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |

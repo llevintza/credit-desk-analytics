@@ -26,6 +26,8 @@ describe('DeskApi', () => {
       [firstValueFrom(api.savePreset('positions', 'Mine', { columns: ['dv01'] }), { defaultValue: null }), 'PUT', '/api/presets/positions'],
       [firstValueFrom(api.deletePreset('positions', 'Mine'), { defaultValue: null }), 'DELETE', '/api/presets/positions?name=Mine'],
       [firstValueFrom(api.logout(), { defaultValue: null }), 'POST', '/api/auth/logout'],
+      [firstValueFrom(api.insights('market', null, [])), 'GET', '/api/insights/market'],
+      [firstValueFrom(api.insights('core', '2026-10-06', [3, 7], 'curve_moves')), 'GET', '/api/insights/core?asOf=2026-10-06&portfolioIds=3,7&grid=curve_moves'],
     ];
     for (const [, method, url] of calls) {
       const req = http.expectOne((r) => r.urlWithParams === url && r.method === method);
