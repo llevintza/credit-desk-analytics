@@ -137,7 +137,9 @@ public sealed class ClientAddress(bool behindProxy, IPNetwork[]? trustedHops = n
         {
             if (!IPAddress.TryParse(chain[at], out hop))
                 break;
-            if (!In(Render, hop) && !In(trusted, hop))
+            // A Cloudflare hop always ends the skip, even when a trusted entry covers it: a Worker can reach Render
+            // directly from a Cloudflare address, so skipping it would let a forged prefix choose the key (R160-01).
+            if (In(Cloudflare, hop) || (!In(Render, hop) && !In(trusted, hop)))
                 break;
         }
         if (hop is null) // none, or an entry that isn't an address

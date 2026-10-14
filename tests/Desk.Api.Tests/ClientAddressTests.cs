@@ -125,6 +125,20 @@ public sealed class ClientAddressTests
         Assert.Equal("198.51.100.10", ClientAddress.Resolve(IPAddress.Parse(RenderLb), h, true)?.ToString());
     }
 
+    [Theory]
+    [InlineData("162.158.0.0/15")] // a Cloudflare range listed by mistake
+    [InlineData("0.0.0.0/0")]      // or a range wide enough to cover Cloudflare
+    public void A_trusted_list_never_skips_a_cloudflare_hop(string listed)
+    {
+        // A Worker reaching Render directly arrives from a Cloudflare address with a forged prefix. Skipping that hop
+        // as trusted would key on the forged entry; it must resolve exactly as with no list (the edge, R160-01).
+        var trusted = ClientAddress.ParseNetworks(listed);
+        var h = new HeaderDictionary { ["X-Forwarded-For"] = $"{Spoof}, {CfEdge}" };
+        Assert.Equal(CfEdge, ClientAddress.Resolve(IPAddress.Parse(RenderLb), h, true, out var source, trusted)?.ToString());
+        Assert.Equal(ClientAddress.Source.Edge, source);
+        Assert.Equal(CfEdge, ClientAddress.Resolve(IPAddress.Parse(RenderLb), h, true)?.ToString());
+    }
+
     [Fact]
     public void A_client_cannot_hide_behind_hops_it_writes_itself()
     {
