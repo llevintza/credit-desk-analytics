@@ -116,6 +116,7 @@ export class DealExplorer {
     rowModelType: 'clientSide',
     getRowId: (p) => String(p.data.dealId),
     suppressMovableColumns: true,
+    suppressColumnVirtualisation: true, // 17 columns: render them all (find-in-page, copy, e2e)
     rowClassRules: { 'selected-row': (p) => p.data?.dealId === this.selectedId() },
     tooltipShowDelay: 400,
   };
