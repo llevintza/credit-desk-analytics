@@ -271,7 +271,7 @@ See ADR-0003 and ADR-0004.
   - Both `--max-mb` and `--cap-mb` (and the seeder's `MB` output: `SEED_PEAK_EST_MB`, `DB_SIZE_MB`) are MiB (1024² bytes); the peak estimate rounds up.
 - Exit codes: 0 seeded or skipped, 1 bad arguments or pending migrations, 2 over `--max-mb` or `--cap-mb` (nothing committed), 3 unexpected error (SQLSTATE 53100 disk full gets its own message), 130 cancelled (before or after COMMIT; the message says which).
 - The prior business day is generated as the snapshot's second as-of date.
-- **Cancellation (Ctrl+C or a CI timeout) before COMMIT rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130. A cancellation **after COMMIT** (during `ANALYZE` or the final size report) keeps the new data and its `app.seed_metadata` row, so the next `--if-changed` run skips; it prints `ERROR: cancelled after the seed was committed (version …, scale …); ANALYZE/size report skipped.` and also exits 130 (#285).
+- **Cancellation (Ctrl+C or a CI timeout) before COMMIT rolls back the single seeding transaction,** leaving the previous data intact. Exit code 130. A cancellation **after COMMIT** (during `ANALYZE` or the final size report) keeps the new data and its `app.seed_metadata` row, so the next `--if-changed` run skips; it prints `ERROR: cancelled after the seed was committed (version …, scale …); ANALYZE/size report skipped.` and also exits 130 (#285). A cancellation during the final size read of an `--if-changed` skip or of `--size-report` (neither writes anything) prints `ERROR: cancelled; nothing was changed (seed skipped / size report only).` and exits 130, whether it surfaces as a cancellation or as a database error (#324).
 - **Each table draws from its own RNG stream** (xoshiro256**, pinned by a test), so adding rows to one table never shifts another table's values.
 - **Bulk load via Npgsql binary `COPY`** (`BeginBinaryImport`). EF `AddRange` is only for small tables. ADR-0004 **MUST** include the measured comparison of the two for the snapshot table.
 - **Idempotent:** writes a row to `app.seed_metadata` (seed, scale, version, completed_at). If that row matches, skip.
@@ -526,8 +526,10 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Rate limiting** (`AddRateLimiter`):
   - per user: token bucket, 60 requests/min, burst 20
   - per IP on `/api/auth/login`: 5/min
+  - per signed-in user concurrency: 1 request in flight, queue 8, then 429 (`RATE_LIMIT_PER_USER_CONCURRENCY` / `RATE_LIMIT_PER_USER_QUEUE`); exports are capped separately (below)
   - **global concurrency limiter** on DB-bound endpoints: 8 concurrent, queue 32, then 429 with `Retry-After`
-- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows and 1 at a time per user.
+- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows.
+- **Exports:** 1 at a time per user and `EXPORT_GLOBAL_SLOTS` (2) in total, without waiting: 429 with `Retry-After`. Deadline `EXPORT_TIMEOUT_SECONDS` (60) on the whole stream: 503 before any output; mid-stream the connection is aborted, so a truncated download fails.
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
 - **Audit:** `app.audit` records (user, endpoint, rows returned, ms, cache status, timestamp) and logins (success and failure). Admin page **Usage** shows requests per user per day, cache hit ratio and slowest queries.
@@ -856,7 +858,7 @@ services:
 6. **workflows:** actionlint + shellcheck
 7. **db-tools:** `.github/actions/build-db-tools` on a clean checkout (no prior `dotnet restore`/`dotnet build`, no secrets, no production environment, no DB). Asserts `dbtools/efbundle` and `dbtools/seeder/Desk.Seeder`. The `api` job also uses this action, but only after `dotnet build`, which does not catch a missing restore on deploy/db-ops.
 8. **gate-tests:** `node --test --experimental-test-coverage` on `perf/coverage-gate.mjs` at **≥80% line and branch**. It also runs `.github/scripts/concurrency-wiring.test.mjs`, which asserts the CI and Deploy concurrency wiring below (#207).
-9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10). Then `perf/LastBlockCheck` (#43 AC4): with ≥ 18,000 rows, the final 500 ids of the Risk view sorted by `market_value` desc and every summary SUM must equal independent SQL. Any mismatch exits 1 and fails the job. Then k6 (`perf/positions.js`, `grafana/k6` pinned by digest, #135) on the same stack, with the per-user rate limit raised for that run's app only (a compose override in the job; never `render.yaml` or the production defaults): p50/p95/max for the worst-case MISS (Risk and All presets, the whole book under a never-asked filter) and the HIT (`X-Cache: HIT` asserted) go to the step summary against 150 / 15 ms, with OVER marked. The step is `continue-on-error` until #87 makes it required: a breach fails the step and annotates the run, but not the job.
+9. **budgets:** the compose stack migrated and seeded at scale 1.0, with a throwaway account (generated password, masked). `node perf/payload-size.mjs` fails above the Risk first-block budget and warns above All (README §10), and fails when the largest P2 response (fund 1 ITD, `GET /api/funds/1/performance?range=ITD`) is 5 KB or more on the wire (README §6). Then `perf/LastBlockCheck` (#43 AC4): with ≥ 18,000 rows, the final 500 ids of the Risk view sorted by `market_value` desc and every summary SUM must equal independent SQL. Any mismatch exits 1 and fails the job. Then k6 (`perf/positions.js`, `grafana/k6` pinned by digest, #135) on the same stack, with the per-user rate limit raised for that run's app only (a compose override in the job; never `render.yaml` or the production defaults): p50/p95/max for the worst-case MISS (Risk and All presets, the whole book under a never-asked filter) and the HIT (`X-Cache: HIT` asserted) go to the step summary against 150 / 15 ms, with OVER marked. The step is `continue-on-error` until #87 makes it required: a breach fails the step and annotates the run, but not the job.
 10. **e2e:** the compose stack (with `e2e/docker-compose.e2e.yml`: higher per-user limits for one automated user) migrated and seeded at scale 0.2, a throwaway viewer (generated, masked password), then Playwright: log in, the P1 acceptance flows, no console or CSP errors, and dark/light screenshots of every page. The report and screenshots are uploaded as artifacts.
 
 **Per-area runs (#169, [ADR-0023](docs/adr/0023-per-area-ci-jobs.md)):** on `pull_request`, a `changes` job runs `.github/scripts/ci-changes.mjs` **from the BASE_SHA checkout** over `git diff --name-only --no-renames BASE...HEAD` and sets one flag per area. Docs (`*.md` anywhere except under `src/` and `web/src/`, where only `AGENTS.md`/`CLAUDE.md` count; `docs/**`; `.claude/skills/**`) set none. Shared triggers (`.github/**` other than Markdown, `Directory.*.props`, `global.json`, `dotnet-tools.json`, `*.sln`/`*.slnx`, lockfiles, Docker/compose files, `perf/coverage-*`, `tests/testconfig.json`, `.gitleaks.toml`), any path that matches no area, and an empty diff set every flag.
@@ -932,6 +934,21 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 
 **Known limit:** every bot acts as `llevintza`, so GitHub can't require an approving review and CODEOWNERS is advisory only. The `[workflows]` title prefix is also advisory only: no protection enforces it. The control is process: only Tech Coordinator (or Leo) merges. Same-repo PRs can edit `claude-review.yml` and use the `claude-review` key; accepted because the review is advisory and the key is dedicated and spend-capped. Forks and Dependabot skip. `cursor[bot]` (agent pushes) is allowed via `allowed_bots`; other bots skip.
 
+### 14.6 Front end on GitHub Pages: `.github/workflows/pages.yml`, after CI passes on `main` (or `workflow_dispatch`)
+
+The same SPA that Render serves from `wwwroot` is also published to `https://llevintza.github.io/credit-desk-analytics/` and calls the Render API cross-origin with bearer tokens (ADR-0024). It is gated on CI like the Render deploy (§14.2): `workflow_run` of CI with `conclusion == success`, for a `push` to `main` in this repository. A `gate` job (no environment, no secrets) then checks that the commit is still the tip of `main`, and `build` checks out exactly that commit. A green run for an older commit is skipped with a summary, because the tip's own run publishes. A dispatch is allowed from `refs/heads/main` only. It republishes after every green `main` push, not only `web/` changes; that is cheap and idempotent. It doesn't wait for the Render deploy: the static shell is independent of the API version, and the API keeps accepting the previous shell's calls.
+
+| Job | Steps |
+|---|---|
+| **gate** (`contents: read`) | Event, branch, repository and exact-tip checks, as in `deploy.yml`. |
+| **build** (`contents: read`, no environment, no secrets) | Checks out the gated commit. Checks the repository variable `APP_URL`: an `https://` origin with no path, or the run fails. Then `npm ci`, and `ng build --base-href /credit-desk-analytics/ --define DESK_API_BASE_URL="<APP_URL>"`. Adds a `<meta http-equiv="Content-Security-Policy">`, because Pages can't send headers: the app's CSP with `APP_URL` in `connect-src`. Copies `index.html` to `404.html`, so deep links open the router. Then `actions/upload-pages-artifact`. |
+| **deploy** (`pages: write`, `id-token: write`, environment `github-pages`) | `actions/deploy-pages`. Nothing else runs with these permissions. |
+
+- **Concurrency:** `group: pages`, `cancel-in-progress: false`. A deployment is never cut off, and the newest pending run wins.
+- **Set by hand** (agents can't change settings): Settings → Pages → Source = **GitHub Actions**; a **repository** variable `APP_URL` (not a secret). The `production` environment's `APP_URL` can't be read by a job outside that environment, and this workflow stays outside it. On Render, `CORS_ALLOWED_ORIGINS` must include `https://llevintza.github.io` (README §7.1, `render.yaml`).
+- **One origin for the whole account** (accepted by Leo, 2026-10-11, ADR-0024): every Pages site under `https://llevintza.github.io` (today also `/energlens`) shares this app's origin. That means each one passes the API's CORS check and can read the tab's `sessionStorage`, refresh token included. Rule: **no Pages site on the account loads untrusted third-party scripts.**
+- **Limits on Pages:** no response headers, so no HSTS from us, no `frame-ancestors` (a meta CSP ignores it) and no `Permissions-Policy`. A deep link's document is served with HTTP 404 (the `404.html` fallback), and the app then routes normally.
+
 ---
 
 ## 15. Delivery plan: one PR per phase
@@ -991,14 +1008,15 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Spec | #1 | Merged |
 | 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review); follow-up #207: every main push gets its own CI run, only the tip deploys (in review) |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
+| GitHub Pages deploy (`[workflows]`) | #350 | In review: `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024); needs the bearer-auth PR merged first |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review) |
 | GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
-| 5 Fund Performance | phase-5/fund-performance | In review |
-| 6 Insights Board | n/a | Not started |
+| 5 Fund Performance | #144 | Merged |
+| 6 Insights Board | phase-6/insights-board | In review |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
