@@ -8,11 +8,14 @@ import { fileURLToPath } from "node:url";
 import {
   BOOTSTRAP_THRESHOLDS,
   GateFailure,
+  MAX_MATCH_TOLERANCE_PERCENT,
   canonicalCobertura,
   canonicalLcov,
   describeCoverageScope,
+  expectedPercent,
   finitePercent,
   meetsFloor,
+  meetsFloorWithin,
   parseArgs,
   parseSuites,
   runGate,
@@ -29,7 +32,7 @@ const VALID_THRESHOLDS = {
   diffLineMinPercent: 80,
   diffBranchMinPercent: 80,
   overallMustNotDrop: true,
-  baselineMatchTolerancePercent: 0.5,
+  baselineMatchTolerancePercent: 0.1,
 };
 
 const VALID_BASELINE = {
@@ -1025,10 +1028,30 @@ test("unresolvable base commit fails closed", () => {
   }
 });
 
-test("widening tolerance vs bootstrap defaults fails", () => {
+test("a tolerance above the 0.1pp cap fails the schema", () => {
   const { dir, base } = setupPassRepo();
   try {
     write(dir, "perf/coverage-thresholds.json", JSON.stringify({ ...VALID_THRESHOLDS, baselineMatchTolerancePercent: 1 }));
+    commit(dir, "widen tol past the cap");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(base),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, true);
+    assert.match(r.output, /baselineMatchTolerancePercent must be <= 0\.1pp/);
+  } finally {
+    removeRepo(dir);
+  }
+});
+
+test("widening tolerance vs BASE_SHA fails, even under the cap", () => {
+  const { dir } = setupPassRepo();
+  try {
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify({ ...VALID_THRESHOLDS, baselineMatchTolerancePercent: 0.05 }));
+    const base = commit(dir, "base narrows tol");
+    write(dir, "perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
     commit(dir, "widen tol");
     const r = runGate({
       root: dir,
@@ -1688,7 +1711,7 @@ test("R5-M1 (b): direct push that zeroes the thresholds fails", () => {
         diffLineMinPercent: 0,
         diffBranchMinPercent: 0,
         overallMustNotDrop: true,
-        baselineMatchTolerancePercent: 0.5,
+        baselineMatchTolerancePercent: 0.1,
       }),
     );
     commit(dir, "zero thresholds");
@@ -2057,7 +2080,7 @@ test("web-only run skips the dotnet gates instead of failing on missing data", (
     // Without --suites the missing dotnet data still counts as 0% and fails (unchanged behaviour).
     const legacy = runQuiet(dir, gateArgs(base));
     assert.equal(legacy.failed, true);
-    assert.match(legacy.output, /dotnet overall line 0\.0% dropped/);
+    assert.match(legacy.output, /dotnet overall line 0\.000% \(0\/0\) dropped/);
 
     const r = runQuiet(dir, gateArgs(base, ["--suites", "web"]));
     assert.equal(r.failed, false, r.output);
@@ -2147,4 +2170,104 @@ test("ci.yml passes --suites from the change flags", () => {
   assert.ok(yml.includes('--suites "$SUITES"'));
   assert.ok(yml.includes("RUN_API: ${{ needs.changes.outputs.run_api }}"));
   assert.ok(yml.includes("RUN_WEB: ${{ needs.changes.outputs.run_web }}"));
+});
+
+// #318: compare at measured precision with a <= 0.1pp tolerance in the drop direction only.
+
+test("meetsFloorWithin and expectedPercent at the 0.1pp boundary", () => {
+  assert.equal(MAX_MATCH_TOLERANCE_PERCENT, 0.1);
+  assert.equal(BOOTSTRAP_THRESHOLDS.baselineMatchTolerancePercent, 0.1);
+  assert.equal(meetsFloorWithin(98.74, 98.8, 0.1), true);
+  assert.equal(meetsFloorWithin(98.7, 98.8, 0.1), true);
+  assert.equal(meetsFloorWithin(98.69, 98.8, 0.1), false);
+  assert.equal(meetsFloorWithin(98.6, 98.8, 0.1), false);
+  assert.equal(meetsFloorWithin(98.74, 98.8, 0), false);
+  assert.equal(meetsFloorWithin(Number.NaN, 98.8, 0.1), false);
+  assert.equal(expectedPercent(98.74, 98.8, 0.1), 98.8);
+  assert.equal(expectedPercent(98.92, 98.8, 0.1), 98.9);
+  assert.equal(expectedPercent(98.6, 98.8, 0.1), 98.6);
+  assert.throws(
+    () => validateThresholds({ ...VALID_THRESHOLDS, baselineMatchTolerancePercent: 0.2 }),
+    /must be <= 0\.1pp/,
+  );
+  assert.equal(validateThresholds({ ...VALID_THRESHOLDS, baselineMatchTolerancePercent: 0 }).baselineMatchTolerancePercent, 0);
+});
+
+/** Base floor dotnet 100/98.8, web 100/100; head measures dotnet branch at hit/total. */
+function runBranchJitter(hit, total) {
+  const dir = initRepo();
+  try {
+    write(dir, "perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "tests/testconfig.json", readFileSync(join(repoRoot, "tests/testconfig.json"), "utf8"));
+    write(dir, "src/Desk.Api/Hello.cs", "class Hello { void M() {} }\n");
+    write(dir, "web/src/app/app.ts", "export const x = 1;\n");
+    headJson(dir, { dotnet: { line: 100, branch: 98.8 }, web: { line: 100, branch: 100 } });
+    const base = commit(dir, "base with branch floor 98.8");
+    write(
+      dir,
+      "cov/dotnet/a.cobertura.xml",
+      cobertura({
+        source: join(dir, "src"),
+        pkg: "Desk.Api",
+        filename: "Desk.Api/Hello.cs",
+        lines: [
+          [1, 1],
+          [2, 1, `${Math.floor((100 * hit) / total)}% (${hit}/${total})`],
+        ],
+      }),
+    );
+    write(
+      dir,
+      "cov/web/lcov.info",
+      lcov("src/app/app.ts", [[1, 1]], [
+        [1, 0, 0, 1],
+        [1, 0, 1, 1],
+      ]),
+    );
+    return runQuiet(dir, gateArgs(base));
+  } finally {
+    removeRepo(dir);
+  }
+}
+
+test("#318: a sub-tolerance dip passes (98.74% rounds to 98.7 vs a 98.8 floor)", () => {
+  const r = runBranchJitter(9874, 10000);
+  assert.equal(r.failed, false, r.output);
+  assert.match(r.output, /dotnet measured: line 2\/2 \(100\.000%\), branch 9874\/10000 \(98\.740%\)/);
+  assert.match(r.output, /allows a dip of at most 0\.1pp, in the drop direction only/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.8 });
+});
+
+test("#318: a dip of exactly the tolerance passes", () => {
+  const r = runBranchJitter(987, 1000);
+  assert.equal(r.failed, false, r.output);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.8 });
+});
+
+test("#318: a real drop of 0.2pp still fails", () => {
+  const r = runBranchJitter(986, 1000);
+  assert.equal(r.failed, true);
+  assert.match(r.output, /dotnet overall branch 98\.600% \(986\/1000\) dropped below BASE_SHA 98\.8% by more than 0\.1pp/);
+  assert.match(r.output, /committed baseline dotnet .* is more than 0\.1pp above measured/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.6 });
+});
+
+test("#318: a drop just past the tolerance fails", () => {
+  const r = runBranchJitter(9869, 10000);
+  assert.equal(r.failed, true);
+  assert.match(r.output, /dotnet overall branch 98\.690% .* dropped below BASE_SHA 98\.8%/);
+});
+
+test("#318: an upward jitter within the tolerance does not fail the baseline check", () => {
+  const r = runBranchJitter(9892, 10000);
+  assert.equal(r.failed, false, r.output);
+  assert.doesNotMatch(r.output, /behind measured/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.9 });
+});
+
+test("#318: a real improvement past the tolerance still asks for a baseline bump", () => {
+  const r = runBranchJitter(990, 1000);
+  assert.equal(r.failed, true);
+  assert.match(r.output, /committed baseline dotnet line\/branch 100\.0\/98\.8 is behind measured 100\.0\/99\.0 by more than 0\.1pp/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 99 });
 });

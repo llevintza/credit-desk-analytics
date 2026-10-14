@@ -4,8 +4,12 @@
  *   1. New/changed coverable lines vs the merge-base with BASE_SHA >= diffLineMinPercent
  *      (same for branches).
  *   2. Overall line/branch % per project never drops vs the baseline at BASE_SHA.
- *   3. The committed baseline must match measured numbers and must not sit
- *      below the BASE_SHA floor.
+ *      Measured coverage is compared at full precision (hit/total, unrounded)
+ *      and may sit at most `baselineMatchTolerancePercent` (<= 0.1pp,
+ *      MAX_MATCH_TOLERANCE_PERCENT) below the 1-decimal floor. The tolerance
+ *      applies in the drop direction only; a larger drop fails (#318).
+ *   3. The committed baseline must match measured numbers within the same
+ *      tolerance and must never sit below the BASE_SHA floor (no tolerance).
  *
  * CI always runs THIS FILE from the BASE_SHA checkout
  * (`_base/perf/coverage-gate.mjs`). There is no HEAD fallback. If `_base` is
@@ -47,7 +51,7 @@ export const BOOTSTRAP_THRESHOLDS = Object.freeze({
   diffLineMinPercent: 80,
   diffBranchMinPercent: 80,
   overallMustNotDrop: true,
-  baselineMatchTolerancePercent: 0.5,
+  baselineMatchTolerancePercent: 0.1,
 });
 
 export const ZERO_FLOOR = Object.freeze({
@@ -59,6 +63,12 @@ export const OVERRIDE_FILE = "perf/coverage-override.json";
 export const TESTCONFIG_FILE = "tests/testconfig.json";
 
 export const NO_DROP_EPS = 1e-9;
+
+/**
+ * Hard cap on `baselineMatchTolerancePercent` (#318). Run-to-run jitter in the
+ * .NET branch count is well under 0.1pp; a real drop of 0.2pp or more must fail.
+ */
+export const MAX_MATCH_TOLERANCE_PERCENT = 0.1;
 
 export const SUITES = Object.freeze(["dotnet", "web"]);
 
@@ -131,6 +141,11 @@ export function validateThresholds(obj, label = "thresholds") {
   finitePercent(obj.diffLineMinPercent, `${label}.diffLineMinPercent`);
   finitePercent(obj.diffBranchMinPercent, `${label}.diffBranchMinPercent`);
   finitePercent(obj.baselineMatchTolerancePercent, `${label}.baselineMatchTolerancePercent`);
+  if (obj.baselineMatchTolerancePercent > MAX_MATCH_TOLERANCE_PERCENT) {
+    throw new GateFailure(
+      `${label}.baselineMatchTolerancePercent must be <= ${MAX_MATCH_TOLERANCE_PERCENT}pp, got ${obj.baselineMatchTolerancePercent}.`,
+    );
+  }
   if (typeof obj.overallMustNotDrop !== "boolean") {
     throw new GateFailure(`${label}.overallMustNotDrop must be a boolean.`);
   }
@@ -190,6 +205,24 @@ export function baselineEq(a, b) {
 /** NaN-safe: NaN >= x is false, so this FAILS closed. */
 export function meetsFloor(actual, floor, eps = NO_DROP_EPS) {
   return actual + eps >= floor;
+}
+
+/**
+ * No-drop at measured precision (#318): the unrounded measured % may sit up to
+ * `tol` pp below the floor. NaN-safe through meetsFloor.
+ */
+export function meetsFloorWithin(measured, floor, tol) {
+  return meetsFloor(Number(measured) + tol, floor);
+}
+
+/**
+ * The 1-decimal value to commit for a measured %: round1(measured), except that
+ * a dip the no-drop tolerance absorbs keeps the floor, so the printed JSON never
+ * asks for a lowered baseline.
+ */
+export function expectedPercent(measured, floor, tol) {
+  const r = round1(measured);
+  return r < floor && meetsFloorWithin(measured, floor, tol) ? floor : r;
 }
 
 export function round1(n) {
@@ -405,6 +438,13 @@ export function runGate(options = {}) {
       say(`- **Skipped:** the ${name} suite did not run in this CI run (#169); its coverage gates were not evaluated.`);
     }
     if (skipped.length) say("");
+    for (const name of suites) {
+      const m = measured[name];
+      say(
+        `- ${name} measured: line ${m.lineHit}/${m.lineTotal} (${m.line.toFixed(3)}%), branch ${m.branchHit}/${m.branchTotal} (${m.branch.toFixed(3)}%).`,
+      );
+    }
+    say("");
     const tol = thresholds.baselineMatchTolerancePercent;
     say(`gate-path: ${decisionPath}`);
     say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`. Default branch: \`${defaultBranch}\`${defaultSha ? ` (\`${defaultSha}\`)` : ""}.`);
@@ -413,7 +453,8 @@ export function runGate(options = {}) {
     say(`Thresholds: \`${thresholdsPath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`).`);
     say(`Floor: \`${baselinePath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`).`);
     say(
-      `Match tolerance at BASE_SHA: ${tol}pp (${who} may not widen it). No-drop uses 1-decimal plus epsilon ${NO_DROP_EPS}.`,
+      `Match tolerance at BASE_SHA: ${tol}pp (cap ${MAX_MATCH_TOLERANCE_PERCENT}pp; ${who} may not widen it). ` +
+        `No-drop compares unrounded measured coverage (hit/total) with the floor and allows a dip of at most ${tol}pp, in the drop direction only.`,
     );
     say("");
 
@@ -429,13 +470,17 @@ export function runGate(options = {}) {
       const m = measured[name];
       const f = overallFloor[name];
       if (thresholds.overallMustNotDrop) {
-        if (!meetsFloor(round1(m.line), round1(f.line))) {
+        if (!meetsFloorWithin(m.line, round1(f.line), tol)) {
           failed = true;
-          say(`- **FAIL** ${name} overall line ${pct(m.line)}% dropped below BASE_SHA ${pct(f.line)}%.`);
+          say(
+            `- **FAIL** ${name} overall line ${m.line.toFixed(3)}% (${m.lineHit}/${m.lineTotal}) dropped below BASE_SHA ${pct(f.line)}% by more than ${tol}pp.`,
+          );
         }
-        if (!meetsFloor(round1(m.branch), round1(f.branch))) {
+        if (!meetsFloorWithin(m.branch, round1(f.branch), tol)) {
           failed = true;
-          say(`- **FAIL** ${name} overall branch ${pct(m.branch)}% dropped below BASE_SHA ${pct(f.branch)}%.`);
+          say(
+            `- **FAIL** ${name} overall branch ${m.branch.toFixed(3)}% (${m.branchHit}/${m.branchTotal}) dropped below BASE_SHA ${pct(f.branch)}% by more than ${tol}pp.`,
+          );
         }
       }
       const d = diff[name];
@@ -471,16 +516,18 @@ export function runGate(options = {}) {
         }
         continue;
       }
-      if (!(round1(c.line) <= round1(m.line) + NO_DROP_EPS) || !(round1(c.branch) <= round1(m.branch) + NO_DROP_EPS)) {
+      // Both measured-match checks allow the same tolerance, so run-to-run jitter of
+      // up to `tol` in either direction neither fails nor forces a baseline edit (#318).
+      if (!(round1(c.line) <= m.line + tol + NO_DROP_EPS) || !(round1(c.branch) <= m.branch + tol + NO_DROP_EPS)) {
         failed = true;
         say(
-          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is above measured ${pct(m.line)}/${pct(m.branch)}.`,
+          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is more than ${tol}pp above measured ${m.line.toFixed(3)}/${m.branch.toFixed(3)}.`,
         );
       }
-      if (!meetsFloor(round1(c.line), floor1(m.line)) || !meetsFloor(round1(c.branch), floor1(m.branch))) {
+      if (!meetsFloor(round1(c.line) + tol, floor1(m.line)) || !meetsFloor(round1(c.branch) + tol, floor1(m.branch))) {
         failed = true;
         say(
-          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is behind measured ${pct(m.line)}/${pct(m.branch)}. Update \`perf/coverage-baseline.json\` to the measured JSON below.`,
+          `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is behind measured ${pct(m.line)}/${pct(m.branch)} by more than ${tol}pp. Update \`perf/coverage-baseline.json\` to the measured JSON below.`,
         );
       }
     }
@@ -525,7 +572,10 @@ export function runGate(options = {}) {
       SUITES.map((name) => [
         name,
         ran(name)
-          ? { line: round1(measured[name].line), branch: round1(measured[name].branch) }
+          ? {
+              line: expectedPercent(measured[name].line, round1(overallFloor[name].line), tol),
+              branch: expectedPercent(measured[name].branch, round1(overallFloor[name].branch), tol),
+            }
           : { line: committed[name].line, branch: committed[name].branch },
       ]),
     );
