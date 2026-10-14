@@ -89,10 +89,11 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 | Whole stack | `docker compose up --build` (http://localhost:8080) |
 | Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
 | E2E (phase 4) | `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build`, migrate, seed `--scale 0.2`, create a viewer with Desk.UserAdmin, then `cd e2e && npm ci && npx playwright install chromium && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test` (CI `e2e` job; `PERF=1 … npx playwright test perf` for ADR-0009 numbers) (local compose/CI stack only; create the viewer with Desk.UserAdmin against the local or test database, never Render, Neon or production) |
-| Payload budget (phase 3) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs` (CI `budgets` job; exit 1 over the Risk budget) |
+| Payload budget (phase 3) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… node perf/payload-size.mjs` (CI `budgets` job; exit 1 over the Risk budget or when the P2 fund 1 ITD response is 5 KB or more) |
 | Last block + summary vs SQL (#43 AC4) | `BASE_URL=… DESK_EMAIL=… DESK_PASSWORD=… DATABASE_URL=… dotnet run -c Release --project perf/LastBlockCheck` (CI `budgets` job; exit 1 on any mismatch) |
 | Grid benchmarks (ADR-0006/7/8) | `DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 perf/out`, then `(cd perf && npm ci) && node perf/parse-bench.mjs perf/out` |
 | API latency p95 (k6) | `docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=… -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js` (local stack only: raise RATE_LIMIT_PER_USER_PER_MIN / RATE_LIMIT_PER_USER_BURST in that local process's environment for the run; never on Render, in render.yaml or the Render dashboard) |
+| Fund performance p95 (k6, P2) | `docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=… -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/funds.js` (local stack only: raise RATE_LIMIT_PER_USER_PER_MIN / RATE_LIMIT_PER_USER_BURST in that local process's environment for the run; never on Render, in render.yaml or the Render dashboard. DESK_EMAIL is a throwaway admin created locally with Desk.UserAdmin: `setup()` clears the response cache. Not run in CI) |
 
 ## Deployment
 
