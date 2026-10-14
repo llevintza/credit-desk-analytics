@@ -134,6 +134,9 @@ public static class AuthEndpoints
 
         var principal = await signIn.CreateUserPrincipalAsync(user);
         var identity = (ClaimsIdentity)principal.Identity!;
+        // As at login (#275): roles are re-read here, so an account whose last role was removed gets no new tokens.
+        if (!identity.HasClaim(c => c.Type == identity.RoleClaimType))
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Refresh failed", detail: RefreshFailedDetail);
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.AuthTimeClaim)!.Clone());
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.SessionIdClaim)!.Clone());
         await http.SignInAsync(AuthSetup.Scheme, principal);
