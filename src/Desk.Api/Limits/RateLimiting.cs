@@ -85,9 +85,9 @@ public static class RateLimiting
     // UseRouting runs before the limiter, so the matched endpoint is known here.
     internal static bool IsExport(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<ExportEndpoint>() is not null;
 
-    /// <summary>Signed-in users get their own bucket; anonymous callers get one per client IP.</summary>
+    /// <summary>Signed-in users get their own bucket, keyed on the account id (#185); anonymous callers get one per client IP.</summary>
     internal static string PartitionKey(HttpContext http, ClientAddress clients) =>
-        http.User.IsSignedIn() ? $"u:{http.User.Identity!.Name}" : $"ip:{clients.For(http)}";
+        http.User.IsSignedIn() && http.User.UserId() is { } id ? $"u:{id}" : $"ip:{clients.For(http)}";
 
     internal static async ValueTask OnRejectedAsync(OnRejectedContext ctx, CancellationToken ct)
     {

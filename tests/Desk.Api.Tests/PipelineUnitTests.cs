@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
+using Desk.Api.Limits;
 using Desk.Data.App;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Authentication;
@@ -143,5 +144,24 @@ public sealed class PipelineUnitTests
         Assert.True(SignedIn().IsSignedIn());
         Assert.False(new ClaimsPrincipal(new ClaimsIdentity()).IsSignedIn());
         Assert.False(new ClaimsPrincipal().IsSignedIn());
+    }
+
+    [Fact]
+    public void Signed_in_callers_are_partitioned_on_their_account_id_and_others_on_their_address()
+    {
+        var clients = new ClientAddress(false);
+        var withId = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com"), new Claim(ClaimTypes.NameIdentifier, "42")], "test")),
+        };
+        Assert.Equal("u:42", RateLimiting.PartitionKey(withId, clients)); // #185: never the user name
+
+        var noId = new DefaultHttpContext { User = SignedIn() };
+        noId.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.7");
+        Assert.Equal("ip:203.0.113.7", RateLimiting.PartitionKey(noId, clients));
+
+        var anonymous = new DefaultHttpContext();
+        anonymous.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.8");
+        Assert.Equal("ip:203.0.113.8", RateLimiting.PartitionKey(anonymous, clients));
     }
 }
