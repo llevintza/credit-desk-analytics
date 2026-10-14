@@ -1016,7 +1016,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | #144 | Merged |
-| 6 Insights Board | phase-6/insights-board | In review |
+| 6 Insights Board | #339 | Merged; follow-up: insights calls pinned to the per-user concurrency cap (#127), in review; the P3 delayed-source e2e is red on main under that cap (policy decision pending) |
 | 7 Deal Explorer | n/a | Not started |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
