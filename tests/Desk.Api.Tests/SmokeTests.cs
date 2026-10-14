@@ -16,6 +16,15 @@ public sealed class SmokeTests(WebApplicationFactory<Program> factory) : IClassF
     }
 
     [Fact]
+    public async Task Health_db_is_an_anonymous_probe_not_the_spa()
+    {
+        // #113: no database here, so it answers down: a 503 problem, not a 401 and not the SPA's HTML.
+        var res = await factory.CreateClient().GetAsync("/health/db", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
+        Assert.Equal("application/problem+json", res.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
     public async Task Api_requires_authentication()
     {
         var res = await factory.CreateClient().GetAsync("/api/me", TestContext.Current.CancellationToken);
