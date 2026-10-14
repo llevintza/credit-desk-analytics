@@ -1017,7 +1017,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | #144 | Merged |
 | 6 Insights Board | phase-6/insights-board | In review |
-| 7 Deal Explorer | n/a | Not started |
+| 7 Deal Explorer | phase-7/deal-explorer | In review: `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
 | 10 Intraday overlay (stretch) | n/a | Not started |
