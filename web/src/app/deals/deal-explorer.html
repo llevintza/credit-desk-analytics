@@ -1,0 +1,107 @@
+<section class="toolbar" aria-label="Deal explorer controls">
+  <input #quickInput class="quick" data-testid="quick-filter" type="search" placeholder="Quick filter  ( / )" aria-label="Quick filter deals"
+         [value]="quick()" (input)="onQuick($event)" />
+  @if (list().kind === 'ready') {
+    <span class="caption" data-testid="deal-caption">
+      {{ summary().deals }} deals · {{ summary().zeroBond }} without bonds yet · {{ summary().held }} held in scope
+    </span>
+  }
+  <span class="spacer"></span>
+  <span class="caption">Click a deal for its capital structure</span>
+</section>
+
+<div class="layout">
+  <div class="master">
+    @switch (list().kind) {
+      @case ('error') {
+        <div class="error-tile" role="alert">Could not load deals. <button type="button" (click)="reload()">Retry</button></div>
+      }
+      @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading deals"></div> }
+    }
+    @if (list().kind === 'ready') {
+      <ag-grid-angular class="grid" data-testid="deal-grid" [gridOptions]="listOptions" [columnDefs]="listColumns()" [rowData]="rows()"
+                       [quickFilterText]="quickText()" (gridReady)="onListReady($event)" (rowClicked)="select($event)"
+                       (filterChanged)="onFilterChanged()" />
+    }
+  </div>
+
+  <section class="detail" aria-label="Selected deal" data-testid="deal-detail">
+    @switch (detail().kind) {
+      @case ('none') { <p class="hint">Select a deal to see its tranches, surveillance trend and positions.</p> }
+      @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading deal"></div> }
+      @case ('error') {
+        <div class="error-tile" role="alert">Could not load this deal. <button type="button" (click)="reload()">Retry</button></div>
+      }
+    }
+    @if (view(); as v) {
+      <header class="deal-head">
+        <h2 data-testid="deal-name">{{ v.deal.name }}</h2>
+        <span class="chip">{{ v.deal.sector }} · {{ v.deal.subSector }}</span>
+        <span class="chip">Vintage {{ v.deal.vintage }}</span>
+        <span class="chip">{{ v.deal.collateralType }}</span>
+        <span class="chip">{{ v.deal.status }}</span>
+        <span class="facts">
+          Original <b class="num">{{ money(v.deal.originalBalance) }}</b> {{ v.deal.currency }}
+          · Held MV <b class="num" data-testid="held-mv">{{ v.heldMv === null ? '—' : money(v.heldMv) }}</b>
+        </span>
+      </header>
+
+      <div class="panels">
+        <div class="panel">
+          <h3>Capital structure <span class="sub">current balance, most senior on top</span></h3>
+          @if (v.stack.length === 0) {
+            <p class="empty" data-testid="no-tranches">No tranches yet: the deal is announced and pricing is pending.</p>
+          } @else {
+            <ol class="stack" data-testid="capital-stack" aria-label="Capital structure by current balance">
+              @for (bar of v.stack; track bar.bondId) {
+                <li [title]="bar.label + ': ' + exact('Money', bar.balance) + ' (' + exact('Pct', bar.share) + ')'">
+                  <span class="label">{{ bar.label }}</span>
+                  <span class="track"><span class="bar" [style.width.%]="bar.share * 100"></span></span>
+                  <span class="num value">{{ money(bar.balance) }}</span>
+                  <span class="num share">{{ pct(bar.share) }}</span>
+                </li>
+              }
+            </ol>
+            <ag-grid-angular class="grid" data-testid="tranche-grid" [gridOptions]="trancheOptions" [columnDefs]="trancheCols()"
+                             [rowData]="v.tranches" />
+          }
+        </div>
+
+        <div class="panel">
+          <h3>Surveillance <span class="sub">last {{ v.months.length }} remittance months</span></h3>
+          @if (v.trend.length === 0) {
+            <p class="empty">No remittance reports yet.</p>
+          } @else {
+            <div class="scroll">
+              <table data-testid="trend-table">
+                <thead>
+                  <tr><th scope="col"></th>@for (m of v.months; track m.period) { <th scope="col" class="num" [title]="m.period">{{ m.label }}</th> }</tr>
+                </thead>
+                <tbody>
+                  @for (r of v.trend; track r.id) {
+                    <tr>
+                      <th scope="row">{{ r.label }}</th>
+                      @for (value of r.values; track $index) {
+                        <td class="num" [class.neg]="value !== null && value < 0" [title]="exact(r.kind === 'Count' ? 'Count' : 'Pct', value)">
+                          {{ cell(r.kind === 'Count' ? 'Count' : 'Pct', value) }}
+                        </td>
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+
+          <h3>Positions in scope <span class="sub">{{ v.positions.length }}</span></h3>
+          @if (v.positions.length === 0) {
+            <p class="empty" data-testid="no-positions">None of the selected portfolios holds this deal.</p>
+          } @else {
+            <ag-grid-angular class="grid" data-testid="position-grid" [gridOptions]="positionOptions" [columnDefs]="positionCols()"
+                             [rowData]="v.positions" />
+          }
+        </div>
+      </div>
+    }
+  </section>
+</div>
