@@ -16,7 +16,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0010](0010-signals-onpush-zoneless.md) | Angular: signals + OnPush + zoneless | 4 Shell + Positions UI | Accepted |
 | [0011](0011-long-format-edge-pivot.md) | P2: long format + edge pivot vs SQL pivot (measured) | 5 Fund Performance | Accepted |
 | [0012](0012-insights-per-source-endpoints.md) | Insights: per-source endpoints + per-task connections vs 20 calls vs one call; plain-table tiles (measured) | 6 Insights Board | Accepted |
-| 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
+| [0013](0013-lateral-vs-row-number.md) | "Any one bond per deal": LATERAL … LIMIT 1 vs ROW_NUMBER() = 1 vs DISTINCT ON (EXPLAIN ANALYZE, measured) | 7 Deal Explorer | Accepted |
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
 | [0016](0016-continuous-deployment.md) | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Accepted |
