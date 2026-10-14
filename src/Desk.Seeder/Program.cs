@@ -5,7 +5,8 @@ using Microsoft.Extensions.Configuration;
 
 // Exit codes: 0 ok (seeded or skipped), 1 bad arguments / not migrated, 2 over the size budget or the reseed peak cap
 // (refused before TRUNCATE), 3 unexpected error (53100 disk full gets its own message), 130 cancelled (before COMMIT: rolled
-// back, reported here; after COMMIT: data kept, reported by SeedRunner, #285).
+// back, reported here; after COMMIT: data kept, reported by SeedRunner, #285;
+// final size read of a skip or --size-report: nothing changed, reported by SeedRunner, #324).
 SeedOptions options;
 try { options = SeedOptions.Parse(args); }
 catch (Exception e) when (e is ArgumentException or FormatException or OverflowException) { Console.Error.WriteLine($"ERROR: {e.Message}"); return 1; }

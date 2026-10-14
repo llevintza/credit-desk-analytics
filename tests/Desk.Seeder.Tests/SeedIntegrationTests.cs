@@ -421,6 +421,35 @@ public sealed class SeedIntegrationTests(SeededDatabase db) : IClassFixture<Seed
         Assert.Contains("SEED_ACTION=seeded", o.ToString());
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task Cancelling_the_size_read_of_a_skip_or_size_report_says_nothing_was_changed(bool sizeReport, bool surfacesAsOce)
+    {
+        // #324: nothing is written on these paths, so the message is not "rolled back" and a non-OCE no longer exits 0/2.
+        var before = await StateAsync();
+        var o = new StringWriter();
+        var err = new StringWriter();
+        using var cts = new CancellationTokenSource();
+        var options = sizeReport ? SeededDatabase.Options() with { SizeReportOnly = true, IfChanged = false } : SeededDatabase.Options();
+        var calls = 0;
+        async Task<long> Probe(NpgsqlConnection conn, CancellationToken ct)
+        {
+            calls++;
+            cts.Cancel();
+            return surfacesAsOce ? await SeedRunner.DatabaseSizeAsync(conn, ct) : throw new NpgsqlException("connection broken by cancel");
+        }
+        Assert.Equal(SeedRunner.CancelledExitCode, await SeedRunner.RunAsync(options, db.ConnectionString, o, err, Probe, cts.Token));
+        Assert.Equal(1, calls);
+        Assert.Equal(!sizeReport, o.ToString().Contains("SEED_ACTION=skipped"));
+        Assert.DoesNotContain("DB_SIZE_MB", o.ToString());
+        Assert.Contains("ERROR: cancelled; nothing was changed (seed skipped / size report only).", err.ToString());
+        Assert.DoesNotContain("rolled back", err.ToString());
+        Assert.Equal(before, await StateAsync());
+    }
+
     private static void AssertReportedAsCommitted(string err, SeedOptions options)
     {
         Assert.Contains($"ERROR: cancelled after the seed was committed (version {SeedVersion.Current}, scale {options.Scale}); ANALYZE/size report skipped.", err);
