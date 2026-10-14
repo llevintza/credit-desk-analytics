@@ -3,7 +3,7 @@ import { DestroyRef, Injectable, inject } from '@angular/core';
 import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
 import type { Tokens } from '../core/token.store';
 import {
-  AsOf, CatalogColumn, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, Me, Portfolio, Preset,
+  AsOf, CatalogColumn, DealDetail, DealList, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, Me, Portfolio, Preset,
   PresetState, RequestInfo,
 } from './api.types';
 
@@ -83,6 +83,23 @@ export class DeskApi {
     if (portfolioIds.length) params['portfolioIds'] = portfolioIds.join(',');
     if (grid) params['grid'] = grid;
     return this.http.get<InsightsResult>(`/api/insights/${source}`, { params });
+  }
+
+  /** P4: every deal with its representative bond and the scope's holdings (empty portfolioIds = every entitled one). */
+  deals(asOf: string | null, portfolioIds: number[]): Observable<DealList> {
+    return this.http.get<DealList>('/api/deals', { params: DeskApi.scopeParams(asOf, portfolioIds) });
+  }
+
+  /** P4: one deal's capital structure, surveillance trend and the scope's positions in it. */
+  deal(dealId: number, asOf: string | null, portfolioIds: number[]): Observable<DealDetail> {
+    return this.http.get<DealDetail>(`/api/deals/${dealId}`, { params: DeskApi.scopeParams(asOf, portfolioIds) });
+  }
+
+  private static scopeParams(asOf: string | null, portfolioIds: number[]): Record<string, string> {
+    const params: Record<string, string> = {};
+    if (asOf) params['asOf'] = asOf;
+    if (portfolioIds.length) params['portfolioIds'] = portfolioIds.join(',');
+    return params;
   }
 
   /** One grid block, with what the status bar needs from the response headers and the resource timing. */
