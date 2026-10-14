@@ -113,6 +113,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # docker.io pulls go through mirror.gcr.io first: same digests, Docker Hub fallback (#332).
+      - uses: ./.github/actions/docker-hub-mirror
       # Image pin tracked in deploy/ci-images/actionlint/Dockerfile for Dependabot.
       - name: actionlint
         run: >
@@ -135,7 +137,9 @@ jobs:
       contents: read
     services:
       postgres:
-        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        # Services start before any step, so the docker-hub-mirror action can't cover this pull. mirror.gcr.io
+        # serves Docker Hub's library/postgres at the same digest as docker-compose.yml and Testcontainers (#332).
+        image: mirror.gcr.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
         # Ephemeral, job-local database: trust auth, so no password exists anywhere.
         env:
           POSTGRES_DB: creditdesk
@@ -152,6 +156,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # docker.io pulls go through mirror.gcr.io first: same digests, Docker Hub fallback (#332).
+      - uses: ./.github/actions/docker-hub-mirror
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
@@ -372,6 +378,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # docker.io pulls go through mirror.gcr.io first: same digests, Docker Hub fallback (#332).
+      - uses: ./.github/actions/docker-hub-mirror
       - name: Generate a throwaway local password (never stored)
         run: |
           pw=$(openssl rand -hex 16)
@@ -424,6 +432,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # docker.io pulls go through mirror.gcr.io first: same digests, Docker Hub fallback (#332).
+      - uses: ./.github/actions/docker-hub-mirror
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -536,6 +546,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # docker.io pulls go through mirror.gcr.io first: same digests, Docker Hub fallback (#332).
+      - uses: ./.github/actions/docker-hub-mirror
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
