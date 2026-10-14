@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
-import { ModuleRegistry, QuickFilterModule, type GridApi, type GridOptions, type GridReadyEvent, type RowClickedEvent } from 'ag-grid-community';
+import { ModuleRegistry, QuickFilterModule, type FilterChangedEvent, type GridApi, type GridOptions, type GridReadyEvent, type RowClickedEvent } from 'ag-grid-community';
 import { Observable, catchError, debounceTime, distinctUntilChanged, map, of, startWith, switchMap } from 'rxjs';
 import { formatCell, fullPrecision } from '../core/format';
 import { KeyboardService } from '../core/keyboard.service';
@@ -155,8 +155,8 @@ export class DealExplorer {
     this.grid = e.api;
   }
 
-  protected onFilterChanged(): void {
-    if (this.grid) this.status.visibleRows.set(this.grid.getDisplayedRowCount());
+  protected onFilterChanged(e: FilterChangedEvent): void {
+    this.status.visibleRows.set(e.api.getDisplayedRowCount());
   }
 
   protected select(e: RowClickedEvent<DealRow>): void {

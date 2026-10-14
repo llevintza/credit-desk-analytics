@@ -21,7 +21,7 @@
     @if (list().kind === 'ready') {
       <ag-grid-angular class="grid" data-testid="deal-grid" [gridOptions]="listOptions" [columnDefs]="listColumns()" [rowData]="rows()"
                        [quickFilterText]="quickText()" (gridReady)="onListReady($event)" (rowClicked)="select($event)"
-                       (filterChanged)="onFilterChanged()" />
+                       (filterChanged)="onFilterChanged($event)" />
     }
   </div>
 

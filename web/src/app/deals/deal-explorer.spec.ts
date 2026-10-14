@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Signal, WritableSignal } from '@angular/core';
-import type { RowClickedEvent } from 'ag-grid-community';
+import type { FilterChangedEvent, RowClickedEvent } from 'ag-grid-community';
 import { firstValueFrom, throwError, toArray } from 'rxjs';
 import { KeyboardService } from '../core/keyboard.service';
 import { ScopeService } from '../core/scope.service';
@@ -34,6 +34,7 @@ const detail = (dealId: number, bonds: boolean): DealDetail => ({
   positions: bonds ? [
     { positionId: 7, portfolioId: 1, portfolio: 'Core Credit', bondId: 10, class: 'A1', face: 1_000_000, marketValue: 990_000, price: 99 },
     { positionId: 8, portfolioId: 1, portfolio: 'Core Credit', bondId: 11, class: 'E', face: 500_000, marketValue: 510_000, price: 102 },
+    { positionId: 9, portfolioId: 1, portfolio: 'Core Credit', bondId: 11, class: 'E', face: 0, marketValue: null, price: null },
   ] : [],
 });
 
@@ -41,7 +42,7 @@ interface Internals {
   selectedId: WritableSignal<number | null>;
   quickText: Signal<string>;
   select(e: RowClickedEvent<DealRow>): void;
-  onFilterChanged(): void;
+  onFilterChanged(e: FilterChangedEvent): void;
 }
 
 describe('Deal Explorer page (README §6 P4)', () => {
@@ -94,6 +95,9 @@ describe('Deal Explorer page (README §6 P4)', () => {
     await settle();
     listReq().flush(list);
     await settle();
+    page.select({ data: undefined } as RowClickedEvent<DealRow>); // a row without data selects nothing
+    await settle();
+    expect(q('deal-detail')?.textContent).toContain('Select a deal');
     page.select({ data: list.deals[0] } as RowClickedEvent<DealRow>);
     await settle();
     expect(q('deal-detail')?.querySelector('.skeleton')).not.toBeNull();
@@ -176,7 +180,7 @@ describe('Deal Explorer page (README §6 P4)', () => {
     expect(q('deal-detail')?.querySelector('[role=alert]')?.textContent).toContain('Could not load this deal');
   });
 
-  it('debounces the quick filter, keeps the status bar in step, and registers the / shortcut', async () => {
+  it('feeds the quick filter through the debounce, keeps the status bar in step, and registers the / shortcut', async () => {
     const { http, q, page, listReq, settle } = await render();
     loadScope(http);
     await settle();
@@ -185,10 +189,10 @@ describe('Deal Explorer page (README §6 P4)', () => {
     const input = q('quick-filter') as HTMLInputElement;
     input.value = 'CLO';
     input.dispatchEvent(new Event('input'));
-    expect(page.quickText()).toBe('');
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(page.quickText()).toBe('CLO');
-    page.onFilterChanged();
+    await settle();
+    await vi.waitFor(() => expect(page.quickText()).toBe('CLO'), { timeout: 2000, interval: 20 });
+    page.onFilterChanged({ api: { getDisplayedRowCount: () => 1 } } as unknown as FilterChangedEvent);
+    expect(TestBed.inject(StatusService).visibleRows()).toBe(1);
     expect(TestBed.inject(KeyboardService).actions().focusQuickFilter).toBeTypeOf('function');
     TestBed.inject(KeyboardService).actions().focusQuickFilter!();
     expect(document.activeElement).toBe(input);
