@@ -1,5 +1,5 @@
 import { Page } from '@playwright/test';
-import { expect, test, withSession } from './session';
+import { expect, flushSession, test, withSession } from './session';
 import { gridReady } from './helpers';
 
 /** README §11: every page in dark and light, saved to docs/screenshots/ and attached to the PR. */
@@ -59,6 +59,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page).toHaveURL(/\/login\?signout=unconfirmed$/);
     await expect(page.getByTestId('signout-unconfirmed')).toBeVisible();
     await page.screenshot({ path: `${dir}/signout-unconfirmed-${theme}.png` });
+    await flushSession(); // this context's refresh renewed the shared session's token (#353)
     await context.close();
   });
 }
