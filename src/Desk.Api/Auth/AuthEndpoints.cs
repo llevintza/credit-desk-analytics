@@ -86,13 +86,14 @@ public static class AuthEndpoints
         }
 
         if (!result.Succeeded)
-        {
-            audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
-        }
+            return Refused();
 
         var principal = await signIn.CreateUserPrincipalAsync(user!);
         var identity = (ClaimsIdentity)principal.Identity!;
+        // An account with no role is never signed in (#275): a demo account whose role and removal both failed. The
+        // claims factory has already read the roles, so this costs no query.
+        if (!identity.HasClaim(c => c.Type == identity.RoleClaimType))
+            return Refused();
         identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
         identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, Convert.ToHexString(RandomNumberGenerator.GetBytes(16))));
 
@@ -100,6 +101,12 @@ public static class AuthEndpoints
         // The bearer handler writes the AccessTokenResponse body itself.
         await http.SignInAsync(AuthSetup.Scheme, principal);
         return Results.Empty;
+
+        IResult Refused()
+        {
+            audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
+        }
     }
 
     /// <summary>

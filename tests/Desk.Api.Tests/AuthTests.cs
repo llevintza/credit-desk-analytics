@@ -122,6 +122,24 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task An_account_without_a_role_is_refused_even_with_the_right_password()
+    {
+        // #275: a demo account whose AddToRole and removal both failed is left with no role. It must not sign in.
+        var user = await api.CreateUserAsync();
+        await using (var db = api.NewContext())
+            await db.UserRoles.Where(r => r.UserId == user.Id).ExecuteDeleteAsync(Ct);
+
+        var res = await PostgresApiFactory.PostLoginAsync(api.NewClient(), user.Email!);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Equal(AuthEndpoints.LoginFailedDetail, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+        Assert.False(res.Headers.Contains("Set-Cookie"));
+        Assert.DoesNotContain("accessToken", await res.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        await api.WaitForAuditAsync(a => a.UserName == user.Email && a.Kind == AuditKinds.LoginFailure);
+        await using (var db = api.NewContext())
+            Assert.DoesNotContain(db.Audit.Where(a => a.UserName == user.Email).Select(a => a.Kind).ToList(), k => k == AuditKinds.LoginSuccess);
+    }
+
+    [Fact]
     public async Task Disabled_account_is_refused()
     {
         var user = await api.CreateUserAsync();
