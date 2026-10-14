@@ -15,7 +15,11 @@ Area file for `src/Desk.UserAdmin/` (console CLI for invite-only accounts). The 
 
 ## Commands
 
-- README §7.1 has the full list; the root table has "Create a user". Never paste a printed password anywhere.
+- README §7.1 has the full list. Never paste a printed password anywhere.
+
+| Task | Command |
+|---|---|
+| Create a user (phase 2) | `dotnet run --project src/Desk.UserAdmin -- add --email … --role viewer --expires YYYY-MM-DD` |
 
 ## Tests
 
