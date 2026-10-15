@@ -126,7 +126,7 @@ jobs:
           docker run --rm -v "$PWD":/repo -w /repo
           koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
           --severity=warning
-          deploy/start.sh perf/pipefail-demo.sh
+          deploy/start.sh perf/pipefail-demo.sh perf/ci-image-mirrors.sh
 
   api:
     needs: changes
