@@ -1,9 +1,16 @@
 using System.Data.Common;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using Desk.Api.Auth;
 using Desk.Api.Limits;
+using Desk.Api.Positions;
 using Desk.Data;
 using Desk.Data.Auth;
+using Desk.Data.Grid;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -91,6 +98,54 @@ public sealed class LimitsTests(PostgresApiFactory api)
 
         // Client B through the same edge is not locked out by A.
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.8, {CfEdge}", "203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("172.20.0.4", "")]                 // #165: a Render peer outside 10.0.0.0/8
+    [InlineData(RenderLb, ", 10.1.2.3, 100.64.0.7")] // #165: Render's internal hops appended after the edge
+    [InlineData("100.64.9.9", ", fd00::5")]
+    public async Task Two_clients_get_separate_login_windows_whatever_render_s_private_hops_look_like(string peer, string internalHops)
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(peer, $"198.51.100.{i}, 203.0.113.7, {CfEdge}{internalHops}", "203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(peer, $"203.0.113.7, {CfEdge}{internalHops}", "203.0.113.7"), Ct)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(peer, $"203.0.113.8, {CfEdge}{internalHops}", "203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_hop_listed_in_client_address_trusted_hops_is_skipped_so_clients_behind_it_are_apart()
+    {
+        const string ingress = "198.51.100.10"; // stands in for a public proxy hop between Cloudflare and the app
+        await using (var unlisted = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5")))
+        {
+            // Unlisted, the hop is the key: every client behind it shares one window (and the fallback is warned).
+            var client = PostgresApiFactory.NewClient(unlisted);
+            for (var i = 0; i < 5; i++)
+                Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.{i}, {CfEdge}, {ingress}", $"203.0.113.{i}"), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"203.0.113.9, {CfEdge}, {ingress}", "203.0.113.9"), Ct)).StatusCode);
+        }
+
+        await using var listed = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"), (ClientAddress.TrustedHopsKey, "198.51.100.0/24"));
+        var listedClient = PostgresApiFactory.NewClient(listed);
+        for (var i = 0; i < 6; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await listedClient.SendAsync(Login(RenderLb, $"203.0.113.{i}, {CfEdge}, {ingress}", $"203.0.113.{i}"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Forged_edges_and_private_hops_from_a_client_that_reaches_render_directly_share_one_window()
+    {
+        // Regression for #165's widened rules: the client's own address is what Render appended, rightmost, so a
+        // fresh forged CF-Connecting-IP, edge or private hop on each request still lands in its one window.
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 6; i++)
+        {
+            var res = await client.SendAsync(Login(RenderLb, $"198.51.100.{i}, {CfEdge}, 10.0.0.{i}, 192.0.2.50", $"198.51.100.{i + 100}"), Ct);
+            Assert.Equal(i < 5 ? HttpStatusCode.Unauthorized : HttpStatusCode.TooManyRequests, res.StatusCode);
+        }
     }
 
     [Fact]
@@ -295,6 +350,106 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.TooManyRequests, (await after.GetAsync("/api/me", Ct)).StatusCode);
     }
 
+    /// <summary>
+    /// A live, issued token whose principal has lost its account id after authentication (#361). Issued tokens always
+    /// carry one, so this is how a test reaches the broken-session path through the real pipeline.
+    /// </summary>
+    private sealed class DropAccountId : IClaimsTransformation
+    {
+        public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal) =>
+            Task.FromResult(new ClaimsPrincipal(principal.Identities.Select(i =>
+                new ClaimsIdentity(i.Claims.Where(c => c.Type != ClaimTypes.NameIdentifier), i.AuthenticationType, i.NameClaimType, i.RoleClaimType))));
+    }
+
+    private static async Task AssertNoAccountIdAsync(HttpResponseMessage res)
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.False(res.Headers.Contains("Retry-After"));
+        Assert.Equal(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+    }
+
+    [Fact]
+    public async Task A_signed_in_caller_without_an_account_id_is_refused_and_never_keyed_on_its_address()
+    {
+        // #361: keyed on the address, such callers would spend (and share) the anonymous callers' buckets there.
+        await using var host = BehindCloudflare(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "2"))
+            .WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IClaimsTransformation, DropAccountId>()));
+        var client = PostgresApiFactory.NewClient(host);
+        HttpRequestMessage From(HttpRequestMessage req, string ip) => Via(req, RenderLb, $"{ip}, {CfEdge}", ip);
+        async Task<string> SignInFromAsync(string ip)
+        {
+            var user = await api.CreateUserAsync();
+            var login = await client.SendAsync(From(new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+            {
+                Content = JsonContent.Create(new LoginRequest(user.Email!, PostgresApiFactory.Password)),
+            }, ip), Ct);
+            Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+            return (await login.Content.ReadFromJsonAsync<AccessTokenResponse>(Ct))!.AccessToken;
+        }
+        HttpRequestMessage Me(string ip, string? token = null)
+        {
+            var req = From(new HttpRequestMessage(HttpMethod.Get, "/api/me"), ip);
+            if (token is not null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            return req;
+        }
+
+        // Signed in elsewhere, so the addresses below start with full anonymous buckets (2 each).
+        var first = await SignInFromAsync("198.51.100.20");
+        var second = await SignInFromAsync("198.51.100.21");
+        for (var i = 0; i < 3; i++) // more than a burst: nothing is granted, so nothing runs out
+        {
+            await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.7", first), Ct));
+            await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.8", second), Ct));
+        }
+
+        // The anonymous buckets at both addresses are untouched: 2 calls each, then 429.
+        foreach (var ip in new[] { "203.0.113.7", "203.0.113.8" })
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+        }
+        // And still refused as a broken session, not as an address out of tokens.
+        await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.7", first), Ct));
+    }
+
+    [Fact]
+    public async Task An_export_without_an_account_id_is_401_and_never_enters_the_export_gate()
+    {
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IClaimsTransformation, DropAccountId>()));
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+
+        var res = await client.PostAsJsonAsync("/api/positions/export", new { columns = new[] { "deal_name" } }, Ct);
+        await AssertNoAccountIdAsync(res);
+        Assert.Equal(0, host.Services.GetRequiredService<ExportGate>().Running);
+    }
+
+    [Fact]
+    public async Task The_export_handler_refuses_a_principal_without_an_account_id_by_itself()
+    {
+        // The limiter refuses first; the handler checks again, so a request that got past it can't key the gate on null.
+        var services = api.Services;
+        var gate = new ExportGate(services.GetRequiredService<LimitsOptions>());
+        foreach (var user in new[]
+                 {
+                     new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test")),
+                     new ClaimsPrincipal(new ClaimsIdentity()),
+                 })
+        {
+            var http = new DefaultHttpContext { User = user, RequestServices = services };
+            var result = await PositionsEndpoints.ExportAsync(new GridRequest(Columns: ["deal_name"]), http,
+                services.GetRequiredService<MetaCache>(), services.GetRequiredService<IPortfolioEntitlements>(),
+                services.GetRequiredService<GridRepository>(), gate, services.GetRequiredService<LimitsOptions>(),
+                services.GetRequiredService<ILoggerFactory>(), Ct);
+
+            var problem = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(result);
+            Assert.Equal(StatusCodes.Status401Unauthorized, problem.StatusCode);
+            Assert.Equal(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, problem.ProblemDetails.Title);
+            Assert.Equal(0, gate.Running);
+        }
+    }
+
     private async Task<HttpClient> SignedInOnAsync(WebApplicationFactory<Program> host, string role = Roles.Viewer)
     {
         var client = PostgresApiFactory.NewClient(host);
@@ -338,7 +493,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // Signed in before the only permit is taken: login itself needs one.
         var other = await SignedInOnAsync(host);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         // Another user fills the shared queue (the same user would wait in their own per-user queue instead).
         var queued = other.GetAsync("/api/me", Ct);
@@ -378,11 +533,11 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // They sign in before the only permit is taken: login itself needs one.
         var second = await SignedInOnAsync(host, Roles.Admin);
         var third = await SignedInOnAsync(host, Roles.Admin);
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var queued = second.GetAsync("/api/health/db", Ct);    // waits in the queue
+        var queued = second.GetAsync(HoldsAPermit, Ct);    // waits in the queue
         await Task.Delay(100, Ct);
-        var rejected = await third.GetAsync("/api/health/db", Ct);
+        var rejected = await third.GetAsync(HoldsAPermit, Ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.Equal("1", rejected.Headers.GetValues("Retry-After").Single());
@@ -398,7 +553,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("MAINTENANCE_MODE", "true"));
         var client = PostgresApiFactory.NewClient(host);
 
-        foreach (var (method, path) in new[] { ("GET", "/api/me"), ("POST", "/api/auth/login"), ("GET", "/api/health/db"), ("GET", "/api/nope") })
+        foreach (var (method, path) in new[] { ("GET", "/api/me"), ("POST", "/api/auth/login"), ("GET", HoldsAPermit), ("GET", "/api/nope") })
         {
             using var req = new HttpRequestMessage(new HttpMethod(method), path)
             {
@@ -438,32 +593,77 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task Health_db_is_admin_only_and_checks_the_database()
+    public async Task Health_db_is_anonymous_and_says_only_that_the_database_is_up()
     {
-        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().GetAsync("/api/health/db", Ct)).StatusCode);
-
-        var (viewer, _, _) = await api.SignedInAsync(Roles.Viewer);
-        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync("/api/health/db", Ct)).StatusCode);
-
-        var before = api.ConnectionsOpened(api);
-        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
-        var res = await admin.GetFromJsonAsync<DbHealthResponse>("/api/health/db", Ct);
-        Assert.Equal("ok", res!.Status);
-        Assert.True(api.ConnectionsOpened(api) > before);
+        // #113: the same exposure as /health, outside /api, and nothing but up or down.
+        var count = new CountingProbes();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count)));
+        var res = await PostgresApiFactory.NewClient(host).GetAsync("/health/db", Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("""{"status":"up"}""", await res.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(1, count.Probes);
     }
 
     [Fact]
-    public async Task Health_db_is_503_when_the_database_is_unreachable()
+    public async Task Health_db_is_503_when_the_database_is_unreachable_and_says_nothing_else()
     {
-        var admin = await api.CreateUserAsync(Roles.Admin);
-        // A token from a healthy host, sent to a host whose database is gone (the keys were read at login).
         await using var broken = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(new FailingCommands())));
-        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), admin.Email!)).AccessToken;
-        var client = PostgresApiFactory.NewClient(broken);
-        PostgresApiFactory.UseToken(client, token);
-        var res = await client.GetAsync("/api/health/db", Ct);
+        var res = await PostgresApiFactory.NewClient(broken).GetAsync("/health/db", Ct);
+        await AssertDownAsync(res);
+    }
+
+    /// <summary>Down is a 503 problem with a title and nothing else: no detail, host, timing or version.</summary>
+    private static async Task AssertDownAsync(HttpResponseMessage res)
+    {
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
-        Assert.DoesNotContain("Host=", await res.Content.ReadAsStringAsync(Ct));
+        var body = await res.Content.ReadAsStringAsync(Ct);
+        var problem = System.Text.Json.JsonSerializer.Deserialize<ProblemDetails>(body, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal(HealthEndpoints.DownTitle, problem.Title);
+        Assert.Null(problem.Detail);
+        Assert.DoesNotContain("Host", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Health_db_checks_the_database_at_most_once_per_interval()
+    {
+        // Anonymous and outside the rate limits: polling it must not open a connection per request.
+        var count = new CountingProbes();
+        var (owned, clock) = api.WithOwnClock();
+        await using var _ = owned;
+        await using var host = owned.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count)));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(1, count.Probes);
+
+        clock.Advance(DbHealthProbe.CacheFor - TimeSpan.FromMilliseconds(1));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(1, count.Probes);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(2, count.Probes);
+    }
+
+    [Fact]
+    public async Task Health_db_in_maintenance_mode_is_down_without_opening_a_connection()
+    {
+        var count = new CountingProbes();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("MAINTENANCE_MODE", "true");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count));
+        });
+        await AssertDownAsync(await PostgresApiFactory.NewClient(host).GetAsync("/health/db", Ct));
+        Assert.Equal(0, count.Probes);
+        Assert.Equal(0, api.ConnectionsOpened(host));
+    }
+
+    [Fact]
+    public async Task The_old_api_health_db_path_is_gone()
+    {
+        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/health/db", Ct)).StatusCode);
     }
 
     [Fact]
@@ -526,7 +726,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // the user's one permit, held in the database
+        var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one permit, held in the database
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = client.GetAsync("/api/me", Ct);           // the user's one queue place
         await Task.Delay(100, Ct);
@@ -570,7 +770,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
         var other = await SignedInOnAsync(host); // before any permit is taken: login needs one
 
-        var running = client.GetAsync("/api/health/db", Ct);   // A's one permit, and one of the two database permits
+        var running = client.GetAsync(HoldsAPermit, Ct);   // A's one permit, and one of the two database permits
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = new[] { client.GetAsync("/api/me", Ct), client.GetAsync("/api/me", Ct) }; // in A's own queue
         await Task.Delay(100, Ct);
@@ -604,7 +804,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await PostgresApiFactory.LoginAsync(holder, admin.Email!);
         var user = await SignedInOnAsync(host); // before the only permit is taken: login needs one
 
-        var running = holder.GetAsync("/api/health/db", Ct); // holds the only database permit
+        var running = holder.GetAsync(HoldsAPermit, Ct);    // holds the only database permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = user.GetAsync("/api/me", Ct);           // waits in the shared queue: token 1 of 3
         await Task.Delay(100, Ct);
@@ -635,7 +835,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only database permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only database permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var anonymous = PostgresApiFactory.NewClient(host);
         var calls = Enumerable.Range(0, 3).Select(_ => anonymous.GetAsync("/api/me", Ct)).ToArray();
@@ -662,7 +862,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the user's one permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the user's one permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var second = client.GetAsync("/api/me", Ct);           // both queue behind it
         var third = client.GetAsync("/api/me", Ct);
@@ -910,6 +1110,23 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public void The_deal_endpoints_stay_in_the_callers_main_per_user_partition()
+    {
+        // List and detail are two calls at most, so they queue behind each other in the main partition (one in flight)
+        // rather than getting their own like insights, and neither is an export.
+        var deals = api.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText?.StartsWith("/api/deals", StringComparison.Ordinal) == true)
+            .ToArray();
+        Assert.Equal(2, deals.Length);
+        Assert.All(deals, e =>
+        {
+            Assert.Null(e.Metadata.GetMetadata<InsightsSourceEndpoint>());
+            Assert.Null(e.Metadata.GetMetadata<ExportEndpoint>());
+        });
+    }
+
+    [Fact]
     public void A_users_insights_partition_key_never_equals_any_callers_main_key()
     {
         var clients = api.Services.GetRequiredService<ClientAddress>();
@@ -1047,7 +1264,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var insights = new[] { client.GetAsync(HeldInsights, Ct), client.GetAsync(HeldInsights, Ct) }; // two insights permits
         var held = await HeldAsync(gate, 2);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // the user's one main permit, held in the database
+        var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one main permit, held in the database
         await commands.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = Enumerable.Range(0, 8).Select(_ => client.GetAsync("/api/me", Ct)).ToArray(); // the 8 queue places
         await Task.Delay(200, Ct);
@@ -1114,21 +1331,39 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
     }
 
-    /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
+    /// <summary>A signed-in request that reads the database through the /api limiters (a user's saved presets).</summary>
+    private const string HoldsAPermit = "/api/presets/positions";
+
+    /// <summary>Holds the <see cref="HoldsAPermit"/> query until released, so the test controls how long a permit is held.</summary>
     private sealed class BlockingCommands : DbCommandInterceptor
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
-            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
-            if (command.CommandText == "SELECT 1")
+            if (command.CommandText.Contains("preset", StringComparison.Ordinal))
             {
                 Entered.TrySetResult();
                 await Release.Task.WaitAsync(cancellationToken);
             }
             return result;
+        }
+    }
+
+    /// <summary>Counts the database probes (<c>SELECT 1</c>) that reach the database.</summary>
+    private sealed class CountingProbes : DbCommandInterceptor
+    {
+        private int _probes;
+        public int Probes => Volatile.Read(ref _probes);
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText == "SELECT 1")
+                Interlocked.Increment(ref _probes);
+            return ValueTask.FromResult(result);
         }
     }
 

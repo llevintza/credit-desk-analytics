@@ -55,9 +55,14 @@ public static class RateLimiting
             // differs from the user's main one, so the two share no permits or queue places: a slow source can't hold
             // the grid back, and a busy grid can't hold the board back. It is read-only and bounded, and it still
             // sits before the user's token bucket and the shared database limiter, like every other partition.
+            // A signed-in caller without an account id is refused first, exports included (#361): see NoAccountIdKey.
             var perUserConcurrency = PartitionedRateLimiter.Create<HttpContext, string>(http =>
-                !IsApi(http) || IsExport(http) || !http.User.IsSignedIn()
+                !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("unscoped")
+                    : http.User.HasNoAccountId()
+                        ? RateLimitPartition.Get(NoAccountIdKey, _ => DenyAll.Instance)
+                    : IsExport(http) || !http.User.IsSignedIn()
+                        ? RateLimitPartition.GetNoLimiter("unscoped")
                     : IsInsightsSource(http)
                         ? RateLimitPartition.GetConcurrencyLimiter(InsightsPartitionKey(http, clients), _ => new ConcurrencyLimiterOptions
                         {
@@ -103,24 +108,46 @@ public static class RateLimiting
     {
         public override RateLimiterStatistics? GetStatistics(HttpContext resource) => inner.GetStatistics(resource);
 
-        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount) => NotTried.Instance;
+        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount) => NotAcquired.Instance;
 
         protected override ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken) =>
             inner.AcquireAsync(resource, permitCount, cancellationToken);
+    }
 
-        private sealed class NotTried : RateLimitLease
+    /// <summary>
+    /// The <see cref="NoAccountIdKey"/> partition: grants nothing, queues nothing (the built-in limiters need at least
+    /// one permit). Its refusal goes to <see cref="OnRejectedAsync"/>, which answers 401.
+    /// </summary>
+    internal sealed class DenyAll : RateLimiter
+    {
+        public static readonly DenyAll Instance = new();
+
+        private DenyAll() { }
+
+        // Never idle, so the partitioned limiter keeps the one instance instead of disposing it.
+        public override TimeSpan? IdleDuration => null;
+
+        public override RateLimiterStatistics GetStatistics() => new();
+
+        protected override RateLimitLease AttemptAcquireCore(int permitCount) => NotAcquired.Instance;
+
+        protected override ValueTask<RateLimitLease> AcquireAsyncCore(int permitCount, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<RateLimitLease>(NotAcquired.Instance);
+    }
+
+    /// <summary>A refusal with no Retry-After: <see cref="AcquireOnce"/>'s skipped attempt, and every <see cref="DenyAll"/> answer.</summary>
+    private sealed class NotAcquired : RateLimitLease
+    {
+        public static readonly NotAcquired Instance = new();
+
+        public override bool IsAcquired => false;
+
+        public override IEnumerable<string> MetadataNames => [];
+
+        public override bool TryGetMetadata(string metadataName, out object? metadata)
         {
-            public static readonly NotTried Instance = new();
-
-            public override bool IsAcquired => false;
-
-            public override IEnumerable<string> MetadataNames => [];
-
-            public override bool TryGetMetadata(string metadataName, out object? metadata)
-            {
-                metadata = null;
-                return false;
-            }
+            metadata = null;
+            return false;
         }
     }
 
@@ -132,14 +159,26 @@ public static class RateLimiting
     internal static bool IsInsightsSource(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<InsightsSourceEndpoint>() is not null;
 
     /// <summary>
-    /// The caller's insights partition. Every <see cref="PartitionKey"/> starts with <c>u:</c> or <c>ip:</c>, so this
+    /// The caller's insights partition. Every <see cref="PartitionKey"/> starts with <c>u:</c>, <c>ip:</c> or <c>deny:</c>, so this
     /// prefix can't collide with any caller's main partition, whatever a user name contains.
     /// </summary>
     internal static string InsightsPartitionKey(HttpContext http, ClientAddress clients) => $"insights:{PartitionKey(http, clients)}";
 
-    /// <summary>Signed-in users get their own bucket, keyed on the account id (#185); anonymous callers get one per client IP.</summary>
+    /// <summary>
+    /// The partition of a signed-in caller without an account id (#361). Keyed on the client address, everyone behind
+    /// one address would share it and one in-flight permit (the #165 hazard); keyed on the user name, a rename would
+    /// make a second user (#185). It shares nothing with any <c>u:</c> or <c>ip:</c> partition and grants nothing.
+    /// </summary>
+    internal const string NoAccountIdKey = "deny:no-account-id";
+
+    /// <summary>
+    /// Signed-in users get their own bucket, keyed on the account id (#185); anonymous callers get one per client IP;
+    /// a signed-in caller without an id gets <see cref="NoAccountIdKey"/>, never the IP.
+    /// </summary>
     internal static string PartitionKey(HttpContext http, ClientAddress clients) =>
-        http.User.IsSignedIn() && http.User.UserId() is { } id ? $"u:{id}" : $"ip:{clients.For(http)}";
+        !http.User.IsSignedIn() ? $"ip:{clients.For(http)}"
+        : http.User.TryGetAccountId(out var id) ? $"u:{id}"
+        : NoAccountIdKey;
 
     internal static async ValueTask OnRejectedAsync(OnRejectedContext ctx, CancellationToken ct)
     {
@@ -148,6 +187,12 @@ public static class RateLimiting
             ? Math.Max(1, (int)Math.Ceiling(after.TotalSeconds))
             : 1;
         var http = ctx.HttpContext;
+        // Refused for having no account id, not for going too fast: a 401 to sign in again, with no Retry-After.
+        if (http.User.HasNoAccountId())
+        {
+            await PrincipalExtensions.NoAccountId().ExecuteAsync(http);
+            return;
+        }
         // A signed-in caller is keyed on the user, not the client address: their 429 (their own queue, their bucket)
         // says nothing about the resolver and must not use up its one-shot line (#165).
         if (!http.User.IsSignedIn())

@@ -3,6 +3,8 @@ using Desk.Api;
 using Desk.Api.Admin;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
+using Desk.Api.Deals;
+using Desk.Data.Deals;
 using Desk.Api.Funds;
 using Desk.Data.Funds;
 using Desk.Api.Hardening;
@@ -33,10 +35,12 @@ builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, Cl
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
+builder.Services.AddSingleton<DbHealthProbe>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<FundRepository>();
+builder.Services.AddSingleton<DealRepository>();
 builder.Services.AddSingleton(InsightsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<InsightsRepository>();
 builder.Services.AddSingleton(InsightsFaults.From(builder.Configuration, builder.Environment));
@@ -101,12 +105,13 @@ app.UseDeskSwagger();
 // defend against (ADR-0024).
 var api = app.MapGroup("/api")
     .RequireAuthorization();
-app.MapHealthEndpoints(api);
+app.MapHealthEndpoints();
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();
 api.MapPositionsEndpoints();
 api.MapFundEndpoints();
 api.MapInsightsEndpoints();
+api.MapDealEndpoints();
 api.MapAdminEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 

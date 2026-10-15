@@ -257,13 +257,54 @@ public sealed class PipelineUnitTests
         };
         Assert.Equal("u:42", RateLimiting.PartitionKey(withId, clients)); // #185: never the user name
 
+        // #361: signed in without an id is the deny partition from any address, never the address.
         var noId = new DefaultHttpContext { User = SignedIn() };
         noId.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.7");
-        Assert.Equal("ip:203.0.113.7", RateLimiting.PartitionKey(noId, clients));
+        Assert.Equal(RateLimiting.NoAccountIdKey, RateLimiting.PartitionKey(noId, clients));
+        var noIdElsewhere = new DefaultHttpContext { User = SignedIn() };
+        noIdElsewhere.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.9");
+        Assert.Equal(RateLimiting.NoAccountIdKey, RateLimiting.PartitionKey(noIdElsewhere, clients));
 
         var anonymous = new DefaultHttpContext();
-        anonymous.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.8");
-        Assert.Equal("ip:203.0.113.8", RateLimiting.PartitionKey(anonymous, clients));
+        anonymous.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.7");
+        Assert.Equal("ip:203.0.113.7", RateLimiting.PartitionKey(anonymous, clients));
+    }
+
+    [Fact]
+    public void Only_a_signed_in_principal_with_a_non_empty_id_has_an_account_id()
+    {
+        var withId = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "42")], "test"));
+        Assert.True(withId.TryGetAccountId(out var id));
+        Assert.Equal("42", id);
+        Assert.False(withId.HasNoAccountId());
+
+        // Signed in, but the id is missing or empty: a broken session.
+        foreach (var broken in new[] { SignedIn(), new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "")], "test")) })
+        {
+            Assert.False(broken.TryGetAccountId(out _));
+            Assert.True(broken.HasNoAccountId());
+        }
+
+        // An unauthenticated identity's id is never trusted, and an anonymous caller isn't a broken session.
+        var anonymous = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "42")]));
+        Assert.False(anonymous.TryGetAccountId(out var none));
+        Assert.Null(none);
+        Assert.False(anonymous.HasNoAccountId());
+    }
+
+    [Fact]
+    public async Task The_no_account_id_partition_grants_nothing_and_is_never_idle()
+    {
+        var deny = RateLimiting.DenyAll.Instance;
+        Assert.Null(deny.IdleDuration);
+        Assert.Equal(0, deny.GetStatistics().CurrentAvailablePermits);
+        using (var attempt = deny.AttemptAcquire())
+        {
+            Assert.False(attempt.IsAcquired);
+            Assert.False(attempt.TryGetMetadata(MetadataName.RetryAfter, out _));
+        }
+        using (var lease = await deny.AcquireAsync(cancellationToken: Ct))
+            Assert.False(lease.IsAcquired);
     }
 
     [Fact]

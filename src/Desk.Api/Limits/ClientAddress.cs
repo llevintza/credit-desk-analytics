@@ -10,8 +10,9 @@ namespace Desk.Api.Limits;
 /// The client's IP for the per-IP login window and the anonymous token bucket (README §7.2, ADR-0005, #116).
 /// <para>
 /// In production a request travels client → Cloudflare edge → Render's load balancer → app. The socket peer is
-/// Render's balancer (10.0.0.0/8), which appends the address that connected to it (a Cloudflare edge) to
-/// <c>X-Forwarded-For</c>. Keying on either of those puts every client behind one edge in the same bucket, so one
+/// Render's balancer (a private address), which appends the address that connected to it (a Cloudflare edge) to
+/// <c>X-Forwarded-For</c>. Render's own internal hops may append private addresses after it, and those are skipped
+/// (#165); so are the hops an operator lists in <c>CLIENT_ADDRESS_TRUSTED_HOPS</c>. Keying on either of those puts every client behind one edge in the same bucket, so one
 /// client could lock everyone out of login. The real client is what Cloudflare reports in <c>CF-Connecting-IP</c>,
 /// which Cloudflare always writes and overwrites. <c>True-Client-IP</c> and the rest of <c>X-Forwarded-For</c> are
 /// not used: a client can write either and have it passed through. Without <c>CF-Connecting-IP</c> the key is the
@@ -24,11 +25,8 @@ namespace Desk.Api.Limits;
 /// Off the proxy (<c>FORWARDEDHEADERS_ENABLED</c> unset: local, compose, CI) the socket peer is the client.
 /// </para>
 /// </summary>
-public sealed class ClientAddress(bool behindProxy)
+public sealed class ClientAddress(bool behindProxy, IPNetwork[]? trustedHops = null)
 {
-    /// <summary>Render's private network: the load balancer that connects to the app.</summary>
-    internal static readonly IPNetwork[] Render = [IPNetwork.Parse("10.0.0.0/8")];
-
     /// <summary>Addresses no client on the internet connects from: RFC 1918, CGNAT, loopback, link-local, ULA.</summary>
     internal static readonly IPNetwork[] Private =
     [
@@ -38,6 +36,13 @@ public sealed class ClientAddress(bool behindProxy)
             "::1/128", "fc00::/7", "fe80::/10",
         }.Select(IPNetwork.Parse),
     ];
+
+    /// <summary>
+    /// Render's network: the load balancer that connects to the app and its internal hops. Render doesn't document
+    /// the range, and a peer outside 10.0.0.0/8 put every client in one bucket (#165), so any private address counts:
+    /// no client on the internet can connect from one.
+    /// </summary>
+    internal static readonly IPNetwork[] Render = Private;
 
     /// <summary>
     /// https://www.cloudflare.com/ips-v4 and /ips-v6 (checked 2026-10-08; kept current by the scheduled check in #161).
@@ -54,15 +59,31 @@ public sealed class ClientAddress(bool behindProxy)
         }.Select(IPNetwork.Parse),
     ];
 
+    public const string TrustedHopsKey = "CLIENT_ADDRESS_TRUSTED_HOPS";
+
     public static ClientAddress From(IConfiguration config) =>
-        new(bool.TryParse(config["FORWARDEDHEADERS_ENABLED"], out var on) && on); // = ASPNETCORE_FORWARDEDHEADERS_ENABLED
+        new(bool.TryParse(config["FORWARDEDHEADERS_ENABLED"], out var on) && on, // = ASPNETCORE_FORWARDEDHEADERS_ENABLED
+            ParseNetworks(config[TrustedHopsKey]));
 
     /// <summary>Whether the app runs behind Render's proxy (<c>FORWARDEDHEADERS_ENABLED</c>).</summary>
     public bool BehindProxy => behindProxy;
 
+    /// <summary>
+    /// Public proxy ranges between Cloudflare and the app that the lists here don't know, from
+    /// <c>CLIENT_ADDRESS_TRUSTED_HOPS</c> (CIDRs, comma or space separated; unparsable entries are dropped). A peer in
+    /// them is believed, and a trailing hop in them is skipped like an internal one, so a hop the diagnostics show as
+    /// shared can be trusted from the dashboard without a release (#165). Never list a range clients connect from.
+    /// </summary>
+    public IPNetwork[] TrustedHops { get; } = trustedHops ?? [];
+
+    internal static IPNetwork[] ParseNetworks(string? value) =>
+        [.. (value ?? "").Split([',', ' '], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Select(v => IPNetwork.TryParse(v, out var n) ? n : (IPNetwork?)null)
+            .OfType<IPNetwork>()];
+
     public string For(HttpContext http)
     {
-        var address = Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy, out var source);
+        var address = Resolve(http.Connection.RemoteIpAddress, http.Request.Headers, behindProxy, out var source, TrustedHops);
         // A real direct client sends no CF-Connecting-IP (Cloudflare 403s a forged one), so a DirectHop that carries
         // one is a Cloudflare or Render hop missing from the lists, and every client shares it (R175-01).
         if (behindProxy && (source is not (Source.CfConnectingIp or Source.DirectHop)
@@ -104,7 +125,7 @@ public sealed class ClientAddress(bool behindProxy)
         /// range missing from the lists, which every client shares (warned, #161).
         /// </summary>
         DirectHop,
-        /// <summary>The hop Render saw is a private address (an internal hop, not a client): every client shares it.</summary>
+        /// <summary>Every hop in <c>X-Forwarded-For</c> is private or trusted (no client in it): every client shares it.</summary>
         InternalHop,
         /// <summary>Through Cloudflare, keyed on <c>CF-Connecting-IP</c>.</summary>
         CfConnectingIp,
@@ -112,27 +133,46 @@ public sealed class ClientAddress(bool behindProxy)
         Edge,
     }
 
-    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy) =>
-        Resolve(peer, headers, behindProxy, out _);
+    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy, IPNetwork[]? trusted = null) =>
+        Resolve(peer, headers, behindProxy, out _, trusted);
 
-    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy, out Source source)
+    internal static IPAddress? Resolve(IPAddress? peer, IHeaderDictionary headers, bool behindProxy, out Source source, IPNetwork[]? trusted = null)
     {
-        if (!behindProxy || peer is null || !In(Render, peer))
+        trusted ??= [];
+        if (!behindProxy || peer is null || !(In(Render, peer) || In(trusted, peer)))
         {
             source = behindProxy ? Source.UntrustedPeer : Source.Peer;
             return peer;
         }
 
-        // Render appends the address that connected to it, so the rightmost entry is the only one Render vouches for.
+        // Render appends the address that connected to it, and its internal hops (private, or listed as trusted) may
+        // append theirs after it. A client can only write to the left of all of them, so skipping trailing internal
+        // hops never reaches a value the client chose. The first other entry is the hop Render vouches for.
         var chain = ForwardedFor(headers);
-        if (chain.Length == 0 || !IPAddress.TryParse(chain[^1], out var hop))
+        IPAddress? hop = null;
+        var at = chain.Length - 1;
+        for (; at >= 0; at--)
+        {
+            if (!IPAddress.TryParse(chain[at], out hop))
+                break;
+            // A Cloudflare hop always ends the skip, even when a trusted entry covers it: a Worker can reach Render
+            // directly from a Cloudflare address, so skipping it would let a forged prefix choose the key (R160-01).
+            if (In(Cloudflare, hop) || (!In(Render, hop) && !In(trusted, hop)))
+                break;
+        }
+        if (hop is null) // none, or an entry that isn't an address
         {
             source = Source.NoForwardedFor;
             return peer;
         }
+        if (at < 0)
+        {
+            source = Source.InternalHop;
+            return IPAddress.Parse(chain[^1]); // only internal hops, no client in the chain: shared
+        }
         if (!In(Cloudflare, hop))
         {
-            source = In(Private, hop) ? Source.InternalHop : Source.DirectHop;
+            source = Source.DirectHop;
             return hop; // reached Render directly: that hop is the client, and any CF-* header is its own invention
         }
 

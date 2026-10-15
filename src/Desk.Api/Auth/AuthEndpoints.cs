@@ -87,13 +87,14 @@ public static class AuthEndpoints
         }
 
         if (!result.Succeeded)
-        {
-            audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
-        }
+            return Refused();
 
         var principal = await signIn.CreateUserPrincipalAsync(user!);
         var identity = (ClaimsIdentity)principal.Identity!;
+        // An account with no role is never signed in (#275): a demo account whose role and removal both failed. The
+        // claims factory has already read the roles, so this costs no query.
+        if (!identity.HasClaim(c => c.Type == identity.RoleClaimType))
+            return Refused();
         var now = time.GetUtcNow();
         var sid = NewId();
         var rid = NewId();
@@ -106,6 +107,12 @@ public static class AuthEndpoints
         // The bearer handler writes the AccessTokenResponse body itself.
         await http.SignInAsync(AuthSetup.Scheme, principal);
         return Results.Empty;
+
+        IResult Refused()
+        {
+            audit.Enqueue(AuditKinds.LoginFailure, email, "/api/auth/login", StatusCodes.Status401Unauthorized, started, time);
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Login failed", detail: LoginFailedDetail);
+        }
     }
 
     /// <summary>
@@ -135,6 +142,12 @@ public static class AuthEndpoints
             return Refused();
         }
 
+        var principal = await signIn.CreateUserPrincipalAsync(user);
+        var identity = (ClaimsIdentity)principal.Identity!;
+        // As at login (#275): roles are re-read here, so an account whose last role was removed gets no new tokens.
+        if (!identity.HasClaim(c => c.Type == identity.RoleClaimType))
+            return Refused();
+
         // Checked last, so an expired or otherwise dead token is just refused: only a live token can be a replay.
         var sid = ticket.Principal.FindFirstValue(AuthSetup.SessionIdClaim)!;
         var end = SessionLimits.ReadAuthTime(ticket.Principal)!.Value + AuthSetup.AbsoluteExpiry;
@@ -145,8 +158,6 @@ public static class AuthEndpoints
             return Refused();
         }
 
-        var principal = await signIn.CreateUserPrincipalAsync(user);
-        var identity = (ClaimsIdentity)principal.Identity!;
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.AuthTimeClaim)!.Clone());
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.SessionIdClaim)!.Clone());
         identity.AddClaim(new Claim(AuthSetup.RefreshIdClaim, rid));

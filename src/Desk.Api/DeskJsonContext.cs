@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Desk.Api.Auth;
 using Desk.Api.Positions;
+using Desk.Data.Deals;
 using Desk.Data.Funds;
 using Desk.Data.Insights;
 using Desk.Data.Grid;
@@ -28,6 +29,8 @@ namespace Desk.Api;
 [JsonSerializable(typeof(BuiltInState))]
 [JsonSerializable(typeof(FundPerformance))]
 [JsonSerializable(typeof(InsightsResult))]
+[JsonSerializable(typeof(DealList))]
+[JsonSerializable(typeof(DealDetail))]
 // P3 grid cells are object: the runtime types they can hold must be known to the generator.
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(decimal))]

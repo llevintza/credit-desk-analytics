@@ -16,7 +16,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0010](0010-signals-onpush-zoneless.md) | Angular: signals + OnPush + zoneless | 4 Shell + Positions UI | Accepted |
 | [0011](0011-long-format-edge-pivot.md) | P2: long format + edge pivot vs SQL pivot (measured) | 5 Fund Performance | Accepted |
 | [0012](0012-insights-per-source-endpoints.md) | Insights: per-source endpoints + per-task connections vs 20 calls vs one call; plain-table tiles (measured) | 6 Insights Board | Accepted |
-| 0013 | "Any one bond": LATERAL vs ROW_NUMBER (EXPLAIN ANALYZE) | 7 Deal Explorer | Planned |
+| [0013](0013-lateral-vs-row-number.md) | "Any one bond per deal": LATERAL … LIMIT 1 vs ROW_NUMBER() = 1 vs DISTINCT ON (EXPLAIN ANALYZE, measured) | 7 Deal Explorer | Accepted |
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
 | 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
 | [0016](0016-continuous-deployment.md) | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Accepted |
@@ -28,3 +28,4 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0022](0022-audit-retention-purge-on-write.md) | Audit retention: 90-day default (`AUDIT_RETENTION_DAYS`), purged after an audit write and on an idle timer (measured; timer added by #193) | 2 Auth and limits follow-up (#114) | Accepted |
 | [0023](0023-per-area-ci-jobs.md) | CI runs only the jobs a change touches (base-sourced per-area classifier, measured) | [workflows] follow-up (#169) | Proposed |
 | [0024](0024-github-pages-frontend-bearer-auth.md) | GitHub Pages front end + Identity bearer tokens, CORS to the Render API (vs custom-domain cookie, vs `SameSite=None` cookie; measured) | cross-cutting (#349) | Accepted (Leo, 2026-10-11) |
+| [0025](0025-ci-image-pulls-without-docker-hub-limits.md) | CI image pulls without the Docker Hub anonymous limit: same digests from ghcr.io, plus a mirror.gcr.io daemon mirror with Docker Hub fallback (vs a Docker Hub token, vs an image cache; digests verified) | [workflows] follow-up (#332) | Proposed |

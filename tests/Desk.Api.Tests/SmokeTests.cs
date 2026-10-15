@@ -16,6 +16,17 @@ public sealed class SmokeTests(WebApplicationFactory<Program> factory) : IClassF
     }
 
     [Fact]
+    public async Task Health_db_is_an_anonymous_probe_not_the_spa()
+    {
+        // #113: anonymous, so never a 401, and never the SPA's HTML. Up or down depends on whether DATABASE_URL reaches
+        // a database here (CI sets one, a laptop may not); LimitsTests pins both answers against a known database.
+        var res = await factory.CreateClient().GetAsync("/health/db", TestContext.Current.CancellationToken);
+        var expected = res.StatusCode == HttpStatusCode.OK ? "application/json" : "application/problem+json";
+        Assert.Contains(res.StatusCode, new[] { HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable });
+        Assert.Equal(expected, res.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
     public async Task Api_requires_authentication()
     {
         var res = await factory.CreateClient().GetAsync("/api/me", TestContext.Current.CancellationToken);

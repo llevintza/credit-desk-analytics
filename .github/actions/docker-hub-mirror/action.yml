@@ -1,0 +1,33 @@
+name: Docker Hub pull-through mirror
+description: >-
+  Adds mirror.gcr.io as a registry mirror for docker.io pulls on this runner (#332).
+  Anonymous Docker Hub pulls from shared GitHub-hosted runner IPs hit the rate limit.
+  Image references and digest pins don't change: the daemon tries the mirror first and
+  falls back to Docker Hub on a miss, and a digest pin is content-addressed, so the image
+  is byte-identical whichever registry served it. No credentials, no secrets.
+  Steps that run before this action (job `services:`) don't go through the mirror.
+runs:
+  using: composite
+  steps:
+    - name: Use mirror.gcr.io for docker.io pulls
+      shell: bash
+      run: |
+        set -euo pipefail
+        conf=/etc/docker/daemon.json
+        current='{}'
+        if sudo test -s "$conf"; then current="$(sudo cat "$conf")"; fi
+        # Merge into the runner's existing daemon.json; don't replace its other keys.
+        jq '.["registry-mirrors"] = (((.["registry-mirrors"] // []) + ["https://mirror.gcr.io"]) | unique)' \
+          <<<"$current" | sudo tee "$conf" >/dev/null
+        # registry-mirrors is reloadable (SIGHUP): running containers, such as job services, keep running.
+        sudo systemctl reload docker
+        for _ in $(seq 1 15); do
+          if docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -q 'mirror.gcr.io'; then
+            echo "docker.io pulls go through mirror.gcr.io (fallback: Docker Hub)."
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::the Docker daemon did not pick up the mirror.gcr.io registry mirror"
+        docker info
+        exit 1

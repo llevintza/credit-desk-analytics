@@ -26,6 +26,11 @@ for (const theme of ['dark', 'light'] as const) {
       if (p.name === 'positions') await gridReady(page);
       if (p.name === 'fund-performance') await expect(page.getByTestId('caption')).toBeVisible();
       if (p.name === 'insights') await expect(page.locator('[data-state=ready]')).toHaveCount(20);
+      if (p.name === 'deals') {
+        // A deal with a full capital structure open in the detail, so the screenshot shows master and detail.
+        await page.locator('[data-testid=deal-grid] [role=row][row-index="0"] [col-id=name]').click();
+        await expect(page.getByTestId('capital-stack')).toBeVisible();
+      }
       await page.waitForTimeout(400);
       await page.screenshot({ path: `${dir}/${p.name}-${theme}.png` });
     }

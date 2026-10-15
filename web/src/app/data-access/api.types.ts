@@ -85,3 +85,42 @@ export interface InsightGrid {
 }
 
 export interface InsightsResult { source: InsightSource; asOf: string; grids: InsightGrid[]; }
+
+/**
+ * P4: one deal of the list (README §6 P4). Bond columns (`rep*`, `currentBalance`) are null for a deal with no bonds
+ * yet; held columns are null when none of the caller's portfolios holds it. Money arrives as JSON numbers.
+ */
+export interface DealRow {
+  dealId: number; name: string; sector: string; subSector: string; vintage: number; status: string; originalBalance: number;
+  bondCount: number; currentBalance: number | null;
+  repBondId: number | null; repClass: string | null; repCusip: string | null; repCurrentBalance: number | null;
+  repCouponType: string | null; repCoupon: number | null; repRating: string | null;
+  positions: number | null; heldFace: number | null; heldMarketValue: number | null;
+}
+
+export interface DealList { asOf: string; deals: DealRow[]; }
+
+export interface DealInfo {
+  dealId: number; name: string; sector: string; subSector: string; vintage: number; closingDate: string; collateralType: string;
+  originalBalance: number; currency: string; status: string;
+}
+
+/** One tranche, most senior first. */
+export interface Tranche {
+  bondId: number; class: string; cusip: string; seniorityRank: number; originalBalance: number; currentBalance: number; factor: number;
+  couponType: string; couponOrMargin: number | null; couponIndex: string | null;
+  ratingSp: string | null; ratingMoodys: string | null; ratingFitch: string | null; legalFinal: string; expectedMaturity: string;
+}
+
+/** One remittance month; rates are ratios. */
+export interface RemitMonth {
+  period: string; loanCount: number; dq30: number; dq60: number; dq90Plus: number; cpr: number; cdr: number; severity: number;
+  ocCushion: number | null; icCushion: number | null;
+}
+
+export interface DealPosition {
+  positionId: number; portfolioId: number; portfolio: string; bondId: number; class: string | null;
+  face: number | null; marketValue: number | null; price: number | null;
+}
+
+export interface DealDetail { asOf: string; deal: DealInfo; tranches: Tranche[]; surveillance: RemitMonth[]; positions: DealPosition[]; }

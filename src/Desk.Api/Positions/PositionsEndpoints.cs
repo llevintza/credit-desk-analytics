@@ -82,6 +82,10 @@ public static class PositionsEndpoints
         GridRequest request, HttpContext http, MetaCache metaCache, IPortfolioEntitlements entitlements,
         GridRepository grid, ExportGate gate, LimitsOptions limits, ILoggerFactory loggers, CancellationToken ct)
     {
+        // The rate limiter already refuses this caller; checked again here so the gate is never keyed on a missing
+        // id, whichever way the request got in (#361).
+        if (!http.User.TryGetAccountId(out var user))
+            return PrincipalExtensions.NoAccountId();
         var meta = await metaCache.GetAsync(ct);
         if (Resolve(request, meta, entitlements, http) is not { } resolved)
             return Unavailable(meta, request);
@@ -97,7 +101,6 @@ public static class PositionsEndpoints
         // One export at a time per user, and a few in total (README §7.2, #127): an export holds a database permit
         // and a connection for the whole stream. Keyed on the account id, so a renamed account's two sessions are one
         // user (#185).
-        var user = http.User.UserId()!;
         switch (gate.TryBegin(user))
         {
             case ExportGate.Result.UserBusy:
