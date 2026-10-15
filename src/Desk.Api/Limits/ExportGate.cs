@@ -47,3 +47,16 @@ public sealed class ExportEndpoint
 
     private ExportEndpoint() { }
 }
+
+/// <summary>
+/// Marks the insights source read (README §6 P3, #357): it gets its own per-user concurrency partition
+/// (<see cref="LimitsOptions.InsightsConcurrency"/>, <see cref="LimitsOptions.InsightsQueue"/>) instead of the
+/// one-in-flight one, so the board's five sources load in parallel. Matched on the routed endpoint, like
+/// <see cref="ExportEndpoint"/>.
+/// </summary>
+public sealed class InsightsSourceEndpoint
+{
+    public static readonly InsightsSourceEndpoint Instance = new();
+
+    private InsightsSourceEndpoint() { }
+}

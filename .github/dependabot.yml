@@ -4,10 +4,33 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # .NET platform packages ship together each Patch Tuesday; one PR keeps them on one servicing release.
+      # Npgsql.EntityFrameworkCore.PostgreSQL versions on its own patch train (10.0.3 vs EF 10.0.12), so it stays out.
+      dotnet-platform:
+        patterns:
+          - "Microsoft.AspNetCore.*"
+          - "Microsoft.EntityFrameworkCore*"
+          - "Microsoft.Extensions.*"
+          - "System.*"
+          - "dotnet-ef"
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    groups:
+      # Angular packages are peer-locked to the same version; single bumps fail npm ci with ERESOLVE (#369/#373/#374).
+      angular:
+        patterns:
+          - "@angular/*"
+          - "@angular-devkit/*"
+          - "@schematics/angular"
+          - "angular-eslint"
+          - "@angular-eslint/*"
+      # ag-grid-angular pins ag-grid-community to the same exact version.
+      ag-grid:
+        patterns:
+          - "ag-grid-*"
     ignore:
       # Lift when Angular and typescript-eslint support TS 7 and TS 7.1 ships the compiler API. See closed #101.
       - dependency-name: typescript
@@ -32,6 +55,11 @@ updates:
       - /deploy/ci-images/k6
     schedule:
       interval: weekly
+    groups:
+      # deploy/Dockerfile builds on dotnet/sdk and runs on dotnet/aspnet; land both digests together.
+      dotnet-images:
+        patterns:
+          - "dotnet/*"
     ignore:
       # Lift after Node 26 LTS (2026-10-28), via a deliberate coordinated [workflows] PR (Dockerfile, every setup-node step, README §3/§12/§13.2, ADR). See closed #98.
       - dependency-name: node
