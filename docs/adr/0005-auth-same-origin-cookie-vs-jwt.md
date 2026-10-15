@@ -105,6 +105,32 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - On deadline or client cancel, the stream's connection is disposed and both export slots are released in `finally`. The deadline is armed before the slots are taken, so nothing can throw between taking them and that `finally`.
 - **Cold meta load:** the four reference reads run one after another, so the request that loads the snapshot holds one connection under its one permit. In parallel, they held up to four connections under one permit.
 
+**Insights source reads** (amended in #357)
+- **Own per-user partition:** `GET /api/insights/{source}` runs in a second per-user concurrency partition, 5 in flight (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY`, default 5), queue 15 (`RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`, default 15), then 429 with `Retry-After`. A value that isn't a positive integer falls back to the default, as for every limit. Every other `/api` route stays at 1 in flight, queue 8.
+  - Why 5: the P3 board (README §6) asks for its five sources at once and paints each as it lands. The acceptance is that a slow source doesn't hold the other four back (ADR-0012). At 1 in flight, they ran one after another behind the slowest, and the P3 e2e failed on `main` after #174 (#357).
+  - Why 15: three boards' worth of calls (a reload or an as-of change while one is loading) wait rather than fail. The client cancels superseded calls, so the queue drains.
+  - The partition key is `insights:` plus the caller's key. Main keys start with `u:` or `ip:`, so the two never collide, and they share no permits or queue places: a full board doesn't block the user's grid, and a busy grid doesn't block the board.
+- **Bounded and read-only:** the endpoint is a cache-first `GET`. The partition sits where the main one does, before the user's token bucket and the shared database limiter, so a queued insights call holds no database permit and spends one token (both asserted for insights in `LimitsTests`). The worst case per user is 5 database permits of the shared 8, for the length of one board load. The shared limiter (8, queue 32) and the insights connection cap (`INSIGHTS_MAX_CONNECTIONS`, ADR-0012) still bound the process, so users together can't exceed the database budget.
+- **Matched on the routed endpoint:** the endpoint carries `InsightsSourceEndpoint` metadata, the same way exports carry `ExportEndpoint`. A path string alone moves nothing, and only the insights `MapGet` carries the marker (asserted).
+- **Measured** (local stack: the Release API and SPA on `localhost:8080` with the e2e override's limits and `DEV_FAULT_INJECTION=true`, a trust-auth `postgres:17-alpine` seeded at scale 0.2, throwaway viewers from Desk.UserAdmin; paint ms from the board's `insights:painted:*` marks). Surveillance is held 2 s on the server. At one permit per user the result depends on which call arrives first: when Playwright's interception makes surveillance arrive last, the four paint first even on `main`; in CI it arrived first and all six attempts failed. `e2e/tests/insights-arrival-order.spec.ts` (new, now in the e2e job) makes the order deterministic by holding the other four 300 ms in the browser:
+
+| Surveillance reaches the server first (3 runs each) | `main` 3bc0f18 (one permit per user) | This PR (insights partition) |
+|---|---|---|
+| core / market / pricing / reference painted, ms | 2071–2094 (after surveillance) | 362–381 (300 ms browser hold + ~65 ms) |
+| surveillance painted, ms | 2063–2087 | 2056–2061 |
+| Result | 3 of 3 fail | 3 of 3 pass |
+
+  `insights.spec.ts:22` as written, on this PR: 3 of 3 pass (the four at 61–184 ms, surveillance at 2058–2090 ms). The whole e2e suite: 24 of 24 pass.
+
+```
+# local stack only; a viewer created locally with Desk.UserAdmin (never Render, Neon or production)
+cd e2e && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test tests/insights-arrival-order.spec.ts --repeat-each=3 --retries=0 --reporter=list,json
+main 3bc0f18  {"surveillance":2087,"core":2094,"market":2094,"pricing":2094,"reference":2094}   ✘ ×3
+this PR       {"core":364,"market":364,"pricing":370,"reference":370,"surveillance":2061}      ✓ ×3
+```
+
+- Options considered: **A** keep 1 in flight and change the P3 acceptance, the e2e and ADR-0012 (drops a README acceptance); **C** raise the cap in the e2e override only (hides production behaviour); reverting #174 (drops the #127 protection for every route). B keeps #127 for every other route and meets P3 as written. It was chosen by the CTO on #357.
+
 | Measurement (local, Release, seed 42 at scale 1.0, 2 rounds) | Before (`main` 7cbacc7) | After |
 |---|---|---|
 | Cold meta load, `db` p50 / p95 (200 loads per round) | 5.3 / 12.7 ms; 4.8 / 9.5 ms | 8.9 / 16.0 ms; 6.3 / 22.2 ms |

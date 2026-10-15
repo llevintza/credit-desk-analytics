@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using Desk.Api.Limits;
 using Desk.Api.Positions;
 using Desk.Data.Insights;
 
@@ -40,7 +41,8 @@ public static class InsightsEndpoints
             .Produces(StatusCodes.Status304NotModified)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
+            .WithMetadata(InsightsSourceEndpoint.Instance);
         return api;
     }
 
