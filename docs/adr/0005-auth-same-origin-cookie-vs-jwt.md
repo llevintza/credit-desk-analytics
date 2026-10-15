@@ -105,6 +105,15 @@ session cookie: 1020 bytes ("__Host-desk=<value>")
   - On deadline or client cancel, the stream's connection is disposed and both export slots are released in `finally`. The deadline is armed before the slots are taken, so nothing can throw between taking them and that `finally`.
 - **Cold meta load:** the four reference reads run one after another, so the request that loads the snapshot holds one connection under its one permit. In parallel, they held up to four connections under one permit.
 
+**Insights source reads** (amended in #357)
+- **Own per-user partition:** `GET /api/insights/{source}` runs in a second per-user concurrency partition, 5 in flight (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY`, default 5), queue 15 (`RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`, default 15), then 429 with `Retry-After`. A value that isn't a positive integer falls back to the default, as for every limit. Every other `/api` route stays at 1 in flight, queue 8.
+  - Why 5: the P3 board (README §6) asks for its five sources at once and paints each as it lands. The acceptance is that a slow source doesn't hold the other four back (ADR-0012). At 1 in flight, they ran one after another behind the slowest, and the P3 e2e failed on `main` after #174 (#357).
+  - Why 15: three boards' worth of calls (a reload or an as-of change while one is loading) wait rather than fail. The client cancels superseded calls, so the queue drains.
+  - The partition key is `insights:` plus the caller's key. Main keys start with `u:` or `ip:`, so the two never collide, and they share no permits or queue places: a full board doesn't block the user's grid, and a busy grid doesn't block the board.
+- **Bounded and read-only:** the endpoint is a cache-first `GET`. The partition sits where the main one does, before the user's token bucket and the shared database limiter, so a queued insights call holds no database permit and spends one token (both asserted for insights in `LimitsTests`). The worst case per user is 5 database permits of the shared 8, for the length of one board load. The shared limiter (8, queue 32) and the insights connection cap (`INSIGHTS_MAX_CONNECTIONS`, ADR-0012) still bound the process, so users together can't exceed the database budget.
+- **Matched on the routed endpoint:** the endpoint carries `InsightsSourceEndpoint` metadata, the same way exports carry `ExportEndpoint`. A path string alone moves nothing, and only the insights `MapGet` carries the marker (asserted).
+- Options considered: **A** keep 1 in flight and change the P3 acceptance, the e2e and ADR-0012 (drops a README acceptance); **C** raise the cap in the e2e override only (hides production behaviour); reverting #174 (drops the #127 protection for every route). B keeps #127 for every other route and meets P3 as written. It was chosen by the CTO on #357.
+
 | Measurement (local, Release, seed 42 at scale 1.0, 2 rounds) | Before (`main` 7cbacc7) | After |
 |---|---|---|
 | Cold meta load, `db` p50 / p95 (200 loads per round) | 5.3 / 12.7 ms; 4.8 / 9.5 ms | 8.9 / 16.0 ms; 6.3 / 22.2 ms |
