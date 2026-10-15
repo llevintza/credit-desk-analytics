@@ -1,6 +1,8 @@
 using System.Security.Claims;
+using System.Threading.RateLimiting;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
+using Desk.Api.Limits;
 using Desk.Data.App;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Authentication;
@@ -171,5 +173,30 @@ public sealed class PipelineUnitTests
         rotations.Issue("old", "r0", now.AddHours(1), now);
         rotations.Issue("new", "r0", now.AddHours(26), now.AddHours(2));
         Assert.Equal(1, rotations.Count);
+    }
+
+    [Fact]
+    public async Task AcquireOnce_refuses_the_synchronous_attempt_without_touching_the_limiter()
+    {
+        // #184: a token taken on the synchronous attempt is never given back, so only the asynchronous acquire counts.
+        using var bucket = PartitionedRateLimiter.Create<HttpContext, string>(_ => RateLimitPartition.GetTokenBucketLimiter("k", _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 2, TokensPerPeriod = 1, ReplenishmentPeriod = TimeSpan.FromHours(1), QueueLimit = 0, AutoReplenishment = false,
+        }));
+        using var limiter = new RateLimiting.AcquireOnce(bucket);
+        var http = new DefaultHttpContext();
+
+        using (var attempt = limiter.AttemptAcquire(http))
+        {
+            Assert.False(attempt.IsAcquired);
+            Assert.Empty(attempt.MetadataNames);
+            Assert.False(attempt.TryGetMetadata(MetadataName.RetryAfter.Name, out var metadata));
+            Assert.Null(metadata);
+        }
+        Assert.Equal(2, limiter.GetStatistics(http)!.CurrentAvailablePermits);
+
+        using (var lease = await limiter.AcquireAsync(http, cancellationToken: TestContext.Current.CancellationToken))
+            Assert.True(lease.IsAcquired);
+        Assert.Equal(1, limiter.GetStatistics(http)!.CurrentAvailablePermits);
     }
 }
