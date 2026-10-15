@@ -44,7 +44,7 @@ Every Docker Hub pull in CI on `main` @ `342dce8`:
 
 Digest check, run from a workstation with `docker manifest inspect` (it reads the manifest without pulling). A reference by digest only resolves if that exact content exists on that registry.
 
-**How to reproduce:** `bash perf/ci-image-mirrors.sh` (exit 1 on any MISS). The ghcr.io/ECR MISS lines below come from the same command, run by hand on the other candidates.
+**How to reproduce:** `bash perf/ci-image-mirrors.sh` (exit 1 on any MISS). The script also checks the rejected candidates and prints their MISS lines (reported, never failing).
 
 ```
 OK   ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0…bbb7f
@@ -74,5 +74,6 @@ Combine 2 and 3:
 - If mirror.gcr.io ever drops `library/postgres@b0f9…`, the `api` job's service fails to start. There's no fallback for that one pull. It's among the most-pulled images and CI requests it on every run, so we accept the risk. The fix would be to start that database from a step (after the mirror action) instead of `services:`.
 - `deploy/ci-images/k6/Dockerfile` had drifted to `grafana/k6:2.3.0` (a Dependabot bump) while `ci.yml` still runs 1.3.0. It is realigned to the 1.3.0 digest CI actually runs. A k6 2.x upgrade needs its own PR that moves both lines and re-measures the budgets. #255 (assert the ci-images digests match `ci.yml`) would catch this drift.
 - Dependabot's docker ecosystem now reads the gitleaks and k6 pins from ghcr.io (public, anonymous tag listing). If it can't, the symptom is missing bump PRs, not a broken build.
+- Testcontainers' Ryuk is the one tag-only pull in CI (before and after this change). It now resolves through mirror.gcr.io first, so for that image we trust Google's cache of Docker Hub as well as Docker Hub. Every other image is pulled by digest, which the daemon checks against the content, so neither the mirror nor the fallback can serve different bytes. Pinning Ryuk by digest through the Testcontainers config would close that gap.
 - Local commands in docs still show the Docker Hub names. They pull the same digests, and the rate limit isn't a problem off shared runner IPs.
 - Revisit if GitHub-hosted runners get a Docker Hub arrangement, if mirror.gcr.io starts limiting, or when we move off `services:` for the `api` database.
