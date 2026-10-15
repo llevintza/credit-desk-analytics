@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.HttpOverrides;
 using IPNetwork = System.Net.IPNetwork;
 using Microsoft.Extensions.Options;
@@ -67,7 +68,24 @@ public sealed class ClientAddress(bool behindProxy)
         if (behindProxy && (source is not (Source.CfConnectingIp or Source.DirectHop)
                             || (source is Source.DirectHop && http.Request.Headers.ContainsKey("CF-Connecting-IP"))))
             http.RequestServices?.GetService<ClientAddressDiagnostics>()?.Fallback(http, source);
-        return address?.ToString() ?? "unknown";
+        return Key(address);
+    }
+
+    /// <summary>
+    /// The limiter key for a client address (#164). IPv6 is keyed on its /64, the normal end-user allocation: per
+    /// /128, one holder would get 2^64 login windows. IPv4-mapped IPv6 (<c>::ffff:a.b.c.d</c>) is the IPv4 client.
+    /// </summary>
+    internal static string Key(IPAddress? address)
+    {
+        if (address is null)
+            return "unknown";
+        if (address.IsIPv4MappedToIPv6)
+            address = address.MapToIPv4();
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+            return address.ToString();
+        var bytes = address.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return $"{new IPAddress(bytes)}/64";
     }
 
     /// <summary>Which rule picked the key. Everything but <see cref="CfConnectingIp"/> and a genuine

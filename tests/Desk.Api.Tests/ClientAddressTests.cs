@@ -117,6 +117,34 @@ public sealed class ClientAddressTests
         Assert.Equal(behind ? Client : RenderLb, ClientAddress.From(config).For(http));
     }
 
+    [Theory]
+    [InlineData("203.0.113.7", "203.0.113.7")]
+    [InlineData("::ffff:203.0.113.7", "203.0.113.7")]            // IPv4-mapped: the same client as plain IPv4
+    [InlineData("2001:db8:1:2::7", "2001:db8:1:2::/64")]
+    [InlineData("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64")]
+    [InlineData("2001:db8:1:3::7", "2001:db8:1:3::/64")]
+    [InlineData("fe80::1%3", "fe80::/64")]
+    [InlineData(null, "unknown")]
+    public void Ipv6_clients_are_keyed_on_their_64_and_ipv4_mapped_on_the_ipv4_address(string? address, string key)
+    {
+        // #164: one end-user allocation is a /64. Keyed per /128, its holder would get 2^64 login windows.
+        Assert.Equal(key, ClientAddress.Key(address is null ? null : IPAddress.Parse(address)));
+    }
+
+    [Fact]
+    public void For_keys_cf_connecting_ip_and_the_peer_on_the_64()
+    {
+        var behind = new DefaultHttpContext();
+        behind.Connection.RemoteIpAddress = IPAddress.Parse(RenderLb);
+        behind.Request.Headers["X-Forwarded-For"] = $"2001:db8:5:6::9, {CfEdgeV6}";
+        behind.Request.Headers["CF-Connecting-IP"] = "2001:db8:5:6::9";
+        Assert.Equal("2001:db8:5:6::/64", new ClientAddress(true).For(behind));
+
+        var direct = new DefaultHttpContext();
+        direct.Connection.RemoteIpAddress = IPAddress.Parse($"::ffff:{Client}");
+        Assert.Equal(Client, new ClientAddress(false).For(direct));
+    }
+
     [Fact]
     public void The_forwarded_headers_middleware_keeps_proto_but_no_longer_rewrites_the_peer()
     {

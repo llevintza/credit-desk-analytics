@@ -137,9 +137,9 @@ public static class RateLimiting
     /// </summary>
     internal static string InsightsPartitionKey(HttpContext http, ClientAddress clients) => $"insights:{PartitionKey(http, clients)}";
 
-    /// <summary>Signed-in users get their own bucket; anonymous callers get one per client IP.</summary>
+    /// <summary>Signed-in users get their own bucket, keyed on the account id (#185); anonymous callers get one per client IP.</summary>
     internal static string PartitionKey(HttpContext http, ClientAddress clients) =>
-        http.User.IsSignedIn() ? $"u:{http.User.Identity!.Name}" : $"ip:{clients.For(http)}";
+        http.User.IsSignedIn() && http.User.UserId() is { } id ? $"u:{id}" : $"ip:{clients.For(http)}";
 
     internal static async ValueTask OnRejectedAsync(OnRejectedContext ctx, CancellationToken ct)
     {
