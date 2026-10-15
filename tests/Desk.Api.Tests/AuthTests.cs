@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
@@ -232,6 +233,30 @@ public sealed class AuthTests(PostgresApiFactory api)
         var fresh = await RefreshAsync(client, tokens.RefreshToken);
         Assert.Equal("Bearer", fresh.TokenType);
         Assert.NotEqual(tokens.AccessToken, fresh.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Every_issued_token_carries_the_account_id_after_login_and_after_a_refresh()
+    {
+        // #361: the rate limits and the export gate are keyed on NameIdentifier and refuse a session without it, so
+        // every token the API issues must carry it. ADR-0024: login and refresh are the only ways to get one.
+        var user = await api.CreateUserAsync();
+        var client = api.NewClient();
+        var login = await PostgresApiFactory.LoginAsync(client, user.Email!);
+        var refreshed = await RefreshAsync(client, login.RefreshToken);
+        var again = await RefreshAsync(client, refreshed.RefreshToken);
+
+        var bearer = api.Services.GetRequiredService<IOptionsMonitor<BearerTokenOptions>>().Get(AuthSetup.Scheme);
+        foreach (var pair in new[] { login, refreshed, again })
+        {
+            foreach (var ticket in new[] { bearer.BearerTokenProtector.Unprotect(pair.AccessToken), bearer.RefreshTokenProtector.Unprotect(pair.RefreshToken) })
+            {
+                Assert.NotNull(ticket);
+                Assert.True(ticket.Principal.TryGetAccountId(out var id));
+                Assert.Equal(user.Id.ToString(), id);
+            }
+        }
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 

@@ -157,16 +157,16 @@ public sealed class ClientAddressDiagnosticsTests
     {
         var diagnostics = Diagnostics();
         var clients = new ClientAddress(true);
-        // Peer outside Render's network (condition 2 of #165), an internal hop appended after the edge (condition 3),
-        // and no X-Forwarded-For at all: each kind gets its own line, so one can't mask another.
-        Assert.Equal("100.64.3.7", clients.For(Request(diagnostics, "100.64.3.7", $"{Client}, {CfEdge}", Client)));
-        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        // A public peer (not Render's network), a chain of internal hops only, and no X-Forwarded-For at all: each
+        // kind gets its own line, so one can't mask another.
+        Assert.Equal("192.0.2.50", clients.For(Request(diagnostics, "192.0.2.50", $"{Client}, {CfEdge}", Client)));
+        clients.For(Request(diagnostics, RenderLb, "10.9.8.7", Client));
         clients.For(Request(diagnostics, RenderLb));
         Assert.Collection(_log.Lines,
             l =>
             {
                 Assert.StartsWith("Client address fell back to a shared key (UntrustedPeer):", l.Text);
-                Assert.Contains("Peer=100.64.3.7", l.Text);
+                Assert.Contains("Peer=192.0.2.0/24 (public)", l.Text);
                 Assert.Contains("PeerIsRender=False", l.Text);
                 Assert.Contains("Suppressed=0", l.Text);
             },
@@ -174,17 +174,17 @@ public sealed class ClientAddressDiagnosticsTests
             l => Assert.StartsWith("Client address fell back to a shared key (NoForwardedFor):", l.Text));
 
         // Within the interval, repeats of a kind are counted, then reported with its next line.
-        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
-        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        clients.For(Request(diagnostics, RenderLb, "10.9.8.7", Client));
+        clients.For(Request(diagnostics, RenderLb, "10.9.8.7", Client));
         Assert.Equal(3, _log.Lines.Count);
         _time.Advance(ClientAddressDiagnostics.FallbackInterval - TimeSpan.FromTicks(1));
-        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        clients.For(Request(diagnostics, RenderLb, "10.9.8.7", Client));
         Assert.Equal(3, _log.Lines.Count);
         _time.Advance(TimeSpan.FromTicks(1));
-        clients.For(Request(diagnostics, RenderLb, $"{Client}, {CfEdge}, 10.9.8.7", Client));
+        clients.For(Request(diagnostics, RenderLb, "10.9.8.7", Client));
         var last = _log.Lines.Last().Text;
         Assert.StartsWith("Client address fell back to a shared key (InternalHop):", last);
-        Assert.Contains("ForwardedForShape=public>cf>render", last);
+        Assert.Contains("ForwardedForShape=render", last);
         Assert.Contains("Suppressed=3", last);
         Assert.DoesNotContain(Client, string.Join('\n', _log.Lines.Select(l => l.Text)));
     }
@@ -280,13 +280,23 @@ public sealed class ClientAddressDiagnosticsTests
     [InlineData(CfEdge, "cf")]
     [InlineData("2606:4700:10::ac43:1b0a", "cf")]
     [InlineData(RenderLb, "render")]
-    [InlineData("172.20.0.4", "private")]
-    [InlineData("100.64.0.9", "private")]
-    [InlineData("fd00::1", "private")]
+    [InlineData("172.20.0.4", "render")] // any private address is Render's network (#165)
+    [InlineData("100.64.0.9", "render")]
+    [InlineData("fd00::1", "render")]
+    [InlineData("198.51.100.10", "trusted")]
     [InlineData(Client, "public")]
     [InlineData("unknown", "invalid")]
     public void Each_forwarded_for_entry_is_logged_as_its_kind(string entry, string kind) =>
-        Assert.Equal(kind, ClientAddressDiagnostics.Classify(entry));
+        Assert.Equal(kind, ClientAddressDiagnostics.Classify(entry, [System.Net.IPNetwork.Parse("198.51.100.0/24")]));
+
+    [Fact]
+    public async Task The_start_up_line_lists_the_trusted_hops()
+    {
+        var diagnostics = new ClientAddressDiagnostics(
+            new ClientAddress(true, ClientAddress.ParseNetworks("198.51.100.0/24")), Options.Create(new ForwardedHeadersOptions()), _time, _log);
+        await diagnostics.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("TrustedHops=198.51.100.0/24", _log.Lines.Single().Text);
+    }
 
     [Theory]
     [InlineData(null, "none")]

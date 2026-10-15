@@ -33,6 +33,7 @@ builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, Cl
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
+builder.Services.AddSingleton<DbHealthProbe>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
@@ -101,7 +102,7 @@ app.UseDeskSwagger();
 // defend against (ADR-0024).
 var api = app.MapGroup("/api")
     .RequireAuthorization();
-app.MapHealthEndpoints(api);
+app.MapHealthEndpoints();
 api.MapAuthEndpoints();
 api.MapMetaEndpoints();
 api.MapPositionsEndpoints();
