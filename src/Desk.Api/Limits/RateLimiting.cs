@@ -112,7 +112,6 @@ public static class RateLimiting
 
         protected override ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken) =>
             inner.AcquireAsync(resource, permitCount, cancellationToken);
-
     }
 
     /// <summary>
