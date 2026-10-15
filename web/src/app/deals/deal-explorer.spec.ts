@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, TestRequest, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Signal, WritableSignal } from '@angular/core';
-import type { FilterChangedEvent, RowClickedEvent } from 'ag-grid-community';
+import type { GridApi, GridReadyEvent, ModelUpdatedEvent, RowClickedEvent } from 'ag-grid-community';
 import { firstValueFrom, throwError, toArray } from 'rxjs';
 import { KeyboardService } from '../core/keyboard.service';
 import { ScopeService } from '../core/scope.service';
@@ -42,8 +42,16 @@ interface Internals {
   selectedId: WritableSignal<number | null>;
   quickText: Signal<string>;
   select(e: RowClickedEvent<DealRow>): void;
-  onFilterChanged(e: FilterChangedEvent): void;
+  onListReady(e: GridReadyEvent): void;
+  onModelUpdated(e: ModelUpdatedEvent): void;
 }
+
+/** A stand-in grid API: jsdom's real grid may or may not be ready by now, so the tests drive both states themselves. */
+const fakeGrid = (displayed: number) => {
+  let destroyed = false;
+  const api = { getDisplayedRowCount: vi.fn(() => displayed), redrawRows: vi.fn(), isDestroyed: () => destroyed };
+  return { api, destroy: () => { destroyed = true; }, event: { api } as unknown as GridReadyEvent & ModelUpdatedEvent & { api: GridApi } };
+};
 
 describe('Deal Explorer page (README §6 P4)', () => {
   beforeAll(() => {
@@ -191,11 +199,90 @@ describe('Deal Explorer page (README §6 P4)', () => {
     input.dispatchEvent(new Event('input'));
     await settle();
     await vi.waitFor(() => expect(page.quickText()).toBe('CLO'), { timeout: 2000, interval: 20 });
-    page.onFilterChanged({ api: { getDisplayedRowCount: () => 1 } } as unknown as FilterChangedEvent);
+    page.onModelUpdated(fakeGrid(1).event);
     expect(TestBed.inject(StatusService).visibleRows()).toBe(1);
     expect(TestBed.inject(KeyboardService).actions().focusQuickFilter).toBeTypeOf('function');
     TestBed.inject(KeyboardService).actions().focusQuickFilter!();
     expect(document.activeElement).toBe(input);
+  });
+
+  it('reads counts and redraws only through a live list grid, never a destroyed one', async () => {
+    const { http, page, listReq, dealReq, settle } = await render();
+    const status = TestBed.inject(StatusService);
+    // jsdom's real grid reports in on its own schedule; ignore it, so only the stand-ins below drive the page.
+    const ready = page.onListReady.bind(page);
+    page.onListReady = () => undefined;
+    page.onModelUpdated = () => undefined;
+    loadScope(http);
+    await settle();
+    listReq().flush(list);
+    await settle();
+
+    const first = fakeGrid(2); // the quick filter leaves 2 of 3 rows
+    ready(first.event);
+    expect(status.visibleRows()).toBe(2);
+    page.selectedId.set(1);
+    await settle();
+    expect(first.api.redrawRows).toHaveBeenCalledTimes(1);
+    dealReq(1);
+
+    // A scope change rebuilds the grid: the old API is destroyed, and the status bar no longer asks it.
+    first.destroy();
+    TestBed.inject(ScopeService).toggle(1);
+    await settle();
+    expect(status.visibleRows()).toBe(0);
+    expect(status.totalRows()).toBe(0);
+    page.selectedId.set(3);
+    await settle();
+    expect(first.api.redrawRows).toHaveBeenCalledTimes(1);
+    expect(first.api.getDisplayedRowCount).toHaveBeenCalledTimes(1);
+    listReq().flush(list);
+    await settle();
+    expect(status.visibleRows()).toBe(3);
+
+    // While a live grid is there, a list change counts what the grid displays.
+    const second = fakeGrid(1);
+    ready(second.event);
+    TestBed.inject(ScopeService).toggle(1);
+    await settle();
+    expect(second.api.getDisplayedRowCount).toHaveBeenCalledTimes(2);
+    expect(status.visibleRows()).toBe(1);
+    http.match(() => true).filter((r) => !r.cancelled).forEach((r) => r.flush(r.request.url === '/api/deals' ? list : detail(3, true)));
+  });
+
+  it('retrying a failed deal asks for the deal only, and keeps the list grid', async () => {
+    const { http, q, page, listReq, dealReq, settle } = await render();
+    loadScope(http);
+    await settle();
+    listReq().flush(list);
+    page.selectedId.set(1);
+    await settle();
+    dealReq(1).flush(null, { status: 503, statusText: 'down' });
+    await settle();
+    (q('deal-detail')!.querySelector('[role=alert] button') as HTMLButtonElement).click();
+    await settle();
+    http.expectNone((r) => r.url === '/api/deals');
+    dealReq(1).flush(detail(1, true));
+    await settle();
+    expect(q('deal-name')?.textContent).toBe('CLO 2024-1');
+    expect(q('deal-grid')).not.toBeNull();
+  });
+
+  it('shows the held MV from the list row, and a dash when the deal is not in the list', async () => {
+    const { http, q, page, listReq, dealReq, settle } = await render();
+    loadScope(http);
+    await settle();
+    listReq().flush({ ...list, deals: [row(1, 3, 2_250_000)] });
+    page.selectedId.set(1);
+    await settle();
+    dealReq(1).flush(detail(1, true)); // positions sum to 1,500,000; the server's decimal total wins
+    await settle();
+    expect(q('held-mv')?.textContent).toBe('2,250,000');
+    page.selectedId.set(4);
+    await settle();
+    dealReq(4).flush(detail(4, true));
+    await settle();
+    expect(q('held-mv')?.textContent).toBe('—');
   });
 
   it('turns a request into loading, then ready or error', async () => {

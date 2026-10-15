@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
-import { ModuleRegistry, QuickFilterModule, type FilterChangedEvent, type GridApi, type GridOptions, type GridReadyEvent, type RowClickedEvent } from 'ag-grid-community';
+import { ModuleRegistry, QuickFilterModule, type GridApi, type GridOptions, type GridReadyEvent, type ModelUpdatedEvent, type RowClickedEvent } from 'ag-grid-community';
 import { Observable, catchError, debounceTime, distinctUntilChanged, map, of, startWith, switchMap } from 'rxjs';
 import { formatCell, fullPrecision } from '../core/format';
 import { KeyboardService } from '../core/keyboard.service';
@@ -51,9 +51,12 @@ export class DealExplorer {
   private readonly status = inject(StatusService);
   private readonly keyboard = inject(KeyboardService);
   private readonly quickInput = viewChild<ElementRef<HTMLInputElement>>('quickInput');
+  /** The list grid's API. The grid is rebuilt on every scope change and retry, so read it through `liveGrid()`. */
   private grid?: GridApi;
 
-  private readonly retry = signal(0);
+  /** Separate retries, so retrying a failed deal never rebuilds the list grid (and its scroll and filter). */
+  private readonly listRetry = signal(0);
+  private readonly detailRetry = signal(0);
   protected readonly selectedId = signal<number | null>(null);
   protected readonly quick = signal('');
   /** Typed input settles before the grid refilters (README §9.4). */
@@ -64,7 +67,7 @@ export class DealExplorer {
     this.scope.ready() ? { asOf: this.scope.asOf(), portfolioIds: this.scope.selected() } : null);
 
   protected readonly list = toSignal(
-    toObservable(computed(() => ({ base: this.base(), retry: this.retry() }))).pipe(
+    toObservable(computed(() => ({ base: this.base(), retry: this.listRetry() }))).pipe(
       switchMap(({ base }) => base === null ? of<Loaded<DealList>>({ kind: 'loading' }) : loaded(this.api.deals(base.asOf, base.portfolioIds))),
     ),
     { initialValue: { kind: 'loading' } as Loaded<DealList> },
@@ -74,7 +77,7 @@ export class DealExplorer {
     toObservable(computed(() => {
       const base = this.base();
       const id = this.selectedId();
-      return base === null || id === null ? null : { ...base, id, retry: this.retry() };
+      return base === null || id === null ? null : { ...base, id, retry: this.detailRetry() };
     })).pipe(
       switchMap((q): Observable<DetailState> => q === null ? of({ kind: 'none' }) : loaded(this.api.deal(q.id, q.asOf, q.portfolioIds))),
     ),
@@ -96,18 +99,21 @@ export class DealExplorer {
   protected readonly trancheCols = computed(() => { const n = this.negatives(); return trancheColumns(() => n); });
   protected readonly positionCols = computed(() => { const n = this.negatives(); return positionColumns(() => n); });
 
-  /** The selected deal, with its stack and trend derived once per response (no work in the template). */
+  /**
+   * The selected deal, with its stack and trend derived once per response (no work in the template). Held MV is the
+   * list row's server-side decimal sum for the same scope, not a float sum in the browser.
+   */
   protected readonly view = computed(() => {
     const s = this.detail();
     if (s.kind !== 'ready') return null;
     const d = s.value;
-    const held = d.positions.reduce((sum, p) => sum + (p.marketValue ?? 0), 0);
+    const listed = this.rows().find((r) => r.dealId === d.deal.dealId);
     return {
       ...d,
       stack: capitalStack(d.tranches),
       trend: trendRows(d.surveillance),
       months: d.surveillance.map((m) => ({ period: m.period, label: monthHeader(m.period) })),
-      heldMv: d.positions.length ? held : null,
+      heldMv: listed ? listed.heldMarketValue : null,
     };
   });
 
@@ -136,13 +142,13 @@ export class DealExplorer {
     // The highlighted row follows the selection.
     effect(() => {
       this.selectedId();
-      untracked(() => this.grid?.redrawRows());
+      untracked(() => this.liveGrid()?.redrawRows());
     });
     effect(() => {
       const s = this.summary();
       untracked(() => {
         this.status.totalRows.set(s.deals);
-        this.status.visibleRows.set(this.grid ? this.grid.getDisplayedRowCount() : s.deals);
+        this.status.visibleRows.set(this.liveGrid()?.getDisplayedRowCount() ?? s.deals);
       });
     });
     this.keyboard.register({ focusQuickFilter: () => this.quickInput()?.nativeElement.focus() });
@@ -152,11 +158,18 @@ export class DealExplorer {
     });
   }
 
-  protected onListReady(e: GridReadyEvent): void {
-    this.grid = e.api;
+  /** Null once the grid behind `grid` is destroyed (scope change, retry), so a stale API is never asked for counts. */
+  private liveGrid(): GridApi | undefined {
+    return this.grid && !this.grid.isDestroyed() ? this.grid : undefined;
   }
 
-  protected onFilterChanged(e: FilterChangedEvent): void {
+  protected onListReady(e: GridReadyEvent): void {
+    this.grid = e.api;
+    this.status.visibleRows.set(e.api.getDisplayedRowCount());
+  }
+
+  /** Fires after new row data and after every filter change, so the status bar's visible count follows both. */
+  protected onModelUpdated(e: ModelUpdatedEvent): void {
     this.status.visibleRows.set(e.api.getDisplayedRowCount());
   }
 
@@ -168,8 +181,12 @@ export class DealExplorer {
     this.quick.set((event.target as HTMLInputElement).value);
   }
 
-  protected reload(): void {
-    this.retry.update((n) => n + 1);
+  protected reloadList(): void {
+    this.listRetry.update((n) => n + 1);
+  }
+
+  protected reloadDetail(): void {
+    this.detailRetry.update((n) => n + 1);
   }
 
   protected money(value: number | null): string {

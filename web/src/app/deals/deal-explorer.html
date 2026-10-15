@@ -14,14 +14,14 @@
   <div class="master">
     @switch (list().kind) {
       @case ('error') {
-        <div class="error-tile" role="alert">Could not load deals. <button type="button" (click)="reload()">Retry</button></div>
+        <div class="error-tile" role="alert">Could not load deals. <button type="button" (click)="reloadList()">Retry</button></div>
       }
       @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading deals"></div> }
     }
     @if (list().kind === 'ready') {
       <ag-grid-angular class="grid" data-testid="deal-grid" [gridOptions]="listOptions" [columnDefs]="listColumns()" [rowData]="rows()"
                        [quickFilterText]="quickText()" (gridReady)="onListReady($event)" (rowClicked)="select($event)"
-                       (filterChanged)="onFilterChanged($event)" />
+                       (modelUpdated)="onModelUpdated($event)" />
     }
   </div>
 
@@ -30,7 +30,7 @@
       @case ('none') { <p class="hint">Select a deal to see its tranches, surveillance trend and positions.</p> }
       @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading deal"></div> }
       @case ('error') {
-        <div class="error-tile" role="alert">Could not load this deal. <button type="button" (click)="reload()">Retry</button></div>
+        <div class="error-tile" role="alert">Could not load this deal. <button type="button" (click)="reloadDetail()">Retry</button></div>
       }
     }
     @if (view(); as v) {
