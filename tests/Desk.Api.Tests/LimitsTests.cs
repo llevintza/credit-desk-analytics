@@ -94,6 +94,38 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task Ipv6_clients_in_one_64_share_a_login_window_and_other_64s_do_not()
+    {
+        // #164: rotating the low 64 bits of an IPv6 address must not buy a fresh window.
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        const string edge = "2606:4700:10::ac43:1b0a";
+        for (var i = 0; i < 5; i++)
+        {
+            var ip = $"2001:db8:7:8::{i + 1:x}";
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"{ip}, {edge}", ip), Ct)).StatusCode);
+        }
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"2001:db8:7:8:ab::1, {edge}", "2001:db8:7:8:ab::1"), Ct)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"2001:db8:7:9::1, {edge}", "2001:db8:7:9::1"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task An_ipv4_mapped_peer_and_the_same_plain_ipv4_peer_share_a_login_window()
+    {
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5");
+            b.ConfigureTestServices(s => s.AddTransient<IStartupFilter, PeerFromHeader>());
+        });
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(i % 2 == 0 ? "203.0.113.9" : "::ffff:203.0.113.9"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login("::ffff:203.0.113.9"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login("203.0.113.9"), Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Spoofed_client_headers_from_an_untrusted_source_share_one_window()
     {
         await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
