@@ -1,0 +1,50 @@
+:host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.quick { width: 260px; max-width: 100%; }
+.caption, .hint, .sub, .empty { color: var(--muted); }
+.spacer { flex: 1; }
+.layout { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
+.master { display: flex; flex-direction: column; height: 42vh; min-height: 220px; flex: none; }
+.master .grid { flex: 1; min-height: 0; }
+.detail { padding: 8px; }
+.hint { margin: 8px 0; }
+.deal-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.deal-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.chip { font-size: 11px; color: var(--muted); padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px; }
+.facts { margin-left: auto; color: var(--muted); }
+.facts b { color: var(--text); font-weight: 600; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 8px; }
+.panel { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-width: 0; }
+.panel h3 { margin: 4px 0 6px; font-size: 12px; font-weight: 600; }
+.panel h3 .sub { font-weight: 400; margin-left: 4px; }
+.panel .grid { display: block; margin-bottom: 4px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.neg { color: var(--down); }
+
+/* Capital structure stack: one bar per tranche (single series, so no legend), thin, a 2px gap between bars. */
+.stack { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; }
+.stack li { display: grid; grid-template-columns: 48px 1fr 120px 64px; align-items: center; gap: 8px; font-size: 12px; padding: 1px 0; }
+.stack li:hover { background: var(--hover); }
+.stack .label { font-weight: 600; }
+.stack .track { height: 12px; background: var(--surface-3); border-radius: 0 4px 4px 0; overflow: hidden; }
+.stack .bar { display: block; height: 100%; min-width: 1px; background: var(--accent); border-radius: 0 4px 4px 0; }
+.stack .share { color: var(--muted); }
+
+.scroll { overflow-x: auto; margin-bottom: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { padding: 2px 4px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+thead th { color: var(--muted); font-weight: 500; }
+tbody th { text-align: left; font-weight: 500; }
+tbody tr:nth-child(even) { background: var(--zebra); }
+
+.error-tile { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--down); color: var(--down); background: var(--surface-2); display: flex; gap: 8px; align-items: center; }
+.skeleton { flex: 1; min-height: 90px; margin: 8px 0; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); opacity: 0.6; }
+:host ::ng-deep .neg { color: var(--down); }
+:host ::ng-deep .row-label { font-weight: 600; }
+:host ::ng-deep .selected-row { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
+:host ::ng-deep .num, :host ::ng-deep .ag-header-cell { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 700px) {
+  .panels { grid-template-columns: 1fr; }
+  .stack li { grid-template-columns: 40px 1fr 96px 52px; }
+}

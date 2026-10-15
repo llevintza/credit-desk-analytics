@@ -202,3 +202,15 @@ The text above predates phase 5. Its bypass list and the R1 allowlist omit an en
   - `A_cached_fund_response_never_outlives_the_grant_on_the_same_host`;
   - `A_fund_with_performance_but_no_portfolios_is_404_for_everyone`.
 - **Insights:** open PR #339's `GET /api/insights/{source}` scopes in SQL (`portfolio_id = ANY(@portfolios)`) and keys its cache and ETag on the set, so it is not a bypass. Name it here once it merges if that changes.
+
+## Amendment (2026-10-15): the deal endpoints
+
+README §6 P4 and this ADR's rule list "deals" among portfolio-owned data. Phase 7 (#363) splits a deal into reference data and holdings. This amendment records the split, so #122's path classification stays complete. The full reasoning is in ADR-0013 (Consequences, Scope).
+
+- **`GET /api/deals`** and **`GET /api/deals/{dealId}`** (`src/Desk.Api/Deals/DealEndpoints.cs`) are **scoped**, not exempt and not a bypass.
+  - Both resolve the set through `entitlements.For` (`ScopeAsync`); a requested portfolio outside it is dropped, and an all-outside request gives the empty set, never "all".
+  - Holdings (position count, held face and MV, the detail's positions) are filtered in SQL with `portfolio_id = ANY(@portfolios)` (`DealRepository`), and the cache key and ETag carry the sorted set.
+- **Deal and tranche terms and surveillance are desk-wide reference data**: every deal is listed for every user, as the bond and deal terms already are on the positions grid. They identify no holding and no portfolio. With an empty set the list still shows the deal universe, with no positions and null held columns.
+- **Partially held deals** show only the in-scope holdings. This is the ordinary scoped pattern, unlike the fund endpoint's all-or-nothing gate above, because no deal-level number aggregates across portfolios.
+- **R1 allowlist:** no entry. The deal code never reads the unscoped portfolio list.
+- **Stub-provider tests (E7):** `tests/Desk.Api.Tests/DealsTests.cs` covers both: `A_single_portfolio_sees_only_its_own_holdings` (with a deal other portfolios also hold, and an out-of-scope request that is dropped) and `An_empty_entitlement_returns_zero_position_rows`.
