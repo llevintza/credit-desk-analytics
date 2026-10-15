@@ -445,7 +445,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // Signed in before the only permit is taken: login itself needs one.
         var other = await SignedInOnAsync(host);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         // Another user fills the shared queue (the same user would wait in their own per-user queue instead).
         var queued = other.GetAsync("/api/me", Ct);
@@ -485,11 +485,11 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // They sign in before the only permit is taken: login itself needs one.
         var second = await SignedInOnAsync(host, Roles.Admin);
         var third = await SignedInOnAsync(host, Roles.Admin);
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var queued = second.GetAsync("/api/health/db", Ct);    // waits in the queue
+        var queued = second.GetAsync(HoldsAPermit, Ct);    // waits in the queue
         await Task.Delay(100, Ct);
-        var rejected = await third.GetAsync("/api/health/db", Ct);
+        var rejected = await third.GetAsync(HoldsAPermit, Ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.Equal("1", rejected.Headers.GetValues("Retry-After").Single());
@@ -505,7 +505,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await using var host = api.WithSettings(("MAINTENANCE_MODE", "true"));
         var client = PostgresApiFactory.NewClient(host);
 
-        foreach (var (method, path) in new[] { ("GET", "/api/me"), ("POST", "/api/auth/login"), ("GET", "/api/health/db"), ("GET", "/api/nope") })
+        foreach (var (method, path) in new[] { ("GET", "/api/me"), ("POST", "/api/auth/login"), ("GET", HoldsAPermit), ("GET", "/api/nope") })
         {
             using var req = new HttpRequestMessage(new HttpMethod(method), path)
             {
@@ -545,32 +545,77 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public async Task Health_db_is_admin_only_and_checks_the_database()
+    public async Task Health_db_is_anonymous_and_says_only_that_the_database_is_up()
     {
-        Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().GetAsync("/api/health/db", Ct)).StatusCode);
-
-        var (viewer, _, _) = await api.SignedInAsync(Roles.Viewer);
-        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync("/api/health/db", Ct)).StatusCode);
-
-        var before = api.ConnectionsOpened(api);
-        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
-        var res = await admin.GetFromJsonAsync<DbHealthResponse>("/api/health/db", Ct);
-        Assert.Equal("ok", res!.Status);
-        Assert.True(api.ConnectionsOpened(api) > before);
+        // #113: the same exposure as /health, outside /api, and nothing but up or down.
+        var count = new CountingProbes();
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count)));
+        var res = await PostgresApiFactory.NewClient(host).GetAsync("/health/db", Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("""{"status":"up"}""", await res.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(1, count.Probes);
     }
 
     [Fact]
-    public async Task Health_db_is_503_when_the_database_is_unreachable()
+    public async Task Health_db_is_503_when_the_database_is_unreachable_and_says_nothing_else()
     {
-        var admin = await api.CreateUserAsync(Roles.Admin);
-        // A token from a healthy host, sent to a host whose database is gone (the keys were read at login).
         await using var broken = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(new FailingCommands())));
-        var token = (await PostgresApiFactory.LoginAsync(api.NewClient(), admin.Email!)).AccessToken;
-        var client = PostgresApiFactory.NewClient(broken);
-        PostgresApiFactory.UseToken(client, token);
-        var res = await client.GetAsync("/api/health/db", Ct);
+        var res = await PostgresApiFactory.NewClient(broken).GetAsync("/health/db", Ct);
+        await AssertDownAsync(res);
+    }
+
+    /// <summary>Down is a 503 problem with a title and nothing else: no detail, host, timing or version.</summary>
+    private static async Task AssertDownAsync(HttpResponseMessage res)
+    {
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
-        Assert.DoesNotContain("Host=", await res.Content.ReadAsStringAsync(Ct));
+        var body = await res.Content.ReadAsStringAsync(Ct);
+        var problem = System.Text.Json.JsonSerializer.Deserialize<ProblemDetails>(body, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal(HealthEndpoints.DownTitle, problem.Title);
+        Assert.Null(problem.Detail);
+        Assert.DoesNotContain("Host", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Health_db_checks_the_database_at_most_once_per_interval()
+    {
+        // Anonymous and outside the rate limits: polling it must not open a connection per request.
+        var count = new CountingProbes();
+        var (owned, clock) = api.WithOwnClock();
+        await using var _ = owned;
+        await using var host = owned.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count)));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(1, count.Probes);
+
+        clock.Advance(DbHealthProbe.CacheFor - TimeSpan.FromMilliseconds(1));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(1, count.Probes);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/db", Ct)).StatusCode);
+        Assert.Equal(2, count.Probes);
+    }
+
+    [Fact]
+    public async Task Health_db_in_maintenance_mode_is_down_without_opening_a_connection()
+    {
+        var count = new CountingProbes();
+        await using var host = api.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("MAINTENANCE_MODE", "true");
+            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(count));
+        });
+        await AssertDownAsync(await PostgresApiFactory.NewClient(host).GetAsync("/health/db", Ct));
+        Assert.Equal(0, count.Probes);
+        Assert.Equal(0, api.ConnectionsOpened(host));
+    }
+
+    [Fact]
+    public async Task The_old_api_health_db_path_is_gone()
+    {
+        var (admin, _, _) = await api.SignedInAsync(Roles.Admin);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/health/db", Ct)).StatusCode);
     }
 
     [Fact]
@@ -633,7 +678,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // the user's one permit, held in the database
+        var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one permit, held in the database
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = client.GetAsync("/api/me", Ct);           // the user's one queue place
         await Task.Delay(100, Ct);
@@ -677,7 +722,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
         var other = await SignedInOnAsync(host); // before any permit is taken: login needs one
 
-        var running = client.GetAsync("/api/health/db", Ct);   // A's one permit, and one of the two database permits
+        var running = client.GetAsync(HoldsAPermit, Ct);   // A's one permit, and one of the two database permits
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = new[] { client.GetAsync("/api/me", Ct), client.GetAsync("/api/me", Ct) }; // in A's own queue
         await Task.Delay(100, Ct);
@@ -711,7 +756,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await PostgresApiFactory.LoginAsync(holder, admin.Email!);
         var user = await SignedInOnAsync(host); // before the only permit is taken: login needs one
 
-        var running = holder.GetAsync("/api/health/db", Ct); // holds the only database permit
+        var running = holder.GetAsync(HoldsAPermit, Ct);    // holds the only database permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = user.GetAsync("/api/me", Ct);           // waits in the shared queue: token 1 of 3
         await Task.Delay(100, Ct);
@@ -742,7 +787,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the only database permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only database permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var anonymous = PostgresApiFactory.NewClient(host);
         var calls = Enumerable.Range(0, 3).Select(_ => anonymous.GetAsync("/api/me", Ct)).ToArray();
@@ -769,7 +814,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // holds the user's one permit
+        var running = client.GetAsync(HoldsAPermit, Ct);   // holds the user's one permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var second = client.GetAsync("/api/me", Ct);           // both queue behind it
         var third = client.GetAsync("/api/me", Ct);
@@ -1154,7 +1199,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var insights = new[] { client.GetAsync(HeldInsights, Ct), client.GetAsync(HeldInsights, Ct) }; // two insights permits
         var held = await HeldAsync(gate, 2);
 
-        var running = client.GetAsync("/api/health/db", Ct);   // the user's one main permit, held in the database
+        var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one main permit, held in the database
         await commands.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = Enumerable.Range(0, 8).Select(_ => client.GetAsync("/api/me", Ct)).ToArray(); // the 8 queue places
         await Task.Delay(200, Ct);
@@ -1221,21 +1266,39 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
     }
 
-    /// <summary>Holds every <c>SELECT 1</c> until released, so the test controls how long a permit is held.</summary>
+    /// <summary>A signed-in request that reads the database through the /api limiters (a user's saved presets).</summary>
+    private const string HoldsAPermit = "/api/presets/positions";
+
+    /// <summary>Holds the <see cref="HoldsAPermit"/> query until released, so the test controls how long a permit is held.</summary>
     private sealed class BlockingCommands : DbCommandInterceptor
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
-            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
-            if (command.CommandText == "SELECT 1")
+            if (command.CommandText.Contains("preset", StringComparison.Ordinal))
             {
                 Entered.TrySetResult();
                 await Release.Task.WaitAsync(cancellationToken);
             }
             return result;
+        }
+    }
+
+    /// <summary>Counts the database probes (<c>SELECT 1</c>) that reach the database.</summary>
+    private sealed class CountingProbes : DbCommandInterceptor
+    {
+        private int _probes;
+        public int Probes => Volatile.Read(ref _probes);
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText == "SELECT 1")
+                Interlocked.Increment(ref _probes);
+            return ValueTask.FromResult(result);
         }
     }
 
