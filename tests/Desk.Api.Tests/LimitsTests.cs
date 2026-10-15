@@ -5,8 +5,10 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using Desk.Api.Auth;
 using Desk.Api.Limits;
+using Desk.Api.Positions;
 using Desk.Data;
 using Desk.Data.Auth;
+using Desk.Data.Grid;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Builder;
@@ -361,6 +363,43 @@ public sealed class LimitsTests(PostgresApiFactory api)
         }
         // And still refused as a broken session, not as an address out of tokens.
         await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.7", first), Ct));
+    }
+
+    [Fact]
+    public async Task An_export_without_an_account_id_is_401_and_never_enters_the_export_gate()
+    {
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IClaimsTransformation, DropAccountId>()));
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+
+        var res = await client.PostAsJsonAsync("/api/positions/export", new { columns = new[] { "deal_name" } }, Ct);
+        await AssertNoAccountIdAsync(res);
+        Assert.Equal(0, host.Services.GetRequiredService<ExportGate>().Running);
+    }
+
+    [Fact]
+    public async Task The_export_handler_refuses_a_principal_without_an_account_id_by_itself()
+    {
+        // The limiter refuses first; the handler checks again, so a request that got past it can't key the gate on null.
+        var services = api.Services;
+        var gate = new ExportGate(services.GetRequiredService<LimitsOptions>());
+        foreach (var user in new[]
+                 {
+                     new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test")),
+                     new ClaimsPrincipal(new ClaimsIdentity()),
+                 })
+        {
+            var http = new DefaultHttpContext { User = user, RequestServices = services };
+            var result = await PositionsEndpoints.ExportAsync(new GridRequest(Columns: ["deal_name"]), http,
+                services.GetRequiredService<MetaCache>(), services.GetRequiredService<IPortfolioEntitlements>(),
+                services.GetRequiredService<GridRepository>(), gate, services.GetRequiredService<LimitsOptions>(),
+                services.GetRequiredService<ILoggerFactory>(), Ct);
+
+            var problem = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(result);
+            Assert.Equal(StatusCodes.Status401Unauthorized, problem.StatusCode);
+            Assert.Equal(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, problem.ProblemDetails.Title);
+            Assert.Equal(0, gate.Running);
+        }
     }
 
     private async Task<HttpClient> SignedInOnAsync(WebApplicationFactory<Program> host, string role = Roles.Viewer)
