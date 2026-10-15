@@ -229,10 +229,6 @@ export function round1(n) {
   return Math.round(Number(n) * 10) / 10;
 }
 
-export function floor1(n) {
-  return Math.floor(Number(n) * 10 + 1e-8) / 10;
-}
-
 export function pct(n) {
   return Number(n).toFixed(1);
 }
@@ -516,15 +512,17 @@ export function runGate(options = {}) {
         }
         continue;
       }
-      // Both measured-match checks allow the same tolerance, so run-to-run jitter of
-      // up to `tol` in either direction neither fails nor forces a baseline edit (#318).
+      // Both measured-match checks allow the same tolerance at measured precision, so
+      // run-to-run jitter of up to `tol` in either direction neither fails nor forces a
+      // baseline edit, and the committed baseline never lags measured by more than `tol`
+      // (#318). With the drop tolerance, at most 2 * tol can go unrecorded from a peak.
       if (!(round1(c.line) <= m.line + tol + NO_DROP_EPS) || !(round1(c.branch) <= m.branch + tol + NO_DROP_EPS)) {
         failed = true;
         say(
           `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is more than ${tol}pp above measured ${m.line.toFixed(3)}/${m.branch.toFixed(3)}.`,
         );
       }
-      if (!meetsFloor(round1(c.line) + tol, floor1(m.line)) || !meetsFloor(round1(c.branch) + tol, floor1(m.branch))) {
+      if (!meetsFloor(round1(c.line) + tol, m.line) || !meetsFloor(round1(c.branch) + tol, m.branch)) {
         failed = true;
         say(
           `- **FAIL** committed baseline ${name} line/branch ${pct(c.line)}/${pct(c.branch)} is behind measured ${pct(m.line)}/${pct(m.branch)} by more than ${tol}pp. Update \`perf/coverage-baseline.json\` to the measured JSON below.`,

@@ -2259,10 +2259,26 @@ test("#318: a drop just past the tolerance fails", () => {
 });
 
 test("#318: an upward jitter within the tolerance does not fail the baseline check", () => {
-  const r = runBranchJitter(9892, 10000);
+  const r = runBranchJitter(9890, 10000);
   assert.equal(r.failed, false, r.output);
   assert.doesNotMatch(r.output, /behind measured/);
   assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.9 });
+});
+
+test("#318: an improvement just past the tolerance is behind measured (98.92 vs 98.8)", () => {
+  const r = runBranchJitter(9892, 10000);
+  assert.equal(r.failed, true);
+  assert.match(r.output, /committed baseline dotnet line\/branch 100\.0\/98\.8 is behind measured 100\.0\/98\.9 by more than 0\.1pp/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 98.9 });
+});
+
+test("#318: the baseline may not lag measured by more than the tolerance (98.99 vs 98.8)", () => {
+  // Truncated to 1 decimal, 98.99 is 98.9, within 0.1 of 98.8; comparing at measured precision closes that
+  // ~0.2pp window, so the bump cannot be skipped and then lost to a 0.1pp dip later.
+  const r = runBranchJitter(9899, 10000);
+  assert.equal(r.failed, true);
+  assert.match(r.output, /behind measured 100\.0\/99\.0 by more than 0\.1pp/);
+  assert.deepEqual(r.expected.dotnet, { line: 100, branch: 99 });
 });
 
 test("#318: a real improvement past the tolerance still asks for a baseline bump", () => {
