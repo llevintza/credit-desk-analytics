@@ -32,9 +32,9 @@ public static class RateLimiting
             // Every /api request passes all three, in this order: the caller's concurrency (one in flight, a small
             // queue), the caller's token bucket, then one shared concurrency limiter sized to the DB connection budget.
             // Applying them to the whole group means no endpoint can forget to opt in. A request waiting for its
-            // caller's turn holds no database permit, so one busy user can't fill the shared ones. Concurrency comes
-            // first because a token is never given back: the middleware tries a synchronous acquire before it queues,
-            // and a token spent on that failed attempt would charge a queued request twice.
+            // caller's turn holds no database permit, so one busy user can't fill the shared ones. The token comes
+            // before the database permit, so a caller with none left gets its 429 at once instead of holding a place
+            // in the shared queue. A token is never given back, so the chain is acquired once (AcquireOnce, #184).
             var perUser = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
@@ -80,7 +80,7 @@ public static class RateLimiting
                         QueueLimit = limits.GlobalQueue,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     }));
-            o.GlobalLimiter = PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database);
+            o.GlobalLimiter = new AcquireOnce(PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database));
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
             {
@@ -90,6 +90,38 @@ public static class RateLimiting
             }));
         });
         return services;
+    }
+
+    /// <summary>
+    /// The middleware tries a synchronous acquire and, when that fails, acquires again asynchronously. A chain fails
+    /// its synchronous attempt at the first busy limiter, after the earlier ones have granted, and a token bucket's
+    /// token is gone even though its lease is released: a request that queues for a database permit would pay two
+    /// tokens (#184). This refuses every synchronous attempt without touching the chain, so the asynchronous acquire
+    /// is the only one. It completes synchronously whenever the limiters have room, as the attempt would have.
+    /// </summary>
+    internal sealed class AcquireOnce(PartitionedRateLimiter<HttpContext> inner) : PartitionedRateLimiter<HttpContext>
+    {
+        public override RateLimiterStatistics? GetStatistics(HttpContext resource) => inner.GetStatistics(resource);
+
+        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount) => NotTried.Instance;
+
+        protected override ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken) =>
+            inner.AcquireAsync(resource, permitCount, cancellationToken);
+
+        private sealed class NotTried : RateLimitLease
+        {
+            public static readonly NotTried Instance = new();
+
+            public override bool IsAcquired => false;
+
+            public override IEnumerable<string> MetadataNames => [];
+
+            public override bool TryGetMetadata(string metadataName, out object? metadata)
+            {
+                metadata = null;
+                return false;
+            }
+        }
     }
 
     private static bool IsApi(HttpContext http) => http.Request.Path.StartsWithSegments("/api");
