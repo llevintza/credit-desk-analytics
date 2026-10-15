@@ -56,7 +56,7 @@ What the numbers say:
 - **The full list is dominated by holdings, not by the representative bond.** About 12 ms of the 14 ms is the aggregate over the caller's 20,001 positions; the three options are within noise of each other there. The response is cached per (as-of, data version, portfolios) until the next batch, so a repeat view never runs it.
 - **Grain.** Bond totals and holdings are each aggregated per deal in their own CTE before the join. Joining deal → bond → position first and then summing would repeat a deal's held MV once per tranche; `Deal_totals_are_counted_once_per_bond_and_once_per_position` shows the naive join differs on every held multi-tranche deal and the endpoint matches independent per-deal sums.
 
-End to end, on a local stack at scale 1.0 (the API in Production mode against the database above, Playwright `tests/deals.spec.ts`): the whole list is **98,534 bytes** on the wire (Brotli, fastest) and 598,901 decoded for 1,500 deals. It is fetched once per as-of date and portfolio scope; a repeat view is a 304 or a cache HIT until the next batch.
+End to end, on a local stack at scale 1.0 (the API in Production mode against the database above, Playwright `e2e/tests/deals.spec.ts`): the whole list is **98,534 bytes** on the wire (Brotli, fastest) and 598,901 decoded for 1,500 deals. It is fetched once per as-of date and portfolio scope; a repeat view is a 304 or a cache HIT until the next batch.
 
 **How to reproduce** (a seeded local database only, never Render, Neon or production; read-only apart from `pg_temp`):
 
