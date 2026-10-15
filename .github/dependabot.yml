@@ -4,6 +4,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
     groups:
       # .NET platform packages ship together each Patch Tuesday; one PR keeps them on one servicing release.
       # Npgsql.EntityFrameworkCore.PostgreSQL versions on its own patch train (10.0.3 vs EF 10.0.12), so it stays out.
@@ -18,6 +19,7 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
     groups:
       # Angular packages are peer-locked to the same version; single bumps fail npm ci with ERESOLVE (#369/#373/#374).
       angular:
@@ -40,12 +42,14 @@ updates:
     directory: /perf
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
   - package-ecosystem: github-actions
     directories:
       - /
       - /.github/actions/build-db-tools
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
   - package-ecosystem: docker
     directories:
       - /deploy
@@ -55,6 +59,7 @@ updates:
       - /deploy/ci-images/k6
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
     groups:
       # deploy/Dockerfile builds on dotnet/sdk and runs on dotnet/aspnet; land both digests together.
       dotnet-images:
@@ -68,6 +73,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 15
     ignore:
       # Lift when prod Neon moves to PG18; upgrade compose volume path (/var/lib/postgresql), CI services image, Testcontainers and README together. See closed #97.
       - dependency-name: postgres

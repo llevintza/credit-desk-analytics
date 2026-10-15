@@ -17,7 +17,7 @@ public sealed class OpenApiResponsesTests(PostgresApiFactory api)
     private static readonly Dictionary<string, string> Pinned = new()
     {
         ["GET /health"] = "200",
-        ["GET /api/health/db"] = "200,401,403,429,503",
+        ["GET /health/db"] = "200,503",
         ["POST /api/auth/login"] = "200,400,401,415,429,503",
         ["POST /api/auth/refresh"] = "200,400,401,415,429,503",
         ["POST /api/auth/logout"] = "204,401,429,503",

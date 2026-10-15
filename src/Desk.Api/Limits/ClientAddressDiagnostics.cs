@@ -45,9 +45,10 @@ public sealed class ClientAddressDiagnostics(
     {
         var o = forwarded.Value;
         logger.LogInformation(
-            "Client address resolver: BehindProxy={BehindProxy} RenderNetworks={RenderNetworks} CloudflareRanges={CloudflareRanges} ForwardedHeaders={ForwardedHeaders} KnownIPNetworks={KnownIPNetworks} KnownProxies={KnownProxies} ForwardLimit={ForwardLimit}",
+            "Client address resolver: BehindProxy={BehindProxy} RenderNetworks={RenderNetworks} TrustedHops={TrustedHops} CloudflareRanges={CloudflareRanges} ForwardedHeaders={ForwardedHeaders} KnownIPNetworks={KnownIPNetworks} KnownProxies={KnownProxies} ForwardLimit={ForwardLimit}",
             clients.BehindProxy,
             string.Join(' ', ClientAddress.Render),
+            clients.TrustedHops.Length == 0 ? "none" : string.Join(' ', clients.TrustedHops),
             ClientAddress.Cloudflare.Length,
             o.ForwardedHeaders,
             string.Join(' ', o.KnownIPNetworks),
@@ -104,7 +105,7 @@ public sealed class ClientAddressDiagnostics(
     {
         var peer = http.Connection.RemoteIpAddress;
         var headers = http.Request.Headers;
-        var address = ClientAddress.Resolve(peer, headers, clients.BehindProxy, out var source);
+        var address = ClientAddress.Resolve(peer, headers, clients.BehindProxy, out var source, clients.TrustedHops);
         var chain = ClientAddress.ForwardedFor(headers);
         logger.Log(
             level,
@@ -115,22 +116,22 @@ public sealed class ClientAddressDiagnostics(
             policy,
             source,
             Redact(peer),
-            peer is not null && ClientAddress.In(ClientAddress.Render, peer),
+            peer is not null && (ClientAddress.In(ClientAddress.Render, peer) || ClientAddress.In(clients.TrustedHops, peer)),
             headers["X-Forwarded-For"].Count,
             chain.Length,
-            string.Join('>', chain.Select(Classify)),
+            string.Join('>', chain.Select(e => Classify(e, clients.TrustedHops))),
             Hashed(headers["CF-Connecting-IP"].ToString()),
             headers.ContainsKey("True-Client-IP") ? "present" : "absent",
-            address is null ? "unknown" : Hash(address.ToString()),
+            address is null ? "unknown" : Hash(ClientAddress.Key(address)),
             suppressed);
     }
 
     /// <summary>The kind of each <c>X-Forwarded-For</c> entry, left to right, without the address.</summary>
-    internal static string Classify(string entry) =>
+    internal static string Classify(string entry, IPNetwork[]? trusted = null) =>
         !IPAddress.TryParse(entry, out var ip) ? "invalid"
         : ClientAddress.In(ClientAddress.Cloudflare, ip) ? "cf"
         : ClientAddress.In(ClientAddress.Render, ip) ? "render"
-        : ClientAddress.In(ClientAddress.Private, ip) ? "private"
+        : ClientAddress.In(trusted ?? [], ip) ? "trusted"
         : "public";
 
     /// <summary>A private peer is infrastructure and logged whole; a public one is cut to its /24 or /48 (/40 for 6to4).</summary>
