@@ -57,12 +57,13 @@ public sealed class DemoAccounts
         }
         if (created.Succeeded)
         {
-            var role = await users.AddToRoleAsync(user, demo.Role);
+            var role = await FailureIfThrown(() => users.AddToRoleAsync(user, demo.Role));
             if (role.Succeeded)
                 return user;
 
-            // An account without its role must not sign in: remove it, so the next login tries again.
-            var deleted = await users.DeleteAsync(user);
+            // An account without its role must not sign in: remove it, so the next login tries again. If the removal
+            // fails too, LoginAsync still refuses the account (#275).
+            var deleted = await FailureIfThrown(() => users.DeleteAsync(user));
             if (deleted.Succeeded)
                 _logger.LogWarning("Demo account {Email} could not be given its role: {Errors}. It was removed.", demo.Email, Codes(role));
             else
@@ -84,6 +85,23 @@ public sealed class DemoAccounts
         // The winner adds the role in a second save that may not have committed yet, and removes the account if that
         // fails: until the role is there, refuse (a 401; the retry finds the finished account).
         return await users.IsInRoleAsync(raced, demo.Role) ? raced : null;
+    }
+
+    /// <summary>
+    /// A write that throws (a <see cref="DbUpdateException"/> other than the insert race, or an
+    /// <see cref="InvalidOperationException"/> for a role that doesn't exist) fails like any other: the login is
+    /// refused, never a 500 (#275). Only the exception type is kept; its message can carry data.
+    /// </summary>
+    private static async Task<IdentityResult> FailureIfThrown(Func<Task<IdentityResult>> write)
+    {
+        try
+        {
+            return await write();
+        }
+        catch (Exception ex) when (ex is DbUpdateException or InvalidOperationException)
+        {
+            return IdentityResult.Failed(new IdentityError { Code = ex.GetType().Name });
+        }
     }
 
     private static string Codes(IdentityResult result) => string.Join(", ", result.Errors.Select(e => e.Code));

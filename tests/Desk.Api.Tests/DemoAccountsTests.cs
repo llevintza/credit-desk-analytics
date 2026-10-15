@@ -258,6 +258,35 @@ public sealed class DemoAccountRaceTests
     }
 
     [Fact]
+    public async Task A_throwing_add_to_role_is_a_refused_login_and_the_account_is_removed()
+    {
+        // #275: a non-concurrency DbUpdateException, or InvalidOperationException for a missing role, skipped the removal
+        // and turned the login into a 500.
+        var log = new CapturingLogger();
+        var users = new StubUsers(create: () => IdentityResult.Success, addToRole: () => throw new InvalidOperationException("Role VIEWER does not exist."));
+        Assert.Null(await Demo(log).FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken));
+        Assert.Equal(Email, Assert.Single(users.Deleted).Email);
+        var (level, message) = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, level);
+        Assert.Contains(nameof(InvalidOperationException), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_throwing_removal_is_logged_and_the_login_is_refused()
+    {
+        var log = new CapturingLogger();
+        var users = new StubUsers(
+            create: () => IdentityResult.Success,
+            addToRole: () => throw new DbUpdateException("constraint"),
+            delete: () => throw new DbUpdateException("constraint"));
+        Assert.Null(await Demo(log).FindOrCreateAsync(Email, users, Db(), TestContext.Current.CancellationToken));
+        var (level, message) = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Error, level);
+        Assert.Contains(nameof(DbUpdateException), message, StringComparison.Ordinal);
+        Assert.DoesNotContain(PostgresApiFactory.Password, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_successful_removal_is_logged_as_removed()
     {
         var log = new CapturingLogger();
