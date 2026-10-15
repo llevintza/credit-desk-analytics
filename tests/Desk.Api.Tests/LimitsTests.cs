@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -230,6 +231,36 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var otherClient = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(otherClient, other.Email!);
         Assert.Equal(HttpStatusCode.OK, (await otherClient.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    /// <summary>Signs <paramref name="user"/> in, then renames the account: the first session keeps the old name (#185).</summary>
+    private async Task<(HttpClient Before, HttpClient After)> SignedInBeforeAndAfterARenameAsync(WebApplicationFactory<Program> host, DeskUser user)
+    {
+        var before = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(before, user.Email!);
+        var renamed = $"renamed-{user.UserName}";
+        await using (var db = api.NewContext())
+            await db.Users.Where(u => u.Id == user.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.UserName, renamed).SetProperty(u => u.NormalizedUserName, renamed.ToUpperInvariant()), Ct);
+        var after = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(after, user.Email!);
+        Assert.NotEqual(
+            (await before.GetFromJsonAsync<Auth.MeResponse>("/api/me", Ct))!.Email,
+            (await after.GetFromJsonAsync<Auth.MeResponse>("/api/me", Ct))!.Email);
+        return (before, after);
+    }
+
+    [Fact]
+    public async Task Two_sessions_of_one_account_share_its_token_bucket_across_a_rename()
+    {
+        // #185: keyed on the user id, not the user name, a renamed account can't get a fresh bucket.
+        await using var host = api.WithSettings(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "4"));
+        var (before, after) = await SignedInBeforeAndAfterARenameAsync(host, await api.CreateUserAsync()); // 2 of 4
+
+        Assert.Equal(HttpStatusCode.OK, (await before.GetAsync("/api/me", Ct)).StatusCode); // 3 of 4
+        Assert.Equal(HttpStatusCode.OK, (await after.GetAsync("/api/me", Ct)).StatusCode);  // 4 of 4
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await before.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await after.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     private async Task<HttpClient> SignedInOnAsync(WebApplicationFactory<Program> host, string role = Roles.Viewer)
@@ -675,7 +706,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Null(res.Content.Headers.ContentDisposition); // a problem, not a file
         Assert.False(res.Headers.Contains("Retry-After"));  // the same export would time out again
         var gate = host.Services.GetRequiredService<ExportGate>();
-        Assert.False(gate.IsRunning(user.Email!));
+        Assert.False(gate.IsRunning(user.Id.ToString()));
         Assert.Equal(0, gate.Running);
     }
 
@@ -698,8 +729,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // until the deadline fires.
         using var res = await client.SendAsync(Export(await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.True(gate.IsRunning(user.Email!));
-        await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
+        Assert.True(gate.IsRunning(user.Id.ToString()));
+        await WaitUntilAsync(() => !gate.IsRunning(user.Id.ToString()) && gate.Running == 0);
 
         // The partial file never ends like a complete one: reading it to the end fails.
         await Assert.ThrowsAnyAsync<Exception>(async () => await res.Content.ReadAsStringAsync(Ct));
@@ -715,12 +746,30 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var gate = host.Services.GetRequiredService<ExportGate>();
 
         var res = await client.SendAsync(Export(await AllColumnsAsync(client)), HttpCompletionOption.ResponseHeadersRead, Ct);
-        Assert.True(gate.IsRunning(user.Email!));
+        Assert.True(gate.IsRunning(user.Id.ToString()));
         res.Dispose(); // the browser tab closed: the request is aborted while the server is blocked writing
-        await WaitUntilAsync(() => !gate.IsRunning(user.Email!) && gate.Running == 0);
+        await WaitUntilAsync(() => !gate.IsRunning(user.Id.ToString()) && gate.Running == 0);
 
         // And the user can export again straight away.
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Export("deal_name"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_renamed_account_cannot_run_a_second_export_from_its_other_session()
+    {
+        await using var host = api.WithSettings(("EXPORT_TIMEOUT_SECONDS", "60"));
+        var user = await api.CreateUserAsync();
+        var (before, after) = await SignedInBeforeAndAfterARenameAsync(host, user);
+        var gate = host.Services.GetRequiredService<ExportGate>();
+
+        var res = await before.SendAsync(Export(await AllColumnsAsync(before)), HttpCompletionOption.ResponseHeadersRead, Ct);
+        Assert.True(gate.IsRunning(user.Id.ToString()));
+        var second = await after.SendAsync(Export("deal_name"), Ct);
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        Assert.Equal("Export already running", (await second.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+
+        res.Dispose();
+        await WaitUntilAsync(() => !gate.IsRunning(user.Id.ToString()) && gate.Running == 0);
     }
 
     /// <summary>Tracks how many database connections are open at once, EF (interceptor) and Dapper (registry) alike.</summary>
@@ -849,15 +898,19 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public void A_users_insights_partition_key_never_equals_any_callers_main_key()
     {
         var clients = api.Services.GetRequiredService<ClientAddress>();
-        foreach (var name in new[] { "alice@example.com", "insights:u:alice@example.com", "u:alice@example.com" })
+        // #185: a signed-in caller is keyed on the account id, so the values that must not collide are NameIdentifiers.
+        foreach (var id in new[] { "alice@example.com", "insights:u:alice@example.com", "u:alice@example.com" })
         {
             var http = new DefaultHttpContext
             {
                 User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
-                    [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, name)], "test")),
+                    [
+                        new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, "alice@example.com"),
+                        new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, id),
+                    ], "test")),
             };
             Assert.Equal($"insights:{RateLimiting.PartitionKey(http, clients)}", RateLimiting.InsightsPartitionKey(http, clients));
-            // Main keys start with u: or ip:, so no user name can make one equal to an insights key.
+            // Main keys start with u: or ip:, so no account id can make one equal to an insights key.
             Assert.StartsWith("u:", RateLimiting.PartitionKey(http, clients), StringComparison.Ordinal);
         }
     }
