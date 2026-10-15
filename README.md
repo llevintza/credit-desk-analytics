@@ -527,6 +527,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - per user: token bucket, 60 requests/min, burst 20
   - per IP on `/api/auth/login`: 5/min
   - per signed-in user concurrency: 1 request in flight, queue 8, then 429 (`RATE_LIMIT_PER_USER_CONCURRENCY` / `RATE_LIMIT_PER_USER_QUEUE`); exports are capped separately (below)
+  - per signed-in user, insights source reads (`GET /api/insights/{source}`) in their own partition: 5 in flight, queue 15, then 429 (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY` / `RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`), so the P3 board's five sources load in parallel (ADR-0005, #357)
   - **global concurrency limiter** on DB-bound endpoints: 8 concurrent, queue 32, then 429 with `Retry-After`
 - **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows.
 - **Exports:** 1 at a time per user and `EXPORT_GLOBAL_SLOTS` (2) in total, without waiting: 429 with `Retry-After`. Deadline `EXPORT_TIMEOUT_SECONDS` (60) on the whole stream: 503 before any output; mid-stream the connection is aborted, so a truncated download fails.
@@ -1016,7 +1017,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
 | 5 Fund Performance | #144 | Merged |
-| 6 Insights Board | phase-6/insights-board | In review |
+| 6 Insights Board | #339 | Merged; follow-up #357: insights source reads get their own per-user limiter partition (5 in flight, queue 15) so the P3 e2e is green under #174's cap (in review; supersedes #364) |
 | 7 Deal Explorer | phase-7/deal-explorer | In review: `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
