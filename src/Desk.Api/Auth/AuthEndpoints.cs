@@ -113,7 +113,8 @@ public static class AuthEndpoints
     /// unexpired (8 h idle), the session under 24 h and not logged out, the security stamp unchanged (disable,
     /// password reset), and the account still allowed to sign in (not disabled or expired). The new tokens keep the
     /// original sign-in time and session id, so neither limit can be extended by refreshing. Each refresh token works
-    /// once: one that comes back after it was swapped ends the session (#353, <see cref="RefreshRotations"/>).
+    /// once: one that comes back after it was swapped ends the session (#353, <see cref="RefreshRotations"/>), except the
+    /// one swapped last, within the short grace window, which gets a pair for the current token without a new swap.
     /// </summary>
     internal static async Task<IResult> RefreshAsync(
         RefreshRequest request,
@@ -137,8 +138,7 @@ public static class AuthEndpoints
         // Checked last, so an expired or otherwise dead token is just refused: only a live token can be a replay.
         var sid = ticket.Principal.FindFirstValue(AuthSetup.SessionIdClaim)!;
         var end = SessionLimits.ReadAuthTime(ticket.Principal)!.Value + AuthSetup.AbsoluteExpiry;
-        var rid = NewId();
-        if (!rotations.TryRotate(sid, ticket.Principal.FindFirstValue(AuthSetup.RefreshIdClaim), rid, end))
+        if (rotations.Rotate(sid, ticket.Principal.FindFirstValue(AuthSetup.RefreshIdClaim), NewId(), end, now) is not { } rid)
         {
             revoked.Revoke(sid, end, now);
             logger.LogWarning("A refresh token was used again after it was swapped; the session was ended. UserId={UserId}", user.Id);

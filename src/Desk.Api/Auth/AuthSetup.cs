@@ -45,7 +45,7 @@ public static class AuthSetup
         services.AddScoped<TimingGuard>();
         services.AddSingleton(LoginFloorOptions.Default);
         services.AddSingleton<SessionRevocations>();
-        services.AddSingleton<RefreshRotations>();
+        services.AddSingleton(sp => new RefreshRotations(RefreshRotations.GraceFrom(sp.GetRequiredService<IConfiguration>())));
 
         services.AddAuthentication(Scheme).AddBearerToken(Scheme, o =>
         {
