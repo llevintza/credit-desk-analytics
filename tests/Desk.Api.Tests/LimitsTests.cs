@@ -829,6 +829,23 @@ public sealed class LimitsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public void The_deal_endpoints_stay_in_the_callers_main_per_user_partition()
+    {
+        // List and detail are two calls at most, so they queue behind each other in the main partition (one in flight)
+        // rather than getting their own like insights, and neither is an export.
+        var deals = api.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText?.StartsWith("/api/deals", StringComparison.Ordinal) == true)
+            .ToArray();
+        Assert.Equal(2, deals.Length);
+        Assert.All(deals, e =>
+        {
+            Assert.Null(e.Metadata.GetMetadata<InsightsSourceEndpoint>());
+            Assert.Null(e.Metadata.GetMetadata<ExportEndpoint>());
+        });
+    }
+
+    [Fact]
     public void A_users_insights_partition_key_never_equals_any_callers_main_key()
     {
         var clients = api.Services.GetRequiredService<ClientAddress>();
