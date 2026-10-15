@@ -5,11 +5,13 @@ namespace Desk.Api.Limits;
 /// <summary>README §7.2 limits. Environment variables override the defaults; there is no "off" switch.</summary>
 /// <param name="PerUserConcurrency">Requests one caller may have in flight at once (exports are counted separately).</param>
 /// <param name="PerUserQueue">Requests of one caller that wait for <paramref name="PerUserConcurrency"/> before a 429.</param>
+/// <param name="InsightsConcurrency">Insights source reads one caller may have in flight at once, in their own partition.</param>
+/// <param name="InsightsQueue">Insights source reads of one caller that wait for <paramref name="InsightsConcurrency"/> before a 429.</param>
 /// <param name="ExportSlots">Exports running at once across all users; kept below the database permits.</param>
 /// <param name="ExportTimeout">The overall deadline on one export stream.</param>
 public sealed record LimitsOptions(
     int PerUserPerMinute, int PerUserBurst, int LoginPerIpPerMinute, int GlobalConcurrency, int GlobalQueue,
-    int PerUserConcurrency, int PerUserQueue, int ExportSlots, TimeSpan ExportTimeout)
+    int PerUserConcurrency, int PerUserQueue, int InsightsConcurrency, int InsightsQueue, int ExportSlots, TimeSpan ExportTimeout)
 {
     public static LimitsOptions From(IConfiguration config) => new(
         PerUserPerMinute: Positive(config, "RATE_LIMIT_PER_USER_PER_MIN", 60),
@@ -21,6 +23,10 @@ public sealed record LimitsOptions(
         // The SPA's first paint fans out ~5 requests at once (session, portfolios, presets, first blocks): they queue
         // behind one another instead of failing.
         PerUserQueue: Positive(config, "RATE_LIMIT_PER_USER_QUEUE", 8),
+        // The insights board (README §6 P3) asks for its 5 sources at once and paints each as it lands: one permit per
+        // source, and room for three boards' worth (a reload, an as-of change) to queue (ADR-0005, #357).
+        InsightsConcurrency: Positive(config, "RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY", 5),
+        InsightsQueue: Positive(config, "RATE_LIMIT_PER_USER_INSIGHTS_QUEUE", 15),
         ExportSlots: Positive(config, "EXPORT_GLOBAL_SLOTS", 2),
         ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60, max: MaxExportTimeoutSeconds)));
 
