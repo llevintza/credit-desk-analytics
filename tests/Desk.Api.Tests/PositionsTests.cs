@@ -447,7 +447,7 @@ public sealed class PositionsTests(PostgresApiFactory api)
     {
         var (client, _, user) = await api.SignedInAsync();
         var gate = api.Services.GetRequiredService<Desk.Api.Limits.ExportGate>();
-        Assert.Equal(Desk.Api.Limits.ExportGate.Result.Started, gate.TryBegin(user.Email!));
+        Assert.Equal(Desk.Api.Limits.ExportGate.Result.Started, gate.TryBegin(user.Id.ToString()));
         try
         {
             var res = await client.SendAsync(Query(new { columns = new[] { "deal_name" } }, path: "/api/positions/export"), Ct);
@@ -456,7 +456,7 @@ public sealed class PositionsTests(PostgresApiFactory api)
         }
         finally
         {
-            gate.End(user.Email!);
+            gate.End(user.Id.ToString());
         }
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(Query(new { columns = new[] { "deal_name" } }, path: "/api/positions/export"), Ct)).StatusCode);
     }

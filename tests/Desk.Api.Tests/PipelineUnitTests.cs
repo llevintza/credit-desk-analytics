@@ -176,6 +176,25 @@ public sealed class PipelineUnitTests
     }
 
     [Fact]
+    public void Signed_in_callers_are_partitioned_on_their_account_id_and_others_on_their_address()
+    {
+        var clients = new ClientAddress(false);
+        var withId = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com"), new Claim(ClaimTypes.NameIdentifier, "42")], "test")),
+        };
+        Assert.Equal("u:42", RateLimiting.PartitionKey(withId, clients)); // #185: never the user name
+
+        var noId = new DefaultHttpContext { User = SignedIn() };
+        noId.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.7");
+        Assert.Equal("ip:203.0.113.7", RateLimiting.PartitionKey(noId, clients));
+
+        var anonymous = new DefaultHttpContext();
+        anonymous.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.8");
+        Assert.Equal("ip:203.0.113.8", RateLimiting.PartitionKey(anonymous, clients));
+    }
+
+    [Fact]
     public async Task AcquireOnce_refuses_the_synchronous_attempt_without_touching_the_limiter()
     {
         // #184: a token taken on the synchronous attempt is never given back, so only the asynchronous acquire counts.
