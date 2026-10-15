@@ -1,9 +1,16 @@
 using System.Data.Common;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Claims;
+using Desk.Api.Auth;
 using Desk.Api.Limits;
+using Desk.Api.Positions;
 using Desk.Data;
 using Desk.Data.Auth;
+using Desk.Data.Grid;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -293,6 +300,106 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, (await after.GetAsync("/api/me", Ct)).StatusCode);  // 4 of 4
         Assert.Equal(HttpStatusCode.TooManyRequests, (await before.GetAsync("/api/me", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.TooManyRequests, (await after.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    /// <summary>
+    /// A live, issued token whose principal has lost its account id after authentication (#361). Issued tokens always
+    /// carry one, so this is how a test reaches the broken-session path through the real pipeline.
+    /// </summary>
+    private sealed class DropAccountId : IClaimsTransformation
+    {
+        public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal) =>
+            Task.FromResult(new ClaimsPrincipal(principal.Identities.Select(i =>
+                new ClaimsIdentity(i.Claims.Where(c => c.Type != ClaimTypes.NameIdentifier), i.AuthenticationType, i.NameClaimType, i.RoleClaimType))));
+    }
+
+    private static async Task AssertNoAccountIdAsync(HttpResponseMessage res)
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.False(res.Headers.Contains("Retry-After"));
+        Assert.Equal(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, (await res.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Title);
+    }
+
+    [Fact]
+    public async Task A_signed_in_caller_without_an_account_id_is_refused_and_never_keyed_on_its_address()
+    {
+        // #361: keyed on the address, such callers would spend (and share) the anonymous callers' buckets there.
+        await using var host = BehindCloudflare(("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "2"))
+            .WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IClaimsTransformation, DropAccountId>()));
+        var client = PostgresApiFactory.NewClient(host);
+        HttpRequestMessage From(HttpRequestMessage req, string ip) => Via(req, RenderLb, $"{ip}, {CfEdge}", ip);
+        async Task<string> SignInFromAsync(string ip)
+        {
+            var user = await api.CreateUserAsync();
+            var login = await client.SendAsync(From(new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+            {
+                Content = JsonContent.Create(new LoginRequest(user.Email!, PostgresApiFactory.Password)),
+            }, ip), Ct);
+            Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+            return (await login.Content.ReadFromJsonAsync<AccessTokenResponse>(Ct))!.AccessToken;
+        }
+        HttpRequestMessage Me(string ip, string? token = null)
+        {
+            var req = From(new HttpRequestMessage(HttpMethod.Get, "/api/me"), ip);
+            if (token is not null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            return req;
+        }
+
+        // Signed in elsewhere, so the addresses below start with full anonymous buckets (2 each).
+        var first = await SignInFromAsync("198.51.100.20");
+        var second = await SignInFromAsync("198.51.100.21");
+        for (var i = 0; i < 3; i++) // more than a burst: nothing is granted, so nothing runs out
+        {
+            await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.7", first), Ct));
+            await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.8", second), Ct));
+        }
+
+        // The anonymous buckets at both addresses are untouched: 2 calls each, then 429.
+        foreach (var ip in new[] { "203.0.113.7", "203.0.113.8" })
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Me(ip), Ct)).StatusCode);
+        }
+        // And still refused as a broken session, not as an address out of tokens.
+        await AssertNoAccountIdAsync(await client.SendAsync(Me("203.0.113.7", first), Ct));
+    }
+
+    [Fact]
+    public async Task An_export_without_an_account_id_is_401_and_never_enters_the_export_gate()
+    {
+        await using var host = api.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IClaimsTransformation, DropAccountId>()));
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+
+        var res = await client.PostAsJsonAsync("/api/positions/export", new { columns = new[] { "deal_name" } }, Ct);
+        await AssertNoAccountIdAsync(res);
+        Assert.Equal(0, host.Services.GetRequiredService<ExportGate>().Running);
+    }
+
+    [Fact]
+    public async Task The_export_handler_refuses_a_principal_without_an_account_id_by_itself()
+    {
+        // The limiter refuses first; the handler checks again, so a request that got past it can't key the gate on null.
+        var services = api.Services;
+        var gate = new ExportGate(services.GetRequiredService<LimitsOptions>());
+        foreach (var user in new[]
+                 {
+                     new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test")),
+                     new ClaimsPrincipal(new ClaimsIdentity()),
+                 })
+        {
+            var http = new DefaultHttpContext { User = user, RequestServices = services };
+            var result = await PositionsEndpoints.ExportAsync(new GridRequest(Columns: ["deal_name"]), http,
+                services.GetRequiredService<MetaCache>(), services.GetRequiredService<IPortfolioEntitlements>(),
+                services.GetRequiredService<GridRepository>(), gate, services.GetRequiredService<LimitsOptions>(),
+                services.GetRequiredService<ILoggerFactory>(), Ct);
+
+            var problem = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.ProblemHttpResult>(result);
+            Assert.Equal(StatusCodes.Status401Unauthorized, problem.StatusCode);
+            Assert.Equal(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, problem.ProblemDetails.Title);
+            Assert.Equal(0, gate.Running);
+        }
     }
 
     private async Task<HttpClient> SignedInOnAsync(WebApplicationFactory<Program> host, string role = Roles.Viewer)
