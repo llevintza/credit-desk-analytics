@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Desk.Api.Audit;
+using Desk.Api.Auth;
 using Desk.Api.Limits;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
@@ -94,8 +95,9 @@ public static class PositionsEndpoints
         deadline.CancelAfter(limits.ExportTimeout);
 
         // One export at a time per user, and a few in total (README §7.2, #127): an export holds a database permit
-        // and a connection for the whole stream.
-        var user = http.User.Identity!.Name!;
+        // and a connection for the whole stream. Keyed on the account id, so a renamed account's two sessions are one
+        // user (#185).
+        var user = http.User.UserId()!;
         switch (gate.TryBegin(user))
         {
             case ExportGate.Result.UserBusy:
@@ -117,7 +119,7 @@ public static class PositionsEndpoints
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             loggers.CreateLogger(typeof(PositionsEndpoints)).LogWarning(
-                "Export for {User} stopped at its {Seconds} s deadline", user, limits.ExportTimeout.TotalSeconds);
+                "Export for {User} stopped at its {Seconds} s deadline", http.User.Identity!.Name, limits.ExportTimeout.TotalSeconds);
             if (!http.Response.HasStarted)
             {
                 // Not a file any more. No Retry-After: the same export would hit the same deadline.
