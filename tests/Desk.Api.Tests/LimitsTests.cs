@@ -100,6 +100,54 @@ public sealed class LimitsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.8, {CfEdge}", "203.0.113.8"), Ct)).StatusCode);
     }
 
+    [Theory]
+    [InlineData("172.20.0.4", "")]                 // #165: a Render peer outside 10.0.0.0/8
+    [InlineData(RenderLb, ", 10.1.2.3, 100.64.0.7")] // #165: Render's internal hops appended after the edge
+    [InlineData("100.64.9.9", ", fd00::5")]
+    public async Task Two_clients_get_separate_login_windows_whatever_render_s_private_hops_look_like(string peer, string internalHops)
+    {
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(peer, $"198.51.100.{i}, 203.0.113.7, {CfEdge}{internalHops}", "203.0.113.7"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(peer, $"203.0.113.7, {CfEdge}{internalHops}", "203.0.113.7"), Ct)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(peer, $"203.0.113.8, {CfEdge}{internalHops}", "203.0.113.8"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_hop_listed_in_client_address_trusted_hops_is_skipped_so_clients_behind_it_are_apart()
+    {
+        const string ingress = "198.51.100.10"; // stands in for a public proxy hop between Cloudflare and the app
+        await using (var unlisted = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5")))
+        {
+            // Unlisted, the hop is the key: every client behind it shares one window (and the fallback is warned).
+            var client = PostgresApiFactory.NewClient(unlisted);
+            for (var i = 0; i < 5; i++)
+                Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(Login(RenderLb, $"203.0.113.{i}, {CfEdge}, {ingress}", $"203.0.113.{i}"), Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.TooManyRequests, (await client.SendAsync(Login(RenderLb, $"203.0.113.9, {CfEdge}, {ingress}", "203.0.113.9"), Ct)).StatusCode);
+        }
+
+        await using var listed = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"), (ClientAddress.TrustedHopsKey, "198.51.100.0/24"));
+        var listedClient = PostgresApiFactory.NewClient(listed);
+        for (var i = 0; i < 6; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await listedClient.SendAsync(Login(RenderLb, $"203.0.113.{i}, {CfEdge}, {ingress}", $"203.0.113.{i}"), Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Forged_edges_and_private_hops_from_a_client_that_reaches_render_directly_share_one_window()
+    {
+        // Regression for #165's widened rules: the client's own address is what Render appended, rightmost, so a
+        // fresh forged CF-Connecting-IP, edge or private hop on each request still lands in its one window.
+        await using var host = BehindCloudflare(("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "5"));
+        var client = PostgresApiFactory.NewClient(host);
+        for (var i = 0; i < 6; i++)
+        {
+            var res = await client.SendAsync(Login(RenderLb, $"198.51.100.{i}, {CfEdge}, 10.0.0.{i}, 192.0.2.50", $"198.51.100.{i + 100}"), Ct);
+            Assert.Equal(i < 5 ? HttpStatusCode.Unauthorized : HttpStatusCode.TooManyRequests, res.StatusCode);
+        }
+    }
+
     [Fact]
     public async Task Ipv6_clients_in_one_64_share_a_login_window_and_other_64s_do_not()
     {
