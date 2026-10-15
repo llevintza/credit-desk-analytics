@@ -29,5 +29,6 @@ Area file for `tests/` (xUnit v3 + Microsoft.Testing.Platform, Testcontainers Po
 |---|---|
 | All .NET tests | `dotnet test -c Release` |
 | One project | `dotnet test tests/Desk.Api.Tests -c Release` |
+| E2E (phase 4) | `docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build`, migrate, seed `--scale 0.2`, create a viewer with Desk.UserAdmin, then `cd e2e && npm ci && npx playwright install chromium && BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test` (CI `e2e` job; `PERF=1 … npx playwright test perf` for ADR-0009 numbers) (local compose/CI stack only; create the viewer with Desk.UserAdmin against the local or test database, never Render, Neon or production) |
 
 Gate-script tests stay in [`.github/AGENTS.md`](../.github/AGENTS.md).
