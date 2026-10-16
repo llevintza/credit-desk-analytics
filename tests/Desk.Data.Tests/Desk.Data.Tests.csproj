@@ -14,6 +14,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Desk.Data\Desk.Data.csproj" />
+    <!-- #181: LastBlockComparisonTests cover the perf tool's pure comparison (outside the [Desk.*] coverage scope). -->
+    <ProjectReference Include="..\..\perf\LastBlockCheck\LastBlockCheck.csproj" />
   </ItemGroup>
 
 </Project>
