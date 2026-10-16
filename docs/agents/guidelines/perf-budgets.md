@@ -9,7 +9,7 @@ Linked from the `perf-budgets` skill. Local stack only (root line).
 
 ## Latency
 
-- k6 p95 MISS < 150 ms, HIT < 15 ms (`perf/positions.js`: 1 VU, 30 s per scenario, local and warm, `grafana/k6:1.3.0`).
+- k6 p95 MISS < 150 ms, HIT < 15 ms (`perf/positions.js`: 1 VU, 30 s per scenario, local and warm, `grafana/k6:2.3.0`).
 - Raise limits only in that local process's environment (root k6 row).
 
 ## Seeder and benches
