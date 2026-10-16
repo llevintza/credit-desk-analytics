@@ -12,7 +12,8 @@
 .kpi { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; min-width: 140px; display: flex; flex-direction: column; }
 .kpi .label { font-size: 11px; color: var(--muted); }
 .kpi .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 8px; padding: 8px; align-content: start; }
+.tiles { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 8px; padding: 8px; align-items: start; }
+@media (max-width: 900px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
 .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-width: 0; }
 .tile.wide { grid-column: 1 / -1; }
 .tile header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
