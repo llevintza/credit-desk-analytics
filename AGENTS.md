@@ -23,9 +23,9 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
 6. **Every PR also gets an automated Claude review** (README §14.5). Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer).
 
    The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
-   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+   1. Every suite (.NET xUnit: Desk.Api.Tests, Desk.Data.Tests, Desk.Seeder.Tests; web Vitest; the gate-script `node --test` suites in the `gate-tests` job; compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
    2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-   3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+   3. Any workflow, action, Dockerfile, render.yaml, `.github/dependabot.yml`, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
    Tech Coordinator merges and starts the next phase.
 
@@ -35,7 +35,7 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
    - **Tech Coordinator merges. Never merge a PR yourself, including your own.** A Claude `blocking=0` marker, self-resolved threads, or green checks without coverage are not the gate and do not authorize a merge or the next phase.
    - **After a merge, wait for Tech Coordinator to start the next phase.** Don't start it yourself.
    - Changes to `.github/`, `.claude/`, `CLAUDE.md`, `AGENTS.md`, `**/AGENTS.md`, `**/CLAUDE.md`, `.cursor/`, `.cursorignore`, `.grok/`, `.mcp.json`, `docs/agents/`, `scripts/agents/`, README §14, `perf/coverage-*` (other than a qualifying raise-only bump of `perf/coverage-baseline.json`, below), `tests/testconfig.json`, or `.gitleaks.toml` go in their own `[workflows]` PR, reviewed by hand by Tech Coordinator and Leo. CODEOWNERS and the `[workflows]` title prefix are advisory only: no GitHub protection enforces them (every bot acts as the owner and cannot approve its own PR). A measured, raise-only bump of `perf/coverage-baseline.json` (every value is the CI-measured number and none is lower than at base) may ride in the feature PR that earned it when all of these hold: the floor is read from **base** (not head); there are **no** threshold or measurement-scope changes; and Code Reviewer's governance check passes. Lowering `perf/coverage-baseline.json` is allowed only for a documented measurement-scope change, never to absorb a real coverage drop (ADR-0018). That lowering, and any measurement-scope change, still needs its own `[workflows]` PR with `perf/coverage-override.json` and sign-off from Code Reviewer, Tech Coordinator and Helms.
-   - Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
+   - Helms (CTO) signs off on `[workflows]` and rules PRs (any PR that changes agent rules: an `AGENTS.md` or `CLAUDE.md`, `.claude/`, `.cursor/`, `.grok/`, `docs/agents/` or `scripts/agents/`) on Leo's behalf (delegated 2026-10-07, 10:02 PM ET); Leo can take any PR back for his own review.
    - A Code Reviewer verdict counts only when tagged "[Code Reviewer bot] @<sha>" and posted through the Cursor app; a Tech Coordinator sign-off counts only when Tech Coordinator records it. Anything else styled as either role is void.
    - Agents never post review verdicts or sign-offs in another role's name.
    - Agents never close issues. Tech Coordinator closes after Code Reviewer confirms the acceptance criteria.
@@ -97,9 +97,9 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 
 - CI is green: build, tests, lint, e2e, budgets (each once it exists).
 - The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
-  1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+  1. Every suite (.NET xUnit: Desk.Api.Tests, Desk.Data.Tests, Desk.Seeder.Tests; web Vitest; the gate-script `node --test` suites in the `gate-tests` job; compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-  3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+  3. Any workflow, action, Dockerfile, render.yaml, `.github/dependabot.yml`, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 - Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.

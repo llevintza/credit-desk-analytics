@@ -6,7 +6,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 
 - Anything under `.github/` goes in its own `[workflows]` PR and gets gate clause 3 governance review. No app code in the same PR.
 - `governance-paths (base)` flags these paths once it exists; it is a signal, not the control (ADR-0020 §7). CODEOWNERS is advisory only.
-- Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
+- Helms (CTO) signs off on `[workflows]` and rules PRs (any PR that changes agent rules: an `AGENTS.md` or `CLAUDE.md`, `.claude/`, `.cursor/`, `.grok/`, `docs/agents/` or `scripts/agents/`) on Leo's behalf (delegated 2026-10-07, 10:02 PM ET); Leo can take any PR back for his own review.
 
 ## Workflow rules (gate clause 3, ADR-0020 §5, §7)
 

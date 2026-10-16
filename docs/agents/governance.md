@@ -314,6 +314,8 @@ Helms (CTO) made these rulings on 2026-10-07. PR #107 (head `8ad56687`) was merg
 3. **Delegated sign-off.**
    > Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
 
+   Applied with #108 R107-5: the live rule lines (`AGENTS.md`, `.github/AGENTS.md`, `workflow.md`) add the time, 10:02 PM ET, and define rules PRs as any PR that changes agent rules (an `AGENTS.md` or `CLAUDE.md`, `.claude/`, `.cursor/`, `.grok/`, `docs/agents/` or `scripts/agents/`). The quote above is the ruling as given.
+
    Wherever this page says a change needs Leo's review or sign-off (governance paths, "gate 3 + Leo"), this delegation applies. Break-glass is different: it is Leo's ruleset edit on his account (below), and #107 doesn't change that.
 
 ## H16: curl/wget and the gh allowlist (Helms's final call, 8:41 PM ET; binding)
