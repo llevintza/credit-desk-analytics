@@ -296,7 +296,7 @@ Every page lists: **user story**, **API contract**, **SQL approach**, **front-en
 - AG Grid Community, `rowModelType: 'infinite'`, `cacheBlockSize: 200`, `maxBlocksInCache: 50`, `blockLoadDebounceMillis: 100`.
 - **Column virtualization on** (the default; never disable it).
 - `getRowId` = position_id.
-- Pinned left: deal_name, class, cusip. A pinned **bottom summary row**.
+- Pinned left: deal_name, class, cusip. A pinned **bottom summary row**, labelled `Total · avgs |MV|-wtd`: its SUM cells are net (signed) and its averages are gross, weighted by \|market value\| (§8). Each Total cell's tooltip and each column header's tooltip name the aggregation (#191). Per-leg (long/short) and face-weighted totals are deferred to a later P3.
 - **Column presets:** per-user saved column state (order, width, visibility, pinned, sort, filters), loaded before the first request. Several named presets per user ("Risk", "Surveillance", "Scenarios", "All").
 - **Only the displayed columns are requested.** When the displayed column set changes (show/hide or preset switch), purge the infinite cache and re-request. For horizontal scrolling inside the displayed set, no request is needed.
 - **Quick filter box:** debounced at 300 ms, with `distinctUntilChanged` + `switchMap`, so a stale request is cancelled and can never overwrite a newer one.
@@ -587,7 +587,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
     - `ExecuteUpdateAsync` / `ExecuteDeleteAsync` for set-based writes.
     - Scoped lifetime per request; a factory for anything parallel or singleton-owned (no captive dependencies).
   - **Every async call takes the request's `CancellationToken`.** No `.Result`, `.Wait()` or `async void`.
-  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan` on the `numeric` columns, #192), the `float8` ones reject `'NaN'` and `±'Infinity'` (`ck_snapshot_<column>_finite`, #304), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net).
+  - **Money is `decimal`** (`numeric` in SQL). Rounding happens only at the display edge. Weighted averages weigh each row by `ABS(market_value)`, the position's size, so shorts can't cancel longs (#131). Rows where the measure is `NULL` don't count toward the weight, and zero or no weight returns `null`, never `NaN`. `NaN` can't reach the summary: `market_value` and every column the summary sums or weights reject `'NaN'` at write time (CHECK constraints `ck_snapshot_<column>_not_nan` on the `numeric` columns, #192), the `float8` ones reject `'NaN'` and `±'Infinity'` (`ck_snapshot_<column>_finite`, #304), and a test fails if a new summed or weighted catalog column isn't guarded. SUM columns (`market_value`, `dv01`, `cs01`, `pnl_*`, …) stay signed (net). So the summary row mixes net sums with gross averages, and the grid labels it that way (§6 P1, #191).
 - **Serialization:**
   - Columnar DTOs (`columns` + `data[c][r]`).
   - `System.Text.Json` source generation for hot DTOs.
