@@ -58,6 +58,46 @@ public sealed class GridQueryTests
         Assert.NotEqual(one.SummaryKey, two.SummaryKey);
     }
 
+    private static GridQuery NormalizeWith(Func<ColumnDef, ColumnDef> served, GridRequest r) =>
+        new GridQueryNormalizer(ColumnCatalog.PositionSnapshot.Select(served)).Normalize(r, AsOf, Entitled);
+
+    [Fact]
+    public void A_column_aggregation_change_in_the_served_catalog_changes_both_cache_keys()
+    {
+        // #459 step 2 flips prices in app.column_catalog to face-weighted without a reseed (DataVersion stays): the
+        // block cache, the ETag and the summary cache must not keep serving |MV|-weighted totals under the new labels.
+        var request = new GridRequest(Columns: ["deal_name", "price", "spread_bp", "market_value"]);
+        var faceWeighted = NormalizeWith(c => c, request);
+        var mvWeighted = NormalizeWith(c => c.Name == "price" ? c with { Aggregation = Aggregation.WeightedByMarketValue } : c, request);
+        Assert.Equal(faceWeighted.Columns.Select(c => c.Name), mvWeighted.Columns.Select(c => c.Name));
+        Assert.NotEqual(faceWeighted.CanonicalKey, mvWeighted.CanonicalKey);
+        Assert.NotEqual(faceWeighted.SummaryKey, mvWeighted.SummaryKey);
+    }
+
+    [Fact]
+    public void Cache_keys_are_stable_when_nothing_the_query_reads_changes()
+    {
+        var request = new GridRequest(Columns: ["deal_name", "price", "spread_bp", "market_value"]);
+        var once = Normalize(request);
+        var again = Normalize(request);
+        Assert.Equal(once.CanonicalKey, again.CanonicalKey);
+        Assert.Equal(once.SummaryKey, again.SummaryKey);
+
+        // A header rename, or an aggregation change on a column the view doesn't ask for, keeps both keys.
+        var relabelled = NormalizeWith(c => c.Name == "price" ? c with { Header = "Px" } : c, request);
+        var otherColumn = NormalizeWith(c => c.Name == "book_price" ? c with { Aggregation = Aggregation.WeightedByMarketValue } : c, request);
+        Assert.All(new[] { relabelled, otherColumn }, q =>
+        {
+            Assert.Equal(once.CanonicalKey, q.CanonicalKey);
+            Assert.Equal(once.SummaryKey, q.SummaryKey);
+        });
+
+        // Paging and sort still leave the summary key alone.
+        var paged = Normalize(request with { StartRow = 200, EndRow = 400, SortModel = [new("price", "desc")] });
+        Assert.Equal(once.SummaryKey, paged.SummaryKey);
+        Assert.NotEqual(once.CanonicalKey, paged.CanonicalKey);
+    }
+
     [Fact]
     public void Unknown_or_malicious_sort_ids_are_dropped_and_position_id_breaks_ties_in_the_first_keys_direction()
     {
