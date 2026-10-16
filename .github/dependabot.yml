@@ -43,6 +43,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 15
+  # e2e/ Playwright suite (CI `e2e` job, #197): @playwright/test is pinned exactly and nothing else updates it.
+  # Separate from /web, so the typescript-major ignore stays scoped to /web.
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 15
   - package-ecosystem: github-actions
     directories:
       - /
