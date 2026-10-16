@@ -681,12 +681,12 @@ Every PR that touches a measured path **MUST** paste before/after numbers in its
 **Reseed peak and the storage cap (#109).**
 - **Why a reseed peaks:** `TRUNCATE` inside the seed transaction keeps the old relfilenodes until `COMMIT`, so a reseed temporarily needs about old + new data. A local `--force` at scale 1.0 peaked at **533.8 MB** (`SEED_PEAK_EST_MB=542`, phase 1), over the 0.5 GB planning cap. Today a full book commits at 276–280 MB, so a full-book reseed estimates **~547–550 MB**. On a 512 MiB data directory the same run failed mid-COPY with SQLSTATE 53100 (data intact).
 - **The guard:** before any destructive statement, a run that would TRUNCATE computes `SEED_PEAK_EST_MB` = current `pg_database_size` + the measured scale-1.0 size × scale. Above `--cap-mb` (default **512 MB**), or if the size can't be read (fail closed), it exits 2 and changes nothing. `--max-mb` stays the separate committed-size budget, checked before COMMIT.
-- **At the 512 MB default, a full scale-1.0 reseed is refused on purpose.** A first seed into an empty database (~280 MB peak) passes; reseeding a full book doesn't. Neon announced 1 GB per Free project on 2026-10-02, but the default stays 512 MB until Leo confirms the project's real cap. `--cap-mb` on the command line (for example `--cap-mb 1024`) only helps local runs; production can't pass it yet (runbook below).
+- **At the 512 MB default, a full scale-1.0 reseed is refused on purpose.** A first seed into an empty database (~280 MB peak) passes; reseeding a full book doesn't. Neon announced 1 GB per Free project on 2026-10-02, but the default stays 512 MB until Leo confirms the project's real cap. Production passes it through the `production` environment variable `SEED_CAP_MB` (deploy, default 512) or the db-ops `cap_mb` input (reseed, default 512), §14.2/§14.3 (#224).
 - **Runbook: before a `SeedVersion` or `SEED_SCALE` bump, or a db-ops reseed.**
   - **Estimate first.** Peak ≈ production's last `DB_SIZE_MB` (the deploy log's seed step, or `app.seed_metadata.database_size_bytes`) + 271 MB × scale. With production at 276 MB, a `SeedVersion` bump at scale 1.0 estimates ~547 MB, and any `SEED_SCALE` above ~0.87 crosses 512 MB.
   - **What a refusal looks like.** The seed step prints `SEED_PEAK_EST_MB=…` and `ERROR: reseed peak estimate is … MB …, over the 512 MB storage cap. Refused before TRUNCATE`, then exits 2. In **deploy** this happens *after* "Migrate Neon", so the Render deploy hook and the smoke test don't run and the deploy goes red. The previous data stays and the migrated schema stays backward compatible (§14.4). In **db-ops `reseed`**, the job fails with the same message and nothing changes. At the default cap, a db-ops reseed of a full book at scale 1.0 is always refused.
-  - **One of these must land first:** (a) Leo confirms the Neon cap and a seeder PR raises `SeedOptions.DefaultCapMegabytes`; or (b) the `[workflows]` follow-up (Helms sign-off) passes the cap to the seeder: `SEED_CAP_MB` through repository vars and env into deploy.yml's seed step, plus a validated `cap_mb` input on db-ops `reseed`. Tech Coordinator holds any `SeedVersion` or `SEED_SCALE` bump until that follow-up merges (Helms ruling on PR #217).
-  - **If a bump was already refused:** land (a) or (b), or revert the bump, then re-run Deploy from `main` via `workflow_dispatch` (Tech Coordinator).
+  - **Raise the cap first, when the estimate is over it:** Leo confirms the Neon cap, then Tech Coordinator sets the `production` environment variable `SEED_CAP_MB` (deploy) or dispatches db-ops `reseed` with a matching `cap_mb`. A seeder PR that raises `SeedOptions.DefaultCapMegabytes` also works. The wiring is #224 (Helms ruling on PR #217).
+  - **If a bump was already refused:** set or raise `SEED_CAP_MB` (or revert the bump), then re-run Deploy from `main` via `workflow_dispatch` (Tech Coordinator, §14.2).
 - **Stale local data:** dev databases seeded at `1.0.0` by earlier PR heads report the same version, so `--if-changed` skips and keeps the stale rows. Reseed them locally with `--force` (add `--cap-mb 1024` at scale 1.0). Never `--force` against Neon or production.
 
 ---
@@ -834,6 +834,7 @@ services:
    | secret | `NEON_DATABASE_URL` | Neon direct connection string (Npgsql format) |
    | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
    | variable | `SEED_SCALE` | `1.0` |
+   | variable | `SEED_CAP_MB` (optional) | reseed peak cap in MB; unset means 512 (§10, #224). Set it only after Leo confirms the Neon cap |
 
 5. **Claude review (Leo's decision, 2026-10-07):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. The `review` check stays non-required.
 6. **Last:** after Tech Coordinator's go-ahead, set `production` environment variable `APP_URL` to the service URL (no trailing slash). That variable turns deploys on.
@@ -897,7 +898,7 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 |---|---|
 | **1. db-tools** | `.github/actions/build-db-tools`: NuGet restore for `linux-x64`, then the **EF Core migrations bundle** (`dotnet ef migrations bundle --self-contained -r linux-x64`) and the **seeder** (`dotnet publish src/Desk.Seeder -c Release -r linux-x64 --self-contained`). `dotnet tool restore` is not a package restore. A password-less design-time `DATABASE_URL` is set only while bundling; production `DATABASE_URL` stays on the migrate/seed steps. |
 | **2. migrate** | Run the bundle against `NEON_DATABASE_URL`. A no-op when current. A failure **stops the deploy**: the running app keeps serving the old schema. |
-| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it truncates and reloads all seeded tables in one transaction; the metadata row is written in the same transaction after a pre-commit size guard. The step prints the DB size and fails over budget (§5.4). |
+| **3. seed** | Run `Desk.Seeder --if-changed --scale $SEED_SCALE --cap-mb $SEED_CAP_MB`. It compares the seed **version** (a constant in the seeder, bumped whenever the generator or schema changes) and the scale with `app.seed_metadata`, and does nothing when they match. When they differ, it truncates and reloads all seeded tables in one transaction; the metadata row is written in the same transaction after a pre-commit size guard. The step prints the DB size and fails over budget (§5.4). **Before it truncates, a reseed is refused (exit 2, nothing changed) when `SEED_PEAK_EST_MB` exceeds `--cap-mb`.** The cap is the `production` variable `SEED_CAP_MB` (default 512; the step fails before the seeder if it isn't a whole number 1–999999). A skip never checks the cap. A refusal comes after migrate, so deploy and smoke don't run. **Operator path:** before a `SeedVersion` or `SEED_SCALE` bump, estimate the peak (§10 runbook) and confirm the Neon cap; if the estimate is over the cap, set `SEED_CAP_MB` (or raise `SeedOptions.DefaultCapMegabytes`) first. If a deploy was refused, set or raise it (or revert the bump), then Tech Coordinator re-runs Deploy via `workflow_dispatch`. |
 | **4. deploy** | `curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"` triggers Render to build the Dockerfile at this commit. |
 | **5. smoke** | Poll `$APP_URL/health` (up to 15 min, every 15 s; the free tier builds slowly and cold-starts) until `version` equals `github.sha`. Then `GET /` returns 200 HTML, and `GET /api/me` returns 401 (auth enforced). The workflow summary shows URL, version, migration list, seed action (skipped / reseeded) and DB size. |
 
@@ -906,11 +907,12 @@ Triggered by `workflow_run` of CI on `main` with `conclusion == success`, or by 
 Inputs:
 - `operation`: `migrate` | `reseed` | `size-report`
 - `scale`: default `1.0`
+- `cap_mb`: reseed peak cap in MB, default `512`. The Guard step fails unless it's a whole number 1–999999, before any database step; it reaches the seeder only through `env` (`--cap-mb "$CAP_MB"`)
 - `confirm`: must equal `RESEED-PRODUCTION` for `reseed`; otherwise the job fails before touching the database
 
 Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensitive) at the current tip of `main`. `DATABASE_URL` is injected only on the step that talks to Neon.
 
-`reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`.
+`reseed` drops and reloads the synthetic data (never the `auth` schema or user accounts), then updates `app.seed_metadata`. **A reseed is refused (exit 2) before TRUNCATE when `SEED_PEAK_EST_MB` exceeds `cap_mb`**, and nothing changes. At the 512 default a full book at scale 1.0 (~547 MB estimated) is always refused. Operator path: confirm the Neon cap, then dispatch with a `cap_mb` at or below it that covers the estimate (§10 runbook).
 
 ### 14.4 Migration rules (because migrations run *before* the new app version starts)
 
@@ -1016,7 +1018,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | GitHub Pages deploy (`[workflows]`) | #350 | In review: `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024); needs the bearer-auth PR merged first |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
-| 1 Data | #6 | Merged |
+| 1 Data | #6 | Merged; follow-up #224: deploy and db-ops reseed pass the seeder's `--cap-mb` (`SEED_CAP_MB` / `cap_mb`, default 512, validated) (`[workflows]`, in review) |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review); follow-up #396: a session without an account id is refused with 401, never keyed on the client address (#361, in review) |
 | GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
