@@ -28,20 +28,21 @@ public sealed class DeskUserManager(
     public override async Task<bool> IsLockedOutAsync(DeskUser user) =>
         DeskUser.IsLockedOutAt(await GetLockoutEnabledAsync(user), await GetLockoutEndDateAsync(user), time.GetUtcNow());
 
-    /// <summary>As the base: count the failure; at the limit, lock until now + the lockout span and reset the count.</summary>
+    /// <summary>
+    /// The base, which counts the failure and records Identity's <c>increment_access_failed</c> update metric (#338),
+    /// then, when that failure locked the account, restamps the lockout end on the injected clock. The base resets the
+    /// count to 0 only when it locks, so a 0 after a successful call means this failure locked it. That costs one more
+    /// UPDATE on the locking attempt only, through the store and not <see cref="UserManager{TUser}.SetLockoutEndDateAsync"/>,
+    /// so no second metric is recorded.
+    /// </summary>
     public override async Task<IdentityResult> AccessFailedAsync(DeskUser user)
     {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(user);
+        var result = await base.AccessFailedAsync(user);
+        if (!result.Succeeded || await GetAccessFailedCountAsync(user) != 0)
+            return result;
         // The EF store implements the lockout store; the base requires it too.
         var lockouts = (IUserLockoutStore<DeskUser>)Store;
-        var count = await lockouts.IncrementAccessFailedCountAsync(user, CancellationToken);
-        if (count >= Options.Lockout.MaxFailedAccessAttempts)
-        {
-            Logger.LogDebug("User is locked out.");
-            await lockouts.SetLockoutEndDateAsync(user, time.GetUtcNow().Add(Options.Lockout.DefaultLockoutTimeSpan), CancellationToken);
-            await lockouts.ResetAccessFailedCountAsync(user, CancellationToken);
-        }
+        await lockouts.SetLockoutEndDateAsync(user, time.GetUtcNow().Add(Options.Lockout.DefaultLockoutTimeSpan), CancellationToken);
         return await UpdateUserAsync(user);
     }
 }
