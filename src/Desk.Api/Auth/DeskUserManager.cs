@@ -26,7 +26,7 @@ public sealed class DeskUserManager(
     : UserManager<DeskUser>(store, optionsAccessor, passwordHasher, userValidators, passwordValidators, keyNormalizer, errors, services, logger)
 {
     public override async Task<bool> IsLockedOutAsync(DeskUser user) =>
-        await GetLockoutEnabledAsync(user) && await GetLockoutEndDateAsync(user) >= time.GetUtcNow();
+        DeskUser.IsLockedOutAt(await GetLockoutEnabledAsync(user), await GetLockoutEndDateAsync(user), time.GetUtcNow());
 
     /// <summary>As the base: count the failure; at the limit, lock until now + the lockout span and reset the count.</summary>
     public override async Task<IdentityResult> AccessFailedAsync(DeskUser user)
