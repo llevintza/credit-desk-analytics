@@ -590,9 +590,9 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Caching:** `IMemoryCache` with a size limit, keyed per the P1 rules, expiring at the next batch time (06:30 America/New_York), plus `ETag` / `If-None-Match`.
 - **Observability:**
   - A `Server-Timing` header (db, serialize, total) on every data endpoint, and `X-Cache: HIT|MISS`. On the CSV export both are set before the first byte: `db` is the time to the first row, `ser` is 0 (rows are written as they stream), and `X-Cache` is always `MISS`.
-- **CSV export truncation:** the export counts the matching rows up to one past its cap (`LIMIT cap + 1`, no sort) in the same round trip as the rows. When more rows match than the cap, it writes the cap's rows and sends `X-Export-Truncated: true` before the first byte; otherwise the header is absent.
   - Structured logs with request id.
   - The slowest 20 queries per day are visible on the admin page.
+- **CSV export truncation:** the export counts the matching rows up to one past its cap (`LIMIT cap + 1`, no sort) in the same round trip as the rows. When more rows match than the cap, it writes the cap's rows and sends `X-Export-Truncated: true` before the first byte; otherwise the header is absent.
 - **Static SPA:** `UseStaticFiles` + `MapFallbackToFile("index.html")`. Long-cache hashed assets, and `no-cache` for `index.html`.
 - **Same origin, so no CORS** is configured in production. In development the Angular dev server proxies `/api` to the API.
 
