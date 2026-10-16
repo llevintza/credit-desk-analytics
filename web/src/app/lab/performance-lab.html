@@ -87,7 +87,7 @@
     <tbody>
       @for (r of table(); track r.id) {
         <tr [attr.data-testid]="'run-' + r.id">
-          @for (c of r.cells; track $index) { <td [class.text]="$index === 1 || $index === 6 || $index === 13">{{ c }}</td> }
+          @for (c of r.cells; track $index) { <td [class.text]="textColumns.has($index)">{{ c }}</td> }
         </tr>
       } @empty {
         <tr><td class="empty" [attr.colspan]="headers.length">No runs yet. Pick the toggles and press Run.</td></tr>

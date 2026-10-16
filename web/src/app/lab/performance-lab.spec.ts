@@ -60,7 +60,7 @@ async function until<T>(fn: () => T | undefined | null | false, ms = 2000): Prom
 describe('Performance Lab (README §6 P5)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  interface Options { admin?: boolean; grid?: boolean; asOfFails?: boolean; presets?: Preset[] | 'fail'; }
+  interface Options { admin?: boolean; grid?: boolean; asOfFails?: boolean; presets?: Preset[] | 'fail'; catalogFails?: boolean; }
 
   async function render(adminOrOptions: boolean | Options = false) {
     const o: Options = typeof adminOrOptions === 'boolean' ? { admin: adminOrOptions } : adminOrOptions;
@@ -81,7 +81,8 @@ describe('Performance Lab (README §6 P5)', () => {
     if (o.grid !== false)
       (fixture.componentInstance as unknown as { gridOptions: { onGridReady: (e: unknown) => void } }).gridOptions.onGridReady({ api: grid });
     await fixture.whenStable();
-    http.expectOne('/api/meta/columns').flush(catalog);
+    if (o.catalogFails) http.expectOne('/api/meta/columns').flush(null, { status: 500, statusText: 'Error' });
+    else http.expectOne('/api/meta/columns').flush(catalog);
     if (o.presets === 'fail') http.expectOne('/api/presets/positions').flush(null, { status: 500, statusText: 'Error' });
     else http.expectOne('/api/presets/positions').flush(o.presets ?? presets);
     // The scope loads as-of and portfolios together (forkJoin): a failed as-of cancels the portfolios request.
@@ -293,8 +294,8 @@ describe('Performance Lab (README §6 P5)', () => {
     expect(lab.colDefs(['ghost'])).toEqual([{ field: 'ghost', headerName: 'ghost' }]);
   });
 
-  it.each([[[] as Preset[]], ['fail' as const]])('does not run without the displayed columns (presets %#)', async (p) => {
-    const { fixture, http, button } = await render({ presets: p });
+  it.each([{ presets: [] as Preset[] }, { presets: 'fail' as const }, { catalogFails: true }])('does not run without the catalog and the displayed columns (%o)', async (o) => {
+    const { fixture, http, button } = await render(o);
     expect(button('run').disabled).toBe(true);
     await (fixture.componentInstance as unknown as { run: () => Promise<void> }).run();
     expect(http.match((r) => r.url.startsWith('/api/positions/'))).toHaveLength(0);

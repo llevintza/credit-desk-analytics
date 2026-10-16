@@ -82,6 +82,8 @@ export class PerformanceLab {
   ];
   protected readonly p3Modes: Choice<P3Mode>[] = [{ value: 'per-source', label: '5 per-source calls' }, { value: 'naive', label: 'Naive 20 calls' }];
   protected readonly headers = columnHeaders;
+  /** Scenario, Encoding and Cache read left-aligned; every other column is a number. */
+  protected readonly textColumns = new Set([1, 6, 13]);
   protected readonly maxRuns = maxRuns;
 
   protected readonly settings = signal<LabSettings>(defaultSettings);
