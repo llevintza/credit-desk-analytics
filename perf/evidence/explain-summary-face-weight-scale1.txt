@@ -1,0 +1,78 @@
+as of 2026-10-15 : 20001 rows
+ max_parallel_workers_per_gather 
+---------------------------------
+ 2
+(1 row)
+
+ sums | mv_weighted | prices 
+------+-------------+--------
+   23 |          43 |    108
+(1 row)
+
+ snapshot_size 
+---------------
+ 74 MB
+(1 row)
+
+                            run_all                             
+----------------------------------------------------------------
+ mv:   Finalize Aggregate
+ mv:     ->  Gather
+ mv:           Workers Planned: 2
+ mv:           ->  Partial Aggregate
+ mv:                 ->  Parallel Seq Scan on position_snapshot
+ face: Finalize Aggregate
+ face:   ->  Gather
+ face:         Workers Planned: 2
+ face:         ->  Partial Aggregate
+ face:               ->  Parallel Seq Scan on position_snapshot
+(10 rows)
+
+
+Summary: execution time over 30 interleaved rounds (EXPLAIN ANALYZE, TIMING OFF), after one warm-up round
+          variant          | runs | workers | min_ms | p50_ms | p95_ms | max_ms 
+---------------------------+------+---------+--------+--------+--------+--------
+ |MV| weight only (before) |   30 |       2 |   40.0 |   69.2 |  189.2 |  322.1
+ prices by |face| (after)  |   30 |       2 |   39.6 |   72.4 |  139.5 |  257.6
+(2 rows)
+
+
+-- Second run, same database, a quieter moment (load average ~23):
+as of 2026-10-15 : 20001 rows
+ max_parallel_workers_per_gather 
+---------------------------------
+ 2
+(1 row)
+
+ sums | mv_weighted | prices 
+------+-------------+--------
+   23 |          43 |    108
+(1 row)
+
+ snapshot_size 
+---------------
+ 74 MB
+(1 row)
+
+                            run_all                             
+----------------------------------------------------------------
+ mv:   Finalize Aggregate
+ mv:     ->  Gather
+ mv:           Workers Planned: 2
+ mv:           ->  Partial Aggregate
+ mv:                 ->  Parallel Seq Scan on position_snapshot
+ face: Finalize Aggregate
+ face:   ->  Gather
+ face:         Workers Planned: 2
+ face:         ->  Partial Aggregate
+ face:               ->  Parallel Seq Scan on position_snapshot
+(10 rows)
+
+
+Summary: execution time over 30 interleaved rounds (EXPLAIN ANALYZE, TIMING OFF), after one warm-up round
+          variant          | runs | workers | min_ms | p50_ms | p95_ms | max_ms 
+---------------------------+------+---------+--------+--------+--------+--------
+ prices by |face| (after)  |   30 |       2 |   27.0 |   30.2 |   46.8 |   56.5
+ |MV| weight only (before) |   30 |       2 |   26.9 |   29.9 |   44.7 |   46.1
+(2 rows)
+

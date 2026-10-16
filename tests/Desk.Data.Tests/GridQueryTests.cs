@@ -58,6 +58,46 @@ public sealed class GridQueryTests
         Assert.NotEqual(one.SummaryKey, two.SummaryKey);
     }
 
+    private static GridQuery NormalizeWith(Func<ColumnDef, ColumnDef> served, GridRequest r) =>
+        new GridQueryNormalizer(ColumnCatalog.PositionSnapshot.Select(served)).Normalize(r, AsOf, Entitled);
+
+    [Fact]
+    public void A_column_aggregation_change_in_the_served_catalog_changes_both_cache_keys()
+    {
+        // #459 step 2 flips prices in app.column_catalog to face-weighted without a reseed (DataVersion stays): the
+        // block cache, the ETag and the summary cache must not keep serving |MV|-weighted totals under the new labels.
+        var request = new GridRequest(Columns: ["deal_name", "price", "spread_bp", "market_value"]);
+        var faceWeighted = NormalizeWith(c => c, request);
+        var mvWeighted = NormalizeWith(c => c.Name == "price" ? c with { Aggregation = Aggregation.WeightedByMarketValue } : c, request);
+        Assert.Equal(faceWeighted.Columns.Select(c => c.Name), mvWeighted.Columns.Select(c => c.Name));
+        Assert.NotEqual(faceWeighted.CanonicalKey, mvWeighted.CanonicalKey);
+        Assert.NotEqual(faceWeighted.SummaryKey, mvWeighted.SummaryKey);
+    }
+
+    [Fact]
+    public void Cache_keys_are_stable_when_nothing_the_query_reads_changes()
+    {
+        var request = new GridRequest(Columns: ["deal_name", "price", "spread_bp", "market_value"]);
+        var once = Normalize(request);
+        var again = Normalize(request);
+        Assert.Equal(once.CanonicalKey, again.CanonicalKey);
+        Assert.Equal(once.SummaryKey, again.SummaryKey);
+
+        // A header rename, or an aggregation change on a column the view doesn't ask for, keeps both keys.
+        var relabelled = NormalizeWith(c => c.Name == "price" ? c with { Header = "Px" } : c, request);
+        var otherColumn = NormalizeWith(c => c.Name == "book_price" ? c with { Aggregation = Aggregation.WeightedByMarketValue } : c, request);
+        Assert.All(new[] { relabelled, otherColumn }, q =>
+        {
+            Assert.Equal(once.CanonicalKey, q.CanonicalKey);
+            Assert.Equal(once.SummaryKey, q.SummaryKey);
+        });
+
+        // Paging and sort still leave the summary key alone.
+        var paged = Normalize(request with { StartRow = 200, EndRow = 400, SortModel = [new("price", "desc")] });
+        Assert.Equal(once.SummaryKey, paged.SummaryKey);
+        Assert.NotEqual(once.CanonicalKey, paged.CanonicalKey);
+    }
+
     [Fact]
     public void Unknown_or_malicious_sort_ids_are_dropped_and_position_id_breaks_ties_in_the_first_keys_direction()
     {
@@ -175,6 +215,25 @@ public sealed class GridQueryTests
         Assert.Equal(batch.Sql.Split(";\n")[1], summary.Sql);
         Assert.Equal(batch.Parameters.Where(p => p.Key is not ("offset" or "limit")), summary.Parameters);
         Assert.Equal(["as_of", "portfolios", "p4", "p5"], summary.Parameters.Select(p => p.Key));
+    }
+
+    [Fact]
+    public void Prices_are_face_weighted_and_every_other_average_is_MV_weighted()
+    {
+        // #459 (Leo, 2026-10-16): the par-weighted price a desk quotes, not the |MV|-weighted Σp²f / Σpf.
+        var weighted = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation is Aggregation.WeightedByMarketValue or Aggregation.WeightedByCurrentFace).ToList();
+        Assert.All(weighted, c => Assert.Equal(c.Kind == ColumnKind.Price ? Aggregation.WeightedByCurrentFace : Aggregation.WeightedByMarketValue, c.Aggregation));
+        Assert.Equal(108, weighted.Count(c => c.Aggregation == Aggregation.WeightedByCurrentFace)); // 100 scenarios + 8
+        Assert.Contains(weighted, c => c.Name == "price");
+
+        var sql = Sql(new GridRequest(Columns: ["price", "spread_bp", "current_face"]));
+        var summary = sql.Sql.Split(";\n")[1];
+        Assert.Equal(
+            "SELECT COUNT(*)::int AS row_count, " +
+            "SUM(\"price\" * face_weight_f8) / NULLIF(SUM(face_weight_f8) FILTER (WHERE \"price\" IS NOT NULL), 0) AS \"price\", " +
+            "SUM(\"spread_bp\" * weight_f8) / NULLIF(SUM(weight_f8) FILTER (WHERE \"spread_bp\" IS NOT NULL), 0) AS \"spread_bp\", " +
+            "SUM(\"current_face\") AS \"current_face\" " +
+            "FROM core.position_snapshot WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios);", summary);
     }
 
     private static string Haystack() =>
