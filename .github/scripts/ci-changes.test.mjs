@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize as normalizePath } from "node:path";
@@ -392,6 +392,120 @@ test("ci.yml: no workflow-level paths filters; classifier runs from the base che
   assert.ok(changes.includes("fetch-depth: 0"));
   assert.match(changes, /- id: classify\n        if: github\.event_name == 'pull_request'/);
   assert.doesNotMatch(CI, /pull_request_target/);
+});
+
+// #213: the classifier and the coverage gate diff from one base, pinned once in the
+// changes job. On #195 the event base was older than the merge commit's first parent,
+// so the gate saw another PR's src/ change that the classifier (rightly) did not.
+const stepRun = (block, id) => {
+  const m = new RegExp(`^      - id: ${id}\\n([\\s\\S]*?)(?=^      - |(?![\\s\\S]))`, "m").exec(block);
+  assert.ok(m, `step ${id} not found`);
+  const run = /^ {8}run: \|\n((?: {10}.*\n|\n)+)/m.exec(m[1]);
+  assert.ok(run, `step ${id} has no run block`);
+  return { step: m[1], script: run[1].replace(/^ {10}/gm, "") };
+};
+
+test("ci.yml: the changes job pins one diff base; the classifier and the coverage gate both use it (#213)", () => {
+  const changes = jobBlock("changes");
+  assert.match(changes, /^      base_sha: \$\{\{ steps\.base\.outputs\.base_sha \}\}$/m);
+  const { step } = stepRun(changes, "base");
+  // Runs on push too (no checkout there), so the gate always gets an output.
+  assert.doesNotMatch(step, /^ {8}if:/m);
+  assert.ok(changes.indexOf("- id: base") < changes.indexOf("- id: classify"), "base is pinned before classify");
+  const classify = stepRun(changes, "classify");
+  assert.ok(classify.step.includes("DIFF_BASE: ${{ steps.base.outputs.base_sha }}"));
+  assert.match(classify.script, /^node "\$CLASSIFIER" --base "\$DIFF_BASE" --head "\$HEAD_SHA"$/m);
+  // The rules still come from the event base, never from the pinned SHA or the head.
+  assert.ok(changes.includes("ref: ${{ github.event.pull_request.base.sha }}"));
+
+  const coverage = jobBlock("coverage");
+  assert.match(coverage, /^    needs: \[changes, api, web\]$/m);
+  assert.ok(
+    coverage.includes(
+      "DIFF_BASE: ${{ needs.changes.outputs.base_sha || github.event.pull_request.base.sha || github.event.before }}",
+    ),
+  );
+  assert.ok(coverage.includes('--base "$DIFF_BASE"'));
+  assert.doesNotMatch(coverage, /--base "\$BASE_SHA"/);
+  // Gate script, thresholds and floor stay at the event base (_base).
+  assert.ok(coverage.includes("ref: ${{ github.event.pull_request.base.sha || github.event.before }}"));
+  assert.ok(coverage.includes('--default-sha "$BASE_SHA"'));
+  assert.match(coverage, /for SHA in "\$\{BASE_SHA:-\}" "\$\{DIFF_BASE:-\}"; do/);
+});
+
+test("the pinned base makes the gate's diff match the classifier's when main moved (#213, the #195 run)", () => {
+  const { script } = stepRun(jobBlock("changes"), "base");
+  const dir = mkdtempSync(join(tmpdir(), "ci-base-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("config", "commit.gpgsign", "false");
+    git("config", "maintenance.auto", "false");
+    git("config", "gc.auto", "0");
+    const write = (path, text) => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    };
+    write("web/src/a.ts", "a\n");
+    write("src/Desk.Data/Grid/GridSqlBuilder.cs", "g\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "base");
+    const eventBase = git("rev-parse", "HEAD");
+    git("checkout", "-q", "-b", "pr");
+    write("web/src/a.ts", "a2\n");
+    git("commit", "-q", "-am", "web-only PR");
+    const prHead = git("rev-parse", "HEAD");
+    git("checkout", "-q", "main");
+    write("src/Desk.Data/Grid/GridSqlBuilder.cs", "g2\n");
+    git("commit", "-q", "-am", "another PR merged mid-run");
+    const mainTip = git("rev-parse", "HEAD");
+    // GITHUB_SHA: the merge commit GitHub built on the newer main.
+    git("checkout", "-q", "--detach", mainTip);
+    git("merge", "-q", "--no-ff", "--no-edit", prHead);
+
+    const pin = (env) => {
+      const out = join(dir, ".git", "out");
+      const sum = join(dir, ".git", "sum");
+      writeFileSync(out, "");
+      const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: sum, ...env },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const lines = readFileSync(out, "utf8").trim().split("\n");
+      assert.equal(lines.length, 1);
+      return { base: lines[0].replace(/^base_sha=/, ""), stdout: r.stdout };
+    };
+    // The coverage gate: `git diff <merge-base of --base and HEAD> HEAD -- src web/src`.
+    const gateFiles = (base) => {
+      const mb = git("merge-base", base, "HEAD");
+      return git("diff", "--name-only", mb, "HEAD", "--", "src", "web/src").split("\n").filter(Boolean).sort();
+    };
+
+    const pinned = pin({ EVENT_NAME: "pull_request", EVENT_BASE: eventBase, HEAD_SHA: prHead });
+    assert.equal(pinned.base, mainTip, "the merge commit's first parent");
+    assert.deepEqual(changedPaths(dir, pinned.base, prHead), ["web/src/a.ts"]);
+    assert.deepEqual(gateFiles(pinned.base), ["web/src/a.ts"]);
+    // The old wiring: the gate diffed from the event base and saw the other PR's file.
+    assert.deepEqual(changedPaths(dir, eventBase, prHead), ["web/src/a.ts"]);
+    assert.deepEqual(gateFiles(eventBase), ["src/Desk.Data/Grid/GridSqlBuilder.cs", "web/src/a.ts"]);
+
+    // Anything unexpected keeps the event base (the pre-#213 behaviour), with a warning.
+    const other = pin({ EVENT_NAME: "pull_request", EVENT_BASE: eventBase, HEAD_SHA: mainTip });
+    assert.equal(other.base, eventBase);
+    assert.match(other.stdout, /^::warning::HEAD is not the merge of /m);
+    const unknown = "f".repeat(40);
+    assert.equal(pin({ EVENT_NAME: "pull_request", EVENT_BASE: unknown, HEAD_SHA: prHead }).base, unknown);
+    git("checkout", "-q", "--detach", prHead);
+    assert.equal(pin({ EVENT_NAME: "pull_request", EVENT_BASE: eventBase, HEAD_SHA: prHead }).base, eventBase);
+    // Push: event.before, and no git at all.
+    assert.equal(pin({ EVENT_NAME: "push", EVENT_BASE: eventBase, HEAD_SHA: "" }).base, eventBase);
+  } finally {
+    removeRepo(dir);
+  }
 });
 
 // Every file a .NET test project builds from or links must run the api job (R173-02).
