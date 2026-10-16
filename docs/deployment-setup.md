@@ -218,6 +218,7 @@ From now on, merging a PR into `main` runs all of this automatically. When CI on
 | Migrate step: `password authentication failed` | Wrong or rotated password, or the string was edited. Copy it again from Neon → Connect |
 | Migrate step: errors mentioning prepared statements or `-pooler` | The **pooled** string was used. Copy it again with pooling **off** |
 | Smoke test times out | Check Render → **Events / Logs**: a build failure, or the service failing to start (`DATABASE_URL is not set`) |
+| A single `/health` request times out (10 s), then the next one is a fast 200 | Accepted on the free tier: note it, don't escalate. An incident is **3 consecutive** `/health` timeouts; then check Render → **Events / Logs / Metrics** for a restart, a failed start or a platform event (README §13.2, #303). The deploy smoke test's `/health` poll retries single misses on its own |
 | `/health` shows an older SHA | The deploy is still building; free builds are slow. A failed build keeps the previous version running |
 | Claude review job skipped with a missing-key notice | Add `ANTHROPIC_API_KEY` to the `claude-review` environment (step 5). The job stays green; it is not a required check |
 | Claude review job waits on a deployment approval | The `claude-review` environment must have **no** required reviewers and **no** branch restriction |

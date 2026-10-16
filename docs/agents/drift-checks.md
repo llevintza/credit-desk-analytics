@@ -11,6 +11,7 @@
 - `generate.mjs [--check] [--root <dir>]` renders the adapters.
 - `pr-data.mjs` fetches PR data via the REST API; `governance.mjs` is the governance-paths logic (both in `governance.md`).
 - D12 reads line-anchored markers in `claude-review.yml` (`# agents-drift:restore-step:begin|end`, `# agents-drift:claude-args`, `# agents-drift:hook-canary`), not a YAML parse.
+- **Rev 14 (H21):** until the harness build PR has removed every "planned; arrives with the harness build PR" marker, D12 and D23 accept both states: a mention with the marker while its file or setting is absent, and a mention without it once the file or setting has landed ([`README.md`](README.md#revision-14-h21-helms-2026-10-16-planned-markers-and-drafts-references)).
 
 ## Where each check runs
 
