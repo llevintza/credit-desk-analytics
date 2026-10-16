@@ -161,6 +161,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - GitHub Pages doesn't let a site set response headers, so the Pages copy gets no CSP, `frame-ancestors`, HSTS preload, `Permissions-Policy` or `X-Frame-Options` from us.
   - The deploy workflow adds a `<meta http-equiv="Content-Security-Policy">` with `script-src 'self'`, `connect-src 'self' <API origin>`, `object-src 'none'` and `base-uri 'self'`.
   - A meta CSP can't set `frame-ancestors`, so the Pages copy can be framed (clickjacking). The risk is low: there are no state-changing one-click actions, and the token never goes into a frame's URL.
+    - Since #66 (amendment below) the app refuses to start inside a frame, and a meta tag sets `Referrer-Policy: same-origin`.
   - The API-served copy keeps the full header set (README §7.3).
 - **A stolen refresh token:**
   - Each refresh token works once (#353). If the thief refreshes first, the owner's next refresh presents a swapped token, and the whole session ends for both. If the owner refreshes first, the thief's copy is the replay and ends it. Either way a stolen token buys at most the time until the owner's next refresh (5 min of activity), not the rest of the 24 h.
@@ -244,3 +245,42 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - **Remaining limit:** an access token logged out on another instance, or before a restart, still works on an instance that hasn't seen the revocation, until it expires (at most 5 min) or that instance refuses the session's refresh, whichever is first. Closing it would need a database read per request (option 2). The test pins this bound.
   - Database load: one more statement at login and at logout; refresh's statement count is unchanged on the swap path (one `UPDATE` instead of nothing, next to the existing security-stamp read), plus one `SELECT` when the swap misses. Nothing per request, and nothing at start-up.
   - **Revisit** (replaces the second-instance clause above): if access tokens must end everywhere at once, either shorten their life or add a per-request check with a short-lived cache.
+
+## Amendment 2026-10-16: the Pages copy's header gaps, and HSTS for a year (#66)
+
+- **Status:** Proposed. Leo to accept the gaps that remain (listed under Consequences).
+- **Context:** the #66 security-header review (README §7.3) found the API-served copy complete except for HSTS, which sent ASP.NET Core's 30-day default. The Pages copy can't send response headers (Consequences above). Its meta CSP covers scripts, connections, objects and the base URI, but it was still framable, and it sent no `Referrer-Policy`.
+- **Options for the framing gap:**
+  1. Accept it (the position above). This is still the fallback for a browser with script off, which shows nothing anyway.
+  2. Put a header-setting proxy (for example a CDN worker) in front of Pages. It would be a new service and a new origin, and the custom-domain revisit (option 1 of this ADR) covers that better.
+  3. Serve the SPA from Render again. That undoes this ADR.
+  4. **The app refuses to start in a frame (chosen).** `web/src/app/core/frame-guard.ts` compares `window.top` with `window.self` before `bootstrapApplication`. When they differ, or `top` can't be read, it replaces the body with a plain notice and never starts the app, so a framer gets no login form and no grid. A sandboxed frame without `allow-scripts` runs no script, so it shows nothing either. This isn't the classic frame-busting redirect that a `sandbox` attribute can defeat: nothing navigates, and the page simply doesn't render.
+- **Referrer-Policy:** `<meta name="referrer" content="same-origin">` in `web/src/index.html` serves both copies. The API copy also sends the same value as a header. On Pages this stops the page URL leaking in the `Referer` of the cross-origin API calls (CORS still sends `Origin`).
+- **HSTS:** `AddHsts(MaxAge = 365 days)` (`SecurityHeaders.HstsMaxAge`). There is no `includeSubDomains` and no `preload`, because the API's host is a subdomain of a shared platform domain.
+- **Measured (local only: compose project `wrk66`, the API in Production on `:8066`, and a local copy of the Pages build served without app headers on `:4366`; never Render or Pages):**
+
+  ```
+  node perf/security-headers.mjs --api http://localhost:8066 --pages http://127.0.0.1:4366/credit-desk-analytics/
+  api /health, api /: CSP (default-src, script-src 'self' only, object-src 'none', base-uri, connect-src 'self',
+    frame-ancestors 'none', no unsafe-eval, 'unsafe-inline' only in style-src), nosniff, X-Frame-Options DENY,
+    Referrer-Policy same-origin, Permissions-Policy, COOP same-origin: ok; HSTS: info (not sent over http)
+  pages: meta CSP (connect-src 'self' http://localhost:8066), meta referrer same-origin, frame guard in main bundle: ok
+  All checks passed.
+
+  Chromium (Playwright), each copy framed from another origin:
+    Pages copy -> "Credit Desk Analytics cannot be shown inside a frame. Open it in its own tab." (no app-root)
+    API copy   -> blocked: Framing 'http://localhost:8066/' violates ... "frame-ancestors 'none'"
+    Pages copy at top level -> the sign-in page renders, no CSP violation
+
+  Initial bundle (npm run build, br q1, 16 KB writes): 116.7 KB before, 116.8 KB after, of 500 KB (main.js +275 B raw)
+  ```
+
+  The HSTS value is pinned by `HardeningTests.Hsts_is_sent_over_https_outside_development` (`max-age=31536000`; main sent `max-age=2592000`).
+- **Consequences:**
+  - The README §7.3 header set now covers both copies wherever a page can carry it. What Pages still can't have:
+    - `Permissions-Policy`, `Cross-Origin-Opener-Policy` and `X-Content-Type-Options` have no meta form. GitHub Pages' own headers apply instead; the live check records them.
+    - `frame-ancestors` is still missing as a header. The frame guard covers it while script runs.
+    - HSTS on `github.io` is GitHub's (the domain is preloaded).
+  - **Live-site check:** `perf/security-headers.mjs --api <Render origin> --pages <Pages URL>` is the recorded check. Over https it also fails an HSTS shorter than a year. A human runs it against the live site (agents measure only local stacks) and posts the table on #66.
+  - A future page that must be framed (none is planned) would need an allowlist in the guard and a matching `frame-ancestors`.
+

@@ -31,6 +31,14 @@ for (const theme of ['dark', 'light'] as const) {
         await page.locator('[data-testid=deal-grid] [role=row][row-index="0"] [col-id=name]').click();
         await expect(page.getByTestId('capital-stack')).toBeVisible();
       }
+      if (p.name === 'performance-lab') {
+        // A few real runs in the results table, the last block in the grid.
+        for (const [toggle, id] of [[null, 1], ['format-rows', 2], ['format-msgpack', 3]] as const) {
+          if (toggle) await page.getByTestId(toggle).click();
+          await page.getByTestId('run').click();
+          await expect(page.getByTestId(`run-${id}`)).toBeVisible();
+        }
+      }
       await page.waitForTimeout(400);
       await page.screenshot({ path: `${dir}/${p.name}-${theme}.png` });
     }

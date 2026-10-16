@@ -6,9 +6,13 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests',
-  // The ADR-0009 (PERF) and ADR-0014 (DEMO_SESSION) measurement runs are opt-in: without their variable they are not
-  // collected at all, so the default run reports 0 skipped (#210). Each spec keeps its own test.skip guard as a backstop.
-  testIgnore: [...(process.env.PERF ? [] : ['**/perf.spec.ts']), ...(process.env.DEMO_SESSION ? [] : ['**/demo-session.spec.ts'])],
+  // The ADR-0009 and ADR-0028 (PERF) and ADR-0014 (DEMO_SESSION) measurement runs are opt-in: without their
+  // variable they are not collected at all, so the default run reports 0 skipped (#210). Each spec keeps its own
+  // test.skip guard as a backstop.
+  testIgnore: [
+    ...(process.env.PERF ? [] : ['**/perf.spec.ts', '**/perf-lab.spec.ts']),
+    ...(process.env.DEMO_SESSION ? [] : ['**/demo-session.spec.ts']),
+  ],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
