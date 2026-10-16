@@ -63,7 +63,8 @@ public static class MarksEndpoints
             .WithMetadata(MarkStreamEndpoint.Instance)
             .WithName("StreamMarks")
             .WithSummary("Server-Sent Events: simulated intraday marks (bond_id, seq, event_ts, price, spread) for a subset of the caller's bonds "
-                + "on the latest as-of date. Events: hello, mark (id = seq), bye. Last-Event-ID replays only marks newer than it. The server "
+                + "on the latest as-of date. Events: hello, mark (id = seq), bye. Last-Event-ID (header, or the lastEventId parameter) replays only "
+                + "marks newer than it. The server "
                 + "ends each stream after MARKS_STREAM_SECONDS (at most 5 minutes).")
             .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
             .ProducesProblem(StatusCodes.Status400BadRequest)
@@ -82,7 +83,7 @@ public static class MarksEndpoints
     }
 
     internal static async Task<IResult> StreamAsync(
-        string? portfolioIds, HttpContext http, MetaCache metaCache, IPortfolioEntitlements entitlements, MarkUniverses universes,
+        string? portfolioIds, string? lastEventId, HttpContext http, MetaCache metaCache, IPortfolioEntitlements entitlements, MarkUniverses universes,
         DatabasePermits permits, MarksOptions options, TimeProvider time, CancellationToken ct)
     {
         if (!InsightsEndpoints.TryParseIds(portfolioIds, out var requested))
@@ -109,9 +110,10 @@ public static class MarksEndpoints
             universe = await universes.GetAsync(meta, requested.Length > 0 ? [.. requested.Where(entitled.Contains)] : entitled, ct);
         }
 
-        var after = long.TryParse(http.Request.Headers["Last-Event-ID"], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var id)
-            ? id
-            : long.MinValue;
+        // EventSource sends the header; the SPA's fetch sends the query parameter instead, because a cross-origin
+        // Last-Event-ID header would need its own CORS preflight allowance (ADR-0024 keeps that list short).
+        var resume = http.Request.Headers["Last-Event-ID"].FirstOrDefault() ?? lastEventId;
+        var after = long.TryParse(resume, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var id) ? id : long.MinValue;
         // Proxies that buffer responses (nginx-style) must pass each event straight through.
         http.Response.Headers["X-Accel-Buffering"] = "no";
         return TypedResults.ServerSentEvents(Events(universe, after, options, time, http.Features.Get<AuditFeature>(), ct));

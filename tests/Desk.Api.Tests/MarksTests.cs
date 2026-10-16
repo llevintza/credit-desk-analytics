@@ -157,6 +157,15 @@ public sealed class MarksTests(PostgresApiFactory api)
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => current.NextAsync().WaitAsync(quiet.Token));
         }
 
+        // The query parameter (what the SPA's fetch sends, to stay inside the CORS allow-list) works the same way.
+        await using (var byQuery = await OpenAsync(client, query: $"?lastEventId={now}"))
+        {
+            Assert.Equal("hello", (await byQuery.NextAsync())!.Value.EventType);
+            using var quiet = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            quiet.CancelAfter(TimeSpan.FromMilliseconds(500));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => byQuery.NextAsync().WaitAsync(quiet.Token));
+        }
+
         // Five ticks behind: exactly the bonds that changed in those ticks, all newer than the id sent.
         var behind = now - 5;
         await using var stream = await OpenAsync(client, behind.ToString());
