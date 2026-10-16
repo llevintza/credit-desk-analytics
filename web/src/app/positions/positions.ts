@@ -10,7 +10,7 @@ import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { Preset } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
-import { columnDefs } from './column-defs';
+import { columnDefs, totalLabel } from './column-defs';
 import { deskGridTheme, registerGridModules } from './grid-setup';
 import { PositionsQuery } from './positions-query';
 import { initialPreset, nextPreset, page, presetColumnState } from './presets';
@@ -101,7 +101,7 @@ export class Positions {
     effect(() => {
       const block = this.query.lastBlock();
       if (!block || !this.grid) return;
-      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: 'Total', ...block.summary }]);
+      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: totalLabel, ...block.summary }]);
       this.status.totalRows.set(block.rowCount);
     });
     effect(() => this.status.lastRequest.set(this.query.lastInfo()));
