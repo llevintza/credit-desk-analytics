@@ -1,4 +1,5 @@
 using Desk.Api.Audit;
+using Desk.Api.Lab;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace Desk.Api.Positions;
@@ -6,7 +7,8 @@ namespace Desk.Api.Positions;
 /// <summary>
 /// The cache-first read every data endpoint shares (README §7.2, §8): a weak ETag, <c>If-None-Match</c> → 304
 /// without touching the database, serialized bytes from <see cref="PositionsCache"/> on a hit, and on a miss the
-/// bytes stored until the next batch. Server-Timing, X-Cache and the audit cache flag are set either way.
+/// bytes stored until the next batch. Server-Timing, X-Cache and the audit cache flag are set either way. An admin's
+/// <c>X-Lab-Cache: off</c> (the Performance Lab, <see cref="LabSwitches"/>) skips both the read and the store.
 /// </summary>
 public static class CachedResponse
 {
@@ -15,6 +17,8 @@ public static class CachedResponse
     {
         http.Response.Headers.ETag = etag;
         http.Response.Headers.CacheControl = "private, no-cache";
+        if (LabSwitches.BypassCache(http))
+            return null;
         if (Matches(http.Request.Headers.IfNoneMatch, etag))
         {
             Mark(http, "HIT", 0, 0, started);
@@ -32,8 +36,10 @@ public static class CachedResponse
     public static IResult Store(HttpContext http, PositionsCache cache, string etag, byte[] bytes, string contentType,
         DateTimeOffset expires, double dbMs, double serializeMs, long started, int rows)
     {
-        cache.Cache.Set(Key(etag), bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = expires });
-        Mark(http, "MISS", dbMs, serializeMs, started);
+        var bypass = LabSwitches.BypassCache(http);
+        if (!bypass)
+            cache.Cache.Set(Key(etag), bytes, new MemoryCacheEntryOptions { Size = bytes.Length, AbsoluteExpiration = expires });
+        Mark(http, bypass ? LabSwitches.Bypass : "MISS", dbMs, serializeMs, started);
         if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = rows;
         return Results.Bytes(bytes, contentType);
     }
