@@ -1,6 +1,6 @@
 # ADR-0021: Per-user portfolio entitlements (model B: per-user grants)
 
-- **Status:** Accepted (Helms, 2026-10-07). Leo can override any ruling below.
+- **Status:** Accepted (Helms, 2026-10-07). Leo can override any ruling below. Implemented by #122 (2026-10-16; see *Implementation* at the end); `ENTITLEMENTS_MODE` stays `all` until the rollout below.
 - **Date:** 2026-10-07
 - **Phase / PR:** cross-cutting. Decides #43's entitlements criterion, which has moved to #122 (implementation). AGENTS.md rule: #123. This ADR's commit: #124.
 - **Target path:** `docs/adr/0021-per-user-portfolio-entitlements.md`, plus a row in `docs/adr/README.md` (AGENTS.md rule 4).
@@ -214,3 +214,16 @@ README §6 P4 and this ADR's rule list "deals" among portfolio-owned data. Phase
 - **Partially held deals** show only the in-scope holdings. This is the ordinary scoped pattern, unlike the fund endpoint's all-or-nothing gate above, because no deal-level number aggregates across portfolios.
 - **R1 allowlist:** no entry. The deal code never reads the unscoped portfolio list.
 - **Stub-provider tests (E7):** `tests/Desk.Api.Tests/DealsTests.cs` covers both: `A_single_portfolio_sees_only_its_own_holdings` (with a deal other portfolios also hold, and an out-of-scope request that is dropped) and `An_empty_entitlement_returns_zero_position_rows`.
+
+## Implementation (2026-10-16, #122)
+
+What #122 built, and where it differs in detail from the text above. Nothing here changes a ruling.
+
+- **Schema:** migration `20261016123340_PortfolioGrants` creates `app.portfolio_grant` exactly as in the Decision. It is additive and changes no #121 migration and no `core` index.
+- **Claims:** `DeskClaimsFactory` adds one `desk:portfolio` claim per grant. Since ADR-0024 there is no security-stamp validator: the factory runs at login and at every `POST /api/auth/refresh`, so a grant or revoke applies at the next refresh, within the 5-minute access-token life. That is the same bound as E5. Grant changes never rotate the stamp, so the session goes on (tested on a fake clock).
+- **Provider:** `GrantedPortfolios` beside `AllPortfolios`, synchronous with no I/O. It reads the claims and intersects them with `meta.UnscopedPortfolios`; an admin gets every id (E1). `EntitlementsMode.Create` reads `ENTITLEMENTS_MODE` in Program.cs: unset or `all` keeps `AllPortfolios`, `grants` picks `GrantedPortfolios`, and anything else throws at startup.
+- **R1:** `MetaSnapshot.Portfolios` is now `UnscopedPortfolios`. `EntitlementArchitectureTests` scans `src/**/*.cs` against the allowlist (with `FundEndpoints.cs` from the 2026-10-09 amendment), cites this ADR, and also fails on a stale entry.
+- **R4 OpenAPI guard:** `EntitlementClassificationTests`, beside the path-list test in `HardeningTests.cs`, classifies every `/api` path. Scoped: positions query and export, `/api/meta/portfolios`, fund performance, insights, `/api/deals`, `/api/deals/{dealId}`. Exempt, each with a one-line reason: `/api/meta/as-of`, `/api/meta/columns`, `/api/presets/{page}`, `/api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`, `/api/me`, `/api/admin/cache/clear`. It also checks that each scoped handler takes `IPortfolioEntitlements` and that no exempt one does. **Adding an exempt path from here on needs an amendment to this ADR.**
+- **E2 demo portfolios:** a `DEMO_ACCOUNTS_JSON` entry's optional `portfolios` array is written as grants (`granted_by` `DEMO_ACCOUNTS_JSON`). One detail differs from "after `AddToRoleAsync`": the grants are tracked on the request's context before that call, so its save writes the role and the grants in one transaction. A racing first login that finds the account with its role therefore also finds its grants. If the role fails, the grants are detached before the account is removed.
+- **CLI:** `Desk.UserAdmin grant|revoke --email <e> --portfolio <id>[,<id>…]` (`granted_by` `Desk.UserAdmin`), and a GRANTS column in `list`. Neither rotates the security stamp (tested).
+- **EXPLAIN for narrow sets (R4):** the grants change no SQL; a single-portfolio user gets the same `portfolio_id = ANY(@portfolios)` page query as a one-portfolio filter. Those plans were measured at scale 1.0 for #188 (`perf/explain-sort-plans.sql`, `perf/evidence/explain-sort-plans-scale1.txt`). For book 12 (703 rows) on each of the four sort indexes, the planner uses a bitmap scan on `ix_snapshot_portfolio` with a top-N heapsort: 146 shared buffers, about 0.6 ms. That is the same plan as with the sort index taken out of play. For book 1 (5,634 rows, the largest), the planner walks the sort index backward and filters on the portfolio. For `market_value DESC` that is 720 rows read for 200, 732 buffers and 0.23 ms, against 4.4 ms and 1,149 buffers without the index. Either way a single-portfolio first block stays under 1 ms on that machine, so the narrow sets that grants mode creates need no new index.

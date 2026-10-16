@@ -24,7 +24,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0018](0018-coverage-gates-and-ci-hardening.md) | Coverage gates, action pinning, and CI hardening | 0 Scaffold (follow-up) | Accepted |
 | [0019](0019-openapi-and-swagger-ui.md) | OpenAPI document + Swagger UI (off in production unless enabled) | cross-cutting (#93) | Accepted |
 | 0020 | Harness-neutral agent setup | cross-cutting | Proposed, not yet committed |
-| [0021](0021-per-user-portfolio-entitlements.md) | Per-user portfolio entitlements (model B: per-user grants) | cross-cutting (#122) | Accepted |
+| [0021](0021-per-user-portfolio-entitlements.md) | Per-user portfolio entitlements (model B: per-user grants) | cross-cutting (#122) | Accepted; implemented in #122 (mode defaults to `all`) |
 | [0022](0022-audit-retention-purge-on-write.md) | Audit retention: 90-day default (`AUDIT_RETENTION_DAYS`), purged after an audit write and on an idle timer (measured; timer added by #193) | 2 Auth and limits follow-up (#114) | Accepted |
 | [0023](0023-per-area-ci-jobs.md) | CI runs only the jobs a change touches (base-sourced per-area classifier, measured) | [workflows] follow-up (#169) | Proposed |
 | [0024](0024-github-pages-frontend-bearer-auth.md) | GitHub Pages front end + Identity bearer tokens, CORS to the Render API (vs custom-domain cookie, vs `SameSite=None` cookie; measured) | cross-cutting (#349) | Accepted (Leo, 2026-10-11); amended 2026-10-15 (#353), 2026-10-16 (#354, proposed) |
