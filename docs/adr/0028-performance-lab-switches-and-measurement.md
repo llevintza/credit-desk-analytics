@@ -19,7 +19,7 @@ Four things on `main` stood in the way:
 
 **How the toggles reach the server**
 
-1. **Request headers on the real endpoints (chosen).** `X-Lab-Cache: off` and `X-Lab-Encoding: br|gzip|identity` on `POST /api/positions/query` and `GET /api/insights/{source}`. The payload format is plain content negotiation: `Accept: application/vnd.desk.rows+json` asks for row objects, next to the existing `application/x-msgpack`. The Lab measures the same handler, cache, serializer and compression the pages use.
+1. **Request headers on the real endpoints (chosen).** `X-Lab-Cache: off` and `X-Lab-Encoding: br|gzip|identity` on `POST /api/positions/query` and `GET /api/insights/{source}`, the two the Lab runs. The cache switch lives in the shared cache-first read (`CachedResponse`), so it covers every cached endpoint, including `GET /api/funds/{fundId}/performance`, `GET /api/deals` and `GET /api/deals/{dealId}` (`An_admin_can_switch_the_fund_and_deal_caches_off`). The payload format is plain content negotiation: `Accept: application/vnd.desk.rows+json` asks for row objects, next to the existing `application/x-msgpack`. The Lab measures the same handler, cache, serializer and compression the pages use.
 2. **Separate `/api/lab/*` endpoints.** These would duplicate the query path, and each new `/api` path needs an entitlement classification (ADR-0021 R4) and OpenAPI pinning. Worse, the Lab would no longer measure what the pages run.
 3. **Query parameters (`?cache=off`).** These would work, but they mix measurement knobs into the resource URL. They also look like part of the query a cache key should honour, which they must not be.
 
