@@ -17,9 +17,21 @@ public sealed class PositionsCache : IDisposable
 {
     public const string SizeConfigKey = "POSITIONS_CACHE_MB";
 
+    /// <summary>
+    /// The default limit. Full, under k6 load, the 512 MiB instance peaked at 338 MiB (ADR-0014); a demo session
+    /// stores about 1.2 MB, so it holds dozens of sessions' first views until the batch.
+    /// </summary>
+    public const int DefaultMb = 64;
+
+    /// <summary>
+    /// The most the setting may ask for: at 96 MB the same load peaked at 389 MiB (76% of 512), at 128 MB at 422 MiB
+    /// (82%), too close to the instance limit to leave room for exports and the insights fan-out (ADR-0014).
+    /// </summary>
+    public const int MaxMb = 96;
+
     public PositionsCache(IConfiguration config, TimeProvider time)
     {
-        var mb = int.TryParse(config[SizeConfigKey], out var v) && v > 0 ? v : 64;
+        var mb = Math.Min(int.TryParse(config[SizeConfigKey], out var v) && v > 0 ? v : DefaultMb, MaxMb);
         Cache = new MemoryCache(new MemoryCacheOptions { SizeLimit = mb * 1024L * 1024L, Clock = new Clock(time) });
         SizeLimitBytes = mb * 1024L * 1024L;
     }

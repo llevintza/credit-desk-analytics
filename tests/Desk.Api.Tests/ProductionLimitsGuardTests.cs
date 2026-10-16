@@ -13,9 +13,9 @@ namespace Desk.Api.Tests;
 /// </summary>
 public sealed partial class ProductionLimitsGuardTests
 {
-    /// <summary>README §7.2. Changing a default is a deliberate edit here too.</summary>
+    /// <summary>README §7.2. Changing a default is a deliberate edit here too (burst 20 → 60: ADR-0014, #67).</summary>
     private static readonly LimitsOptions Defaults = new(
-        PerUserPerMinute: 60, PerUserBurst: 20, LoginPerIpPerMinute: 5, GlobalConcurrency: 8, GlobalQueue: 32,
+        PerUserPerMinute: 60, PerUserBurst: 60, LoginPerIpPerMinute: 5, GlobalConcurrency: 8, GlobalQueue: 32,
         PerUserConcurrency: 1, PerUserQueue: 8, InsightsConcurrency: 5, InsightsQueue: 15, ExportSlots: 2,
         ExportTimeout: TimeSpan.FromSeconds(60), ExportMaxRows: PositionsEndpoints.MaxExportRows);
 

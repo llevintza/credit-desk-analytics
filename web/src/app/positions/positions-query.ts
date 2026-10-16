@@ -5,7 +5,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { BehaviorSubject, Subject, catchError, debounceTime, distinctUntilChanged, filter, finalize, mergeMap, of, retry, switchMap, tap, throwError, timer } from 'rxjs';
 import { GridBlock, GridRequest, RequestInfo, SortSpec } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
-import { toRows } from '../data-access/to-rows';
+import { Row, toRows } from '../data-access/to-rows';
 
 /** Everything that defines the rows the grid shows, apart from paging (README §6 P1). */
 export interface PositionsView {
@@ -15,6 +15,8 @@ export interface PositionsView {
   quickFilter: string;
   sortModel: SortSpec[];
   filterModel: Record<string, unknown>;
+  /** The intraday overlay is on (README §6 P6): every block also carries `bond_id`, the key marks arrive by. */
+  overlay?: boolean;
 }
 
 interface BlockRequest { view: PositionsView; params: Pick<IGetRowsParams, 'startRow' | 'endRow' | 'successCallback' | 'failCallback'>; }
@@ -57,6 +59,8 @@ export class PositionsQuery {
 
   /** Set by the page: purge the grid's block cache so it asks again for the new view. */
   onViewChanged: () => void = () => undefined;
+  /** Set by the page: a block's rows on their way to the grid (the intraday overlay puts its marks on them). */
+  decorate: (rows: Row[]) => Row[] = (rows) => rows;
 
   constructor() {
     this.view$.pipe(
@@ -110,7 +114,7 @@ export class PositionsQuery {
       ...(view.asOf ? { asOf: view.asOf } : {}),
       ...(view.portfolioIds.length ? { portfolioIds: view.portfolioIds } : {}),
       startRow, endRow,
-      columns: view.columns,
+      columns: view.overlay && !view.columns.includes('bond_id') ? [...view.columns, 'bond_id'] : view.columns,
       ...(view.sortModel.length ? { sortModel: view.sortModel } : {}),
       ...(Object.keys(view.filterModel).length ? { filterModel: view.filterModel } : {}),
       ...(view.quickFilter ? { quickFilter: view.quickFilter } : {}),
@@ -119,7 +123,7 @@ export class PositionsQuery {
 
   /** The current view without paging: what the CSV export streams, in the given (on-screen) column order. */
   exportRequest(columns: string[] = this.view.columns): Omit<GridRequest, 'startRow' | 'endRow'> {
-    const request: Partial<GridRequest> = this.request({ ...this.view, columns }, 0, 0);
+    const request: Partial<GridRequest> = this.request({ ...this.view, columns, overlay: false }, 0, 0);
     delete request.startRow;
     delete request.endRow;
     return request as Omit<GridRequest, 'startRow' | 'endRow'>;
@@ -141,7 +145,7 @@ export class PositionsQuery {
         this.lastBlock.set(block);
         this.lastInfo.set(info);
         this.completed.update((n) => n + 1);
-        params.successCallback(toRows(block), block.rowCount);
+        params.successCallback(this.decorate(toRows(block)), block.rowCount);
       }),
       catchError(() => {
         // One failed block shows an error tile; the rest of the page keeps working (README §9.4).

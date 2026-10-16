@@ -87,6 +87,21 @@ describe('PositionsQuery', () => {
     }
   });
 
+  it('with the overlay on, every block also asks for bond_id and its rows pass through decorate; the export never does', () => {
+    query.update({ columns: ['price'], overlay: true });
+    query.decorate = (rows) => rows.map((r) => ({ ...r, price: 101 }));
+    const { p, success } = params();
+    query.datasource.getRows(p);
+    const req = http.expectOne('/api/positions/query');
+    expect(req.request.body.columns).toEqual(['price', 'bond_id']);
+    req.flush({ ...block(), columns: ['position_id', 'price'] });
+    expect(success).toHaveBeenCalledWith([{ position_id: 1, price: 101 }, { position_id: 2, price: 101 }], 2);
+    expect(query.exportRequest().columns).toEqual(['price']);
+
+    query.update({ columns: ['bond_id', 'price'] }); // already shown: not asked for twice
+    expect(query.request(query.view, 0, 1).columns).toEqual(['bond_id', 'price']);
+  });
+
   it('only a change to the set of columns is a new view', () => {
     const purges = vi.fn();
     query.onViewChanged = purges;

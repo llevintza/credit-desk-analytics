@@ -12,6 +12,8 @@ using Desk.Api.Insights;
 using Desk.Api.Lab;
 using Desk.Data.Insights;
 using Desk.Api.Limits;
+using Desk.Api.Marks;
+using Desk.Data.Marks;
 using Desk.Api.Positions;
 using Desk.Data.Grid;
 using Desk.Data;
@@ -32,9 +34,11 @@ builder.Services.AddDeskData(builder.Configuration);
 builder.Services.AddDeskAuth();
 builder.Services.AddDeskCors(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<DemoAccounts>();
+// A year, not the 30-day default (#66); UseHsts below sends it outside Development, over https only.
+builder.Services.AddHsts(o => o.MaxAge = SecurityHeaders.HstsMaxAge);
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
-builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
+builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration), MarksOptions.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddSingleton<DbHealthProbe>();
@@ -43,6 +47,8 @@ builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<FundRepository>();
 builder.Services.AddSingleton<DealRepository>();
+builder.Services.AddSingleton<MarkRepository>();
+builder.Services.AddSingleton<MarkUniverses>();
 builder.Services.AddSingleton<UsageRepository>();
 builder.Services.AddSingleton(InsightsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<InsightsRepository>();
@@ -53,6 +59,7 @@ builder.Services.AddSingleton<MetaRepository>();
 builder.Services.AddSingleton<PresetRepository>();
 builder.Services.AddSingleton<MetaCache>();
 builder.Services.AddSingleton<PositionsCache>();
+builder.Services.AddSingleton<PresetListCache>();
 // ADR-0021: ENTITLEMENTS_MODE=all (default) | grants. An unknown value throws here, so the app never starts with it.
 builder.Services.AddSingleton(EntitlementsMode.Create(builder.Configuration));
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, DeskJsonContext.Default));
@@ -122,6 +129,7 @@ api.MapPositionsEndpoints();
 api.MapFundEndpoints();
 api.MapInsightsEndpoints();
 api.MapDealEndpoints();
+api.MapMarksEndpoints();
 api.MapAdminEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 

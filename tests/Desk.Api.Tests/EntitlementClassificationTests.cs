@@ -28,6 +28,8 @@ public sealed partial class EntitlementClassificationTests(PostgresApiFactory ap
         ["/api/insights/{source}"] = "aggregates of positions; portfolio_id = ANY(@portfolios), set in the cache key and ETag",
         ["/api/deals"] = "deal holdings; portfolio_id = ANY(@portfolios) (ADR-0021 amendment 2026-10-15)",
         ["/api/deals/{dealId}"] = "deal detail positions; portfolio_id = ANY(@portfolios) (ADR-0021 amendment 2026-10-15)",
+        ["/api/marks/stream"] = "intraday marks for the bonds the caller's portfolios hold; portfolio_id = ANY(@portfolios) in the universe read (ADR-0015)",
+        ["/api/marks/totals"] = "overlay totals of positions; the GridSqlBuilder predicate and the scoped universe (ADR-0015)",
     };
 
     /// <summary>No portfolio-owned data at all. Adding an entry after #122 needs an ADR-0021 amendment.</summary>
