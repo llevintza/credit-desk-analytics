@@ -98,6 +98,7 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("          RATE_LIMIT_PER_USER_BURST: '100000'")] // workflow env
     [InlineData("      - key: EXPORT_TIMEOUT_SECONDS\n        value: \"600\"")]
     [InlineData("EXPORT_GLOBAL_SLOTS=3")]
+    [InlineData("RATE_LIMIT_PER_USER_PER_MIN=6000 # temporary")] // a comment doesn't hide a raised value
     [InlineData("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE=16")]
     public void A_seeded_regression_is_caught(string text)
     {
@@ -110,6 +111,8 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("      - key: RATE_LIMIT_PER_USER_PER_MIN\n        sync: false\n      - key: OTHER\n        value: \"9999\"")] // value set outside git
     [InlineData("# raise RATE_LIMIT_PER_USER_PER_MIN locally, never here")]
     [InlineData("EXPORT_TIMEOUT_SECONDS=0.5")]
+    [InlineData("RATE_LIMIT_PER_USER_PER_MIN=60 # was 100")] // a trailing comment isn't a value
+    [InlineData("      - key: RATE_LIMIT_PER_USER_PER_MIN\n        value: \"60\" # e2e uses 6000")]
     public void Default_or_tighter_values_pass(string text)
     {
         Assert.Empty(RaisedLimits(text));
@@ -133,7 +136,9 @@ public sealed partial class ProductionLimitsGuardTests
             .Where(f => !f.Split(Path.DirectorySeparatorChar).Any(d => d is "bin" or "obj"));
         var rootCompose = Directory.EnumerateFiles(RepoRoot, "*.y*ml")
             .Where(f => Path.GetFileName(f) is var n && (n.StartsWith("docker-compose", StringComparison.Ordinal) || n.StartsWith("compose", StringComparison.Ordinal)));
-        var deploy = Directory.EnumerateFiles(Path.Combine(RepoRoot, "deploy"), "*", SearchOption.AllDirectories)
+        var deployDir = Path.Combine(RepoRoot, "deploy");
+        Assert.True(Directory.Exists(deployDir), $"{deployDir} is missing: update the production paths this guard scans.");
+        var deploy = Directory.EnumerateFiles(deployDir, "*", SearchOption.AllDirectories)
             .Where(f => !f.EndsWith(".md", StringComparison.Ordinal));
         return appsettings.Concat(rootCompose).Concat(deploy).Concat(
         [
@@ -144,14 +149,13 @@ public sealed partial class ProductionLimitsGuardTests
     }
 
     /// <summary>Each limit key in <paramref name="text"/> whose value, on its line or on a render.yaml
-    /// <c>value:</c> line right after it, is above the default. A key with no value in git passes.</summary>
+    /// <c>value:</c> line right after it, is above the default. A key with no value in git passes; YAML, shell and
+    /// Dockerfile comments (<c>#</c> at the start or after a space) are ignored.</summary>
     private static IEnumerable<string> RaisedLimits(string text)
     {
-        var lines = text.ReplaceLineEndings("\n").Split('\n');
+        var lines = text.ReplaceLineEndings("\n").Split('\n').Select(l => Comment().Replace(l, "")).ToArray();
         for (var i = 0; i < lines.Length; i++)
         {
-            if (lines[i].TrimStart().StartsWith('#'))
-                continue;
             foreach (var (key, ceiling) in Ceilings)
             {
                 var at = Key(key).Match(lines[i]);
@@ -168,6 +172,9 @@ public sealed partial class ProductionLimitsGuardTests
     }
 
     private static Regex Key(string key) => new($@"(?<![A-Z_]){key}(?![A-Z_])", RegexOptions.CultureInvariant);
+
+    [GeneratedRegex(@"(^|\s)#.*$", RegexOptions.CultureInvariant)]
+    private static partial Regex Comment();
 
     [GeneratedRegex(@"^\s*value:\s*(.*)$", RegexOptions.CultureInvariant)]
     private static partial Regex RenderValue();
