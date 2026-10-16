@@ -18,7 +18,7 @@ namespace Desk.Data.App.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("app")
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -118,6 +118,32 @@ namespace Desk.Data.App.Migrations
                         .IsUnique();
 
                     b.ToTable("column_catalog", "app");
+                });
+
+            modelBuilder.Entity("Desk.Data.App.PortfolioGrant", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer")
+                        .HasColumnName("portfolio_id");
+
+                    b.Property<DateTimeOffset>("GrantedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("granted_at");
+
+                    b.Property<string>("GrantedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("granted_by");
+
+                    b.HasKey("UserId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.ToTable("portfolio_grant", "app");
                 });
 
             modelBuilder.Entity("Desk.Data.App.Preset", b =>
@@ -477,6 +503,15 @@ namespace Desk.Data.App.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("user_tokens", "auth");
+                });
+
+            modelBuilder.Entity("Desk.Data.App.PortfolioGrant", b =>
+                {
+                    b.HasOne("Desk.Data.Auth.DeskUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Desk.Data.App.Preset", b =>
