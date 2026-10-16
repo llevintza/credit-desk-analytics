@@ -58,9 +58,10 @@ public sealed class PipelineUnitTests
     private static readonly DateTimeOffset Now = new(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
 
     private static ClaimsPrincipal Session(string? expiresAt = "2026-11-01T00:00:00.0000000+00:00",
-        string? authTime = "2026-10-07T11:00:00.0000000+00:00", string? sid = "abc")
+        string? authTime = "2026-10-07T11:00:00.0000000+00:00", string? sid = "abc", string? accountId = "0b8f2c4e-1d3a-4f5b-9c6d-7e8f9a0b1c2d")
     {
         var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "u@example.com")], "test");
+        if (accountId is not null) identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, accountId));
         if (expiresAt is not null) identity.AddClaim(new Claim(DeskClaimsFactory.ExpiresAtClaim, expiresAt));
         if (authTime is not null) identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, authTime));
         if (sid is not null) identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, sid));
@@ -83,6 +84,38 @@ public sealed class PipelineUnitTests
     public void A_token_without_a_live_expiry_sign_in_time_or_session_id_is_not_live(string? expiresAt, string? authTime, string? sid)
     {
         Assert.False(SessionLimits.IsLive(Session(expiresAt, authTime, sid), Now, new SessionRevocations()));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void A_token_without_an_account_id_is_not_live(string? accountId)
+    {
+        // #399 (from the #396 review): defence in depth behind the limiter's #361 refusal; also covers refresh.
+        Assert.False(SessionLimits.IsLive(Session(accountId: accountId), Now, new SessionRevocations()));
+    }
+
+    [Fact]
+    public async Task Session_limits_refuse_a_token_without_an_account_id_before_any_limiter()
+    {
+        var services = new ServiceCollection().AddLogging().AddProblemDetails().BuildServiceProvider();
+        var reached = false;
+        var limits = new SessionLimits(_ => { reached = true; return Task.CompletedTask; }, new SessionRevocations(),
+            new Microsoft.Extensions.Time.Testing.FakeTimeProvider(Now));
+
+        var http = new DefaultHttpContext { User = Session(accountId: null), RequestServices = services };
+        http.Response.Body = new MemoryStream();
+        await limits.InvokeAsync(http);
+        Assert.False(reached); // the limiter never sees it, so it is never keyed on the client address (#361)
+        Assert.Equal(StatusCodes.Status401Unauthorized, http.Response.StatusCode);
+        Assert.False(http.Response.Headers.ContainsKey("Retry-After"));
+        http.Response.Body.Position = 0;
+        Assert.Contains(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, await new StreamReader(http.Response.Body).ReadToEndAsync(TestContext.Current.CancellationToken));
+
+        var live = new DefaultHttpContext { User = Session(), RequestServices = services };
+        await limits.InvokeAsync(live);
+        Assert.True(reached);
+        Assert.True(live.User.IsSignedIn());
     }
 
     [Fact]
@@ -268,6 +301,27 @@ public sealed class PipelineUnitTests
         var anonymous = new DefaultHttpContext();
         anonymous.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("203.0.113.7");
         Assert.Equal("ip:203.0.113.7", RateLimiting.PartitionKey(anonymous, clients));
+    }
+
+    [Fact]
+    public async Task The_limiter_still_refuses_a_principal_without_an_account_id_by_itself()
+    {
+        // SessionLimits answers such a token first (#399); the #361 refusal stays behind it as its own defence.
+        var services = new ServiceCollection().AddLogging().AddProblemDetails()
+            .AddDeskRateLimiting(LimitsOptions.From(new ConfigurationBuilder().Build()), new ClientAddress(false))
+            .BuildServiceProvider();
+        var options = services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>>().Value;
+        var http = new DefaultHttpContext { User = SignedIn(), RequestServices = services };
+        http.Request.Path = "/api/me";
+        http.Response.Body = new MemoryStream();
+
+        using var lease = await options.GlobalLimiter!.AcquireAsync(http, 1, TestContext.Current.CancellationToken);
+        Assert.False(lease.IsAcquired);
+        await options.OnRejected!(new Microsoft.AspNetCore.RateLimiting.OnRejectedContext { HttpContext = http, Lease = lease }, TestContext.Current.CancellationToken);
+        Assert.Equal(StatusCodes.Status401Unauthorized, http.Response.StatusCode);
+        Assert.False(http.Response.Headers.ContainsKey("Retry-After"));
+        http.Response.Body.Position = 0;
+        Assert.Contains(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, await new StreamReader(http.Response.Body).ReadToEndAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

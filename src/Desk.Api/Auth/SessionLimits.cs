@@ -14,14 +14,22 @@ public sealed class SessionLimits(RequestDelegate next, SessionRevocations revok
 {
     public Task InvokeAsync(HttpContext http)
     {
+        // A token without an account id is refused here, before any limiter (#399). Dropped to anonymous instead, it
+        // would be keyed on the client address and spend the anonymous callers' buckets there (#361).
+        if (http.User.HasNoAccountId())
+            return PrincipalExtensions.NoAccountId().ExecuteAsync(http);
         if (http.User.IsSignedIn() && !IsLive(http.User, time.GetUtcNow(), revoked))
             http.User = new ClaimsPrincipal(new ClaimsIdentity());
         return next(http);
     }
 
-    /// <summary>True while the account hasn't expired, the sign-in is under 24 h old, and it hasn't been logged out.</summary>
+    /// <summary>
+    /// True while the token names its account, the account hasn't expired, the sign-in is under 24 h old, and it
+    /// hasn't been logged out. Also checked at refresh.
+    /// </summary>
     public static bool IsLive(ClaimsPrincipal user, DateTimeOffset now, SessionRevocations revoked) =>
-        DeskClaimsFactory.ReadExpiry(user) is { } expiry && now < expiry
+        user.TryGetAccountId(out _)
+        && DeskClaimsFactory.ReadExpiry(user) is { } expiry && now < expiry
         && ReadAuthTime(user) is { } authTime && now - authTime < AuthSetup.AbsoluteExpiry
         && user.FindFirstValue(AuthSetup.SessionIdClaim) is { Length: > 0 } sid && !revoked.IsRevoked(sid, now);
 
