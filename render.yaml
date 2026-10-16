@@ -18,17 +18,29 @@ services:
         sync: false
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
-      # Enables X-Forwarded-Proto handling and the ClientAddress resolver (ADR-0005, #116). The client IP comes from
-      # CF-Connecting-IP via Render's balancer, not from this middleware.
+      # Turns on the host's X-Forwarded-Proto handling (X-Forwarded-For is stripped, so the remote address stays the
+      # socket peer) and switches the always-on ClientAddress resolver into behind-proxy mode (ADR-0005, #116, #165).
+      # Behind the proxy, headers count only from a private-address peer (Render's network) or one in
+      # CLIENT_ADDRESS_TRUSTED_HOPS. Trailing private or trusted X-Forwarded-For hops are skipped, but a Cloudflare
+      # hop always ends the skip. If the hop Render saw is a Cloudflare range, the client is CF-Connecting-IP (without
+      # it, that edge: one shared key); otherwise the client is that hop. Unset, the socket peer is the client.
       - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED
         value: "true"
+      # CLIENT_ADDRESS_TRUSTED_HOPS (not listed, so it defaults to empty and nothing extra is trusted): public proxy
+      # CIDRs between Cloudflare and the app, comma or space separated; unparsable entries are dropped. A peer in
+      # them is believed and a trailing hop in them is skipped, to fix a shared key the diagnostics show (#165)
+      # without a release. Set it in the dashboard only; a sync keeps dashboard vars this file omits. Never list a
+      # range clients connect from: nothing rejects an over-wide range yet.
+      # A Blueprint sync writes every value: below back over the dashboard, MAINTENANCE_MODE included, so a
+      # dashboard-only flip lasts until the next sync. Change the value here to keep it.
       - key: MAINTENANCE_MODE
         value: "false"
       # The GitHub Pages front end calls this API cross-origin with bearer tokens (ADR-0024). Exact origins only,
       # comma or space separated; unset allows none. The same-origin SPA served from this service doesn't need it.
       - key: CORS_ALLOWED_ORIGINS
         value: https://llevintza.github.io
-      # README §7.2 limits; the code defaults match, listed here so they can be tuned in the dashboard.
+      # README §7.2 limits; the code defaults match. A dashboard edit is overwritten by the next Blueprint sync (as
+      # are all value: keys here, MAINTENANCE_MODE included), so tune them in this file.
       - key: RATE_LIMIT_PER_USER_PER_MIN
         value: "60"
       - key: RATE_LIMIT_GLOBAL_CONCURRENCY

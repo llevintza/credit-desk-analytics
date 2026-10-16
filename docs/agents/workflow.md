@@ -8,13 +8,13 @@ These rules apply to every agent session in this repo, in every harness (Claude 
 
 ## Pushing and history
 
-The rulings (Helms, 2026-10-07; PR #107, merged to `main` as `79ceff6f`), word for word. Issue #108 is the #107 follow-up for Code Reviewer's fixes; this text follows it once it lands.
+The rulings (Helms, 2026-10-07; PR #107, merged to `main` as `79ceff6f`) with Code Reviewer's R107-3 fix from #108 applied, word for word as in root `AGENTS.md`.
 
-> The CI `secrets` job (gitleaks, `.gitleaks.toml`) scans the **full history** of every PR. Agents **never force-push**, including `--force-with-lease`. If gitleaks flags an agent's **own unmerged** commit, the agent **stops and reports to Tech Coordinator**. Rewrite (lease-protected, feature branch only) only when Tech Coordinator or Helms authorizes it. `main` is **never** rewritten.
+> The CI `secrets` job (gitleaks, `.gitleaks.toml`) scans the **full history** of every PR, so a follow-up commit cannot clear a finding and the PR stays blocked until the history is clean. Agents **never force-push**, including `--force-with-lease`. If gitleaks flags an agent's **own unmerged** commit, the agent **stops and reports to Tech Coordinator**. A lease-protected rewrite of that feature branch happens only when Tech Coordinator or Helms authorizes it, and Leo runs it in a plain terminal. `main` is **never** rewritten.
 
 | Rule | Source |
 |---|---|
-| Never push to `main`. `main` changes only by merging a reviewed PR. | AGENTS item 2 |
+| Never push to `main`, and never force-push any branch. `main` changes only by merging a reviewed PR and is never rewritten. | AGENTS item 2 (R107-4, #108) |
 | Push your branch as its own command: `git push -u origin <branch>`. Name the branch; don't push `HEAD`, `@` or a bare `git push` after a branch switch in the same command. | ADR §6, Consequences (CR6 N6); guard over-blocks B18, B19 |
 | **Never force-push, in any form:** `--force`, `-f` (also in bundles like `-uf`), `+<ref>`, `--force-with-lease`, `--force-if-includes`, and their abbreviations. Both deny lists and the guard block every form (G9). | #107; **rev 10** (G9, N10 and N64 must-block) |
 | **`main` is never rewritten.** | #107; DEP-R1 "block force pushes" (PENDING) |
