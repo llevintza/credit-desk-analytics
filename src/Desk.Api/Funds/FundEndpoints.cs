@@ -49,7 +49,7 @@ public static class FundEndpoints
         // its portfolios; otherwise it doesn't exist (404, no ETag), which is checked before any cache or 304 (ADR-0011).
         var meta = await metaCache.GetAsync(ct);
         var allowed = entitlements.For(http.User, meta);
-        var portfolios = meta.Portfolios.Where(p => p.FundId == fundId).ToList();
+        var portfolios = meta.UnscopedPortfolios.Where(p => p.FundId == fundId).ToList();
         if (portfolios.Count == 0 || !portfolios.All(p => allowed.Contains(p.PortfolioId)))
             return NotFound(fundId);
 

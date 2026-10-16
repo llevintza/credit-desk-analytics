@@ -130,11 +130,11 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         }
 
         var atTheEnd = await RunAsync(null, new FakeTimeProvider(at), "list");
-        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\slocked\r?$", Line(atTheEnd.Out, ends.Email!));   // LockoutEnd == now
-        Assert.Matches($@"{Regex.Escape(disabledLockout.Email!)}.*\sactive\r?$", Line(atTheEnd.Out, disabledLockout.Email!)); // lockout off
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\slocked\s", Line(atTheEnd.Out, ends.Email!));   // LockoutEnd == now
+        Assert.Matches($@"{Regex.Escape(disabledLockout.Email!)}.*\sactive\s", Line(atTheEnd.Out, disabledLockout.Email!)); // lockout off
 
         var justAfter = await RunAsync(null, new FakeTimeProvider(at.AddTicks(1)), "list");
-        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\sactive\r?$", Line(justAfter.Out, ends.Email!)); // LockoutEnd == now - 1 tick
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\sactive\s", Line(justAfter.Out, ends.Email!)); // LockoutEnd == now - 1 tick
 
         static string Line(string output, string email) => output.Split('\n').Single(l => l.StartsWith(email, StringComparison.Ordinal));
     }
@@ -149,6 +149,83 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         var run = await RunAsync("disable", "--email", email);
         Assert.Equal(0, run.Exit);
         Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostLoginAsync(api.NewClient(), email, password)).StatusCode);
+    }
+
+    private async Task<(string? Stamp, int[] Grants, string?[] GrantedBy)> GrantStateAsync(string email)
+    {
+        await using var db = api.NewContext();
+        var user = await db.Users.AsNoTracking().SingleAsync(u => u.Email == email, Ct);
+        var grants = await db.PortfolioGrants.AsNoTracking().Where(g => g.UserId == user.Id).OrderBy(g => g.PortfolioId).ToListAsync(Ct);
+        return (user.SecurityStamp, [.. grants.Select(g => g.PortfolioId)], [.. grants.Select(g => g.GrantedBy)]);
+    }
+
+    [Fact]
+    public async Task Grant_and_revoke_change_the_grants_without_rotating_the_security_stamp()
+    {
+        // ADR-0021: a grant or revoke applies at the next token refresh; it must never sign the user out.
+        var email = Email();
+        Assert.Equal(0, (await RunAsync("add", "--email", email, "--role", "viewer", "--expires", "2027-01-01")).Exit);
+        var (stamp, _, _) = await GrantStateAsync(email);
+
+        var granted = await RunAsync("grant", "--email", email, "--portfolio", "3,1");
+        Assert.Equal(0, granted.Exit);
+        Assert.Contains("Granted portfolios 1, 3", granted.Out);
+        var afterGrant = await GrantStateAsync(email);
+        Assert.Equal(stamp, afterGrant.Stamp);
+        Assert.Equal([1, 3], afterGrant.Grants);
+        Assert.All(afterGrant.GrantedBy, by => Assert.Equal("Desk.UserAdmin", by));
+
+        // Granting again is a no-op for the ids already there.
+        var again = await RunAsync("grant", "--email", email, "--portfolio", "1,2");
+        Assert.Equal(0, again.Exit);
+        Assert.Contains("Granted portfolios 2", again.Out);
+        Assert.Contains("already had 1", again.Out);
+        Assert.Equal(new[] { 1, 2, 3 }, (await GrantStateAsync(email)).Grants);
+
+        var nothingNew = await RunAsync("grant", "--email", email, "--portfolio", "2");
+        Assert.Equal(0, nothingNew.Exit);
+        Assert.Contains("No new grants", nothingNew.Out);
+
+        var revoked = await RunAsync("revoke", "--email", email, "--portfolio", "1,3,9");
+        Assert.Equal(0, revoked.Exit);
+        Assert.Contains("Revoked portfolios 1, 3", revoked.Out);
+        var afterRevoke = await GrantStateAsync(email);
+        Assert.Equal(stamp, afterRevoke.Stamp);
+        Assert.Equal([2], afterRevoke.Grants);
+
+        var nothingToRevoke = await RunAsync("revoke", "--email", email, "--portfolio", "7");
+        Assert.Equal(0, nothingToRevoke.Exit);
+        Assert.Contains("had none of those grants", nothingToRevoke.Out);
+        Assert.Equal(new[] { 2 }, (await GrantStateAsync(email)).Grants);
+    }
+
+    [Fact]
+    public async Task List_shows_each_account_s_grants()
+    {
+        var viewer = Email();
+        var none = Email();
+        var admin = Email();
+        await RunAsync("add", "--email", viewer, "--role", "viewer", "--expires", "2027-03-31");
+        await RunAsync("add", "--email", none, "--role", "viewer", "--expires", "2027-03-31");
+        await RunAsync("add", "--email", admin, "--role", "admin", "--expires", "2027-03-31");
+        await RunAsync("grant", "--email", viewer, "--portfolio", "4,2");
+
+        var run = await RunAsync("list");
+        Assert.Equal(0, run.Exit);
+        Assert.Contains("GRANTS", run.Out);
+        Assert.Matches($@"{Regex.Escape(viewer)}\s+viewer\s+2027-03-31\s+active\s+2,4\r?$", run.Out.ReplaceLineEndings("\n").Split('\n').Single(l => l.Contains(viewer)));
+        Assert.Matches($@"{Regex.Escape(none)}\s+viewer\s+2027-03-31\s+active\s+none$", run.Out.ReplaceLineEndings("\n").Split('\n').Single(l => l.Contains(none)));
+        Assert.Matches($@"{Regex.Escape(admin)}\s+admin\s+2027-03-31\s+active\s+all \(admin\)$", run.Out.ReplaceLineEndings("\n").Split('\n').Single(l => l.Contains(admin)));
+    }
+
+    [Theory]
+    [InlineData("grant")]
+    [InlineData("revoke")]
+    public async Task Grant_or_revoke_for_an_unknown_email_is_exit_1(string command)
+    {
+        var run = await RunAsync(command, "--email", "missing@example.com", "--portfolio", "1");
+        Assert.Equal(1, run.Exit);
+        Assert.Contains("No account", run.Err);
     }
 
     [Fact]
@@ -280,6 +357,13 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
     [InlineData("add", "--email", "a@example.com", "--role", "viewer", "--expires", "next week")]
     [InlineData("add", "--role", "viewer", "--expires", "2027-01-01")]
     [InlineData("list", "--verbose", "yes")]
+    [InlineData("grant", "--email", "a@example.com")]
+    [InlineData("grant", "--email", "a@example.com", "--portfolio", "")]
+    [InlineData("grant", "--email", "a@example.com", "--portfolio", "abc")]
+    [InlineData("grant", "--email", "a@example.com", "--portfolio", "0")]
+    [InlineData("revoke", "--email", "a@example.com", "--portfolio", "1,-2")]
+    [InlineData("revoke", "--portfolio", "1")]
+    [InlineData("add", "--email", "a@example.com", "--role", "viewer", "--expires", "2027-01-01", "--portfolio", "1")]
     public async Task Bad_arguments_print_usage_and_exit_1(params string[] args)
     {
         var run = await RunAsync(args);

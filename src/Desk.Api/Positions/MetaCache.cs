@@ -13,7 +13,7 @@ public sealed record MetaSnapshot(
     GridQueryNormalizer? Normalizer,
     IReadOnlyList<DateOnly> AsOfDates,
     string DataVersion,
-    IReadOnlyList<PortfolioInfo> Portfolios,
+    IReadOnlyList<PortfolioInfo> UnscopedPortfolios,
     DateTimeOffset ExpiresAt,
     DateTimeOffset BatchEndsAt)
 {
