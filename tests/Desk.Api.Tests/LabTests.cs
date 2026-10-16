@@ -143,6 +143,22 @@ public sealed class LabTests(PostgresApiFactory api)
     }
 
     [Theory]
+    [InlineData("/api/funds/1/performance?range=ITD")]
+    [InlineData("/api/deals")]
+    public async Task An_admin_can_switch_the_fund_and_deal_caches_off(string url)
+    {
+        var (client, _, _) = await api.SignedInAsync(Roles.Admin);
+        // Warm the shared cache first: a bypassed run still reads the database rather than the stored bytes.
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(url, Ct)).StatusCode);
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add(LabSwitches.CacheHeader, "off");
+        var res = await client.SendAsync(req, Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("BYPASS", XCache(res));
+        Assert.Equal("HIT", XCache(await client.GetAsync(url, Ct)));
+    }
+
+    [Theory]
     [InlineData("identity", null)]
     [InlineData("gzip", "gzip")]
     [InlineData("br", "br")]
