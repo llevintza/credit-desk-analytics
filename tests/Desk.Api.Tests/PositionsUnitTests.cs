@@ -52,6 +52,23 @@ public sealed class PositionsUnitTests
     }
 
     [Fact]
+    public void Row_json_writes_every_kind_and_null_cell_for_cell_as_columnar()
+    {
+        var asOf = new DateOnly(2026, 10, 6);
+        var rows = JsonDocument.Parse(ColumnarSerializer.ToRowJson(Block(), asOf, DateTimeOffset.UnixEpoch)).RootElement;
+        var columnar = JsonDocument.Parse(ColumnarSerializer.ToJson(Block(), asOf, DateTimeOffset.UnixEpoch)).RootElement;
+        Assert.Equal(
+            """{"position_id":1,"loan_count":7,"market_value":1250000.25,"price":99.5,"watchlist_flag":true,"next_pay_date":"2026-11-25","deal_name":"CLO 2024-3"}""",
+            rows.GetProperty("rows")[0].GetRawText());
+        Assert.Equal(
+            """{"position_id":null,"loan_count":null,"market_value":null,"price":null,"watchlist_flag":null,"next_pay_date":null,"deal_name":null}""",
+            rows.GetProperty("rows")[1].GetRawText()); // NaN → null, like the columnar writer
+        foreach (var name in new[] { "rowCount", "summary", "asOf", "generatedAt" })
+            Assert.Equal(columnar.GetProperty(name).GetRawText(), rows.GetProperty(name).GetRawText());
+        Assert.StartsWith("""{"rows":[],"rowCount":0,""", System.Text.Encoding.UTF8.GetString(ColumnarSerializer.ToRowJson(new GridBlock([], 0, [], 0), asOf, DateTimeOffset.UnixEpoch)));
+    }
+
+    [Fact]
     public void MessagePack_writes_every_kind_and_nulls()
     {
         var bytes = ColumnarSerializer.ToMsgPack(Block(), new DateOnly(2026, 10, 6), DateTimeOffset.UnixEpoch);
@@ -208,9 +225,11 @@ public sealed class PositionsUnitTests
     public void Accept_negotiation_finds_messagepack_anywhere_in_the_header()
     {
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        Assert.False(PositionsEndpoints.WantsMsgPack(http.Request));
+        Assert.Equal(PositionsEndpoints.Representation.Json, PositionsEndpoints.Negotiate(http.Request));
         http.Request.Headers.Accept = "application/json, application/x-msgpack;q=0.9";
-        Assert.True(PositionsEndpoints.WantsMsgPack(http.Request));
+        Assert.Equal(PositionsEndpoints.Representation.MsgPack, PositionsEndpoints.Negotiate(http.Request));
+        http.Request.Headers.Accept = "application/vnd.desk.rows+json";
+        Assert.Equal(PositionsEndpoints.Representation.RowJson, PositionsEndpoints.Negotiate(http.Request));
     }
 
     [Fact]

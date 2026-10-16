@@ -9,11 +9,13 @@ using Desk.Api.Funds;
 using Desk.Data.Funds;
 using Desk.Api.Hardening;
 using Desk.Api.Insights;
+using Desk.Api.Lab;
 using Desk.Data.Insights;
 using Desk.Api.Limits;
 using Desk.Api.Positions;
 using Desk.Data.Grid;
 using Desk.Data;
+using Desk.Data.App;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Options;
 
@@ -30,6 +32,8 @@ builder.Services.AddDeskData(builder.Configuration);
 builder.Services.AddDeskAuth();
 builder.Services.AddDeskCors(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<DemoAccounts>();
+// A year, not the 30-day default (#66); UseHsts below sends it outside Development, over https only.
+builder.Services.AddHsts(o => o.MaxAge = SecurityHeaders.HstsMaxAge);
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
@@ -41,6 +45,7 @@ builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<FundRepository>();
 builder.Services.AddSingleton<DealRepository>();
+builder.Services.AddSingleton<UsageRepository>();
 builder.Services.AddSingleton(InsightsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<InsightsRepository>();
 // README §7.2 (#211): warns at start when the permits and the insights fan-out don't fit DB_MAX_POOL_SIZE.
@@ -69,6 +74,8 @@ builder.Services.AddResponseCompression(o =>
     o.EnableForHttps = true;
     o.Providers.Add<BrotliCompressionProvider>();
     o.Providers.Add<GzipCompressionProvider>();
+    // Every grid format, not only the default list's application/json (ADR-0028: MessagePack went uncompressed).
+    o.MimeTypes = [.. ResponseCompressionDefaults.MimeTypes, ColumnarSerializer.MsgPackContentType, ColumnarSerializer.RowJsonContentType];
 });
 builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
 builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
@@ -85,6 +92,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 app.UseDeskCors();
 app.UseMiddleware<MaintenanceMode>();
+// The Performance Lab's forced encoding (dev knobs only; ADR-0028) must rewrite Accept-Encoding before compression.
+app.UseLabEncoding();
 app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();

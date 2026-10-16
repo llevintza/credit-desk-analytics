@@ -14,6 +14,8 @@ public static class ColumnarSerializer
 {
     public const string JsonContentType = "application/json";
     public const string MsgPackContentType = "application/x-msgpack";
+    /// <summary>Row objects, ADR-0007's rejected option 1: the Performance Lab's baseline (README §6 P5), on request only.</summary>
+    public const string RowJsonContentType = "application/vnd.desk.rows+json";
 
     public static byte[] ToJson(GridBlock block, DateOnly asOf, DateTimeOffset generatedAt)
     {
@@ -34,19 +36,66 @@ public static class ColumnarSerializer
             }
             w.WriteEndArray();
 
-            w.WriteNumber("rowCount", block.RowCount);
-            w.WriteStartObject("summary");
-            foreach (var s in block.Summary)
-            {
-                w.WritePropertyName(s.Column.Name);
-                WriteJsonScalar(w, s.Value);
-            }
-            w.WriteEndObject();
-            w.WriteString("asOf", asOf.ToString("yyyy-MM-dd"));
-            w.WriteString("generatedAt", generatedAt);
-            w.WriteEndObject();
+            WriteJsonTail(w, block, asOf, generatedAt);
         }
         return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// The same block as row objects: <c>{ rows: [{ name: value, … }], rowCount, summary, asOf, generatedAt }</c>, every
+    /// row repeating every column name. The same values as <see cref="ToJson"/>, cell for cell.
+    /// </summary>
+    public static byte[] ToRowJson(GridBlock block, DateOnly asOf, DateTimeOffset generatedAt)
+    {
+        var buffer = new ArrayBufferWriter<byte>(64 * 1024);
+        using (var w = new Utf8JsonWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteStartArray("rows");
+            for (var r = 0; r < block.Rows; r++)
+            {
+                w.WriteStartObject();
+                foreach (var c in block.Columns)
+                {
+                    w.WritePropertyName(c.Def.Name);
+                    WriteJsonCell(w, c, r);
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            WriteJsonTail(w, block, asOf, generatedAt);
+        }
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>rowCount, summary, asOf and generatedAt, then the end of the document.</summary>
+    private static void WriteJsonTail(Utf8JsonWriter w, GridBlock block, DateOnly asOf, DateTimeOffset generatedAt)
+    {
+        w.WriteNumber("rowCount", block.RowCount);
+        w.WriteStartObject("summary");
+        foreach (var s in block.Summary)
+        {
+            w.WritePropertyName(s.Column.Name);
+            WriteJsonScalar(w, s.Value);
+        }
+        w.WriteEndObject();
+        w.WriteString("asOf", asOf.ToString("yyyy-MM-dd"));
+        w.WriteString("generatedAt", generatedAt);
+        w.WriteEndObject();
+    }
+
+    private static void WriteJsonCell(Utf8JsonWriter w, GridColumn column, int row)
+    {
+        switch (column)
+        {
+            case Int64Column c: if (c.Values[row] is { } l) w.WriteNumberValue(l); else w.WriteNullValue(); break;
+            case Int32Column c: if (c.Values[row] is { } i) w.WriteNumberValue(i); else w.WriteNullValue(); break;
+            case DecimalColumn c: if (c.Values[row] is { } m) w.WriteNumberValue(m); else w.WriteNullValue(); break;
+            case DoubleColumn c: WriteJsonDouble(w, c.Values[row]); break;
+            case BoolColumn c: if (c.Values[row] is { } b) w.WriteBooleanValue(b); else w.WriteNullValue(); break;
+            case DateColumn c: if (c.Values[row] is { } d) w.WriteStringValue(d.ToString("yyyy-MM-dd")); else w.WriteNullValue(); break;
+            case TextColumn c: if (c.Values[row] is { } t) w.WriteStringValue(t); else w.WriteNullValue(); break;
+        }
     }
 
     private static void WriteJsonColumn(Utf8JsonWriter w, GridColumn column)
