@@ -486,6 +486,17 @@ An SSE stream (`/api/marks/stream`) of simulated mark changes for a subset of bo
 - The client ignores events whose `seq` is ≤ the last applied one, so a reconnect or restart never applies stale data.
 - Changed cells flash, and totals refresh from the server periodically.
 
+How it's built (ADR-0015, #71/#72):
+- **Stream.** `GET /api/marks/stream` sends Server-Sent Events: `hello`, then a `mark` per changed bond (`bondId`, `seq`, `eventTs`, `price`, `spreadBp`; the SSE `id` is `seq`), then `bye`.
+  - The marks are simulated (`MarkSimulator`): a pure function of the bond and a 1 s tick, so `seq` (the tick of the bond's last change) only grows, on any instance and across restarts.
+  - On connect the stream sends each bond's current mark newer than `Last-Event-ID` (or `?lastEventId=`). A reconnect gets only what it missed.
+- **Scope.** The marked bonds are at most `MARKS_MAX_BONDS` (100) of the bonds the caller's portfolios hold on the latest as-of date (ADR-0021), cached until the batch.
+- **Auth.** The SPA reads the stream with `fetch` (`HttpClient`), not `EventSource`, so it sends the bearer token like any call (ADR-0024).
+- **Client.** The **Live marks** toggle (latest as-of only) adds `bond_id` to the block requests. It puts each new mark on its bond's loaded rows and flashes the `price` and `spread_bp` cells.
+- **Totals.** The pinned totals for those two columns come from `POST /api/marks/totals` every 30 s. The server computes them with the marks applied, once per 15 s window per view, and caches them.
+- **What it overlays.** Quotes (price, spread), not valuations: market value, P&L and risk stay at the overnight batch, and filters and sorts run on the overnight values.
+- **Free tier (§7.2).** The server ends each stream after at most 5 minutes. The client reconnects only while its tab is visible and its user was active in the last 5 minutes, otherwise it pauses until the next input. The stream reads the database only when it opens.
+
 ---
 
 ## 7. Security, accounts and resource protection
@@ -540,6 +551,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - per signed-in user concurrency: 1 request in flight, queue 8, then 429 (`RATE_LIMIT_PER_USER_CONCURRENCY` / `RATE_LIMIT_PER_USER_QUEUE`); exports are capped separately (below)
   - per signed-in user, insights source reads (`GET /api/insights/{source}`) in their own partition: 5 in flight, queue 15, then 429 (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY` / `RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`), so the P3 board's five sources load in parallel (ADR-0005, #357)
   - **global concurrency limiter** on DB-bound endpoints: 8 concurrent, queue 32, then 429 with `Retry-After`
+  - per signed-in user, intraday mark streams (`GET /api/marks/stream`, P6) in their own partition: `MARKS_STREAMS_PER_USER` (2) open at once, no queue, then 429. In the shared slot a stream counts against `MARKS_STREAMS_GLOBAL` (16) open streams instead of a database permit. Its one start-up read takes a database permit and returns it before the first event. Each stream lasts at most `MARKS_STREAM_SECONDS` (300) and costs one token (ADR-0015)
   - **permits vs the pool (#211):** the permits must fit the Npgsql pool, or the pool limits first and requests time out instead of getting a 429. Each permit holds one connection, except an insights read, which holds up to `INSIGHTS_PARALLELISM` (4), all of them together at most `INSIGHTS_MAX_CONNECTIONS` (10). The worst split of the 8 permits holds 15 connections; with 5 for background work (meta load, audit, DataProtection, `/health/db`) that is the default `DB_MAX_POOL_SIZE` of 20 exactly. At start the API logs a warning naming the four settings when `RATE_LIMIT_GLOBAL_CONCURRENCY`, `INSIGHTS_MAX_CONNECTIONS` or `INSIGHTS_PARALLELISM` is raised, or `DB_MAX_POOL_SIZE` lowered, past that (§13.1)
 - **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows (`EXPORT_MAX_ROWS` may lower it, never raise it; over the cap, see §8 `X-Export-Truncated`).
 - **Exports:** 1 at a time per user and `EXPORT_GLOBAL_SLOTS` (2) in total, without waiting: 429 with `Retry-After`. Deadline `EXPORT_TIMEOUT_SECONDS` (60) on the whole stream: 503 before any output; mid-stream the connection is aborted, so a truncated download fails.
@@ -575,6 +587,8 @@ The **website is public** (anyone can reach the login page). The **data is not**
   | GET | `/api/funds/{id}/performance` | P2 |
   | GET | `/api/insights/{source}` | P3 |
   | GET | `/api/deals`, `/api/deals/{id}` | P4 |
+  | GET | `/api/marks/stream` | P6 intraday marks (Server-Sent Events) |
+  | POST | `/api/marks/totals` | P6 overlay totals (price, spread with the marks applied) |
   | GET | `/api/admin/usage`, POST `/api/admin/cache/clear` | Admin |
   | GET | `/health`, `/health/db` | Probes |
 
@@ -1082,4 +1096,4 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 7 Deal Explorer | #363 | Merged (`09b8344`): `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | In progress: #241, the All-preset whole-book MISS p95 (stored weight column, parallel summary; ADR-0006 addendum): local 61–83 ms, hosted CI 155.5 ms (was ≈ 249), in review |
-| 10 Intraday overlay (stretch) | n/a | Not started |
+| 10 Intraday overlay (stretch) | n/a | In review: `phase-10/intraday-overlay` (#71, #72): SSE mark stream `/api/marks/stream` read with `fetch` and the bearer token, scoped and rate-limited in its own partition, at most 5 minutes per stream; stale marks dropped by `seq`; Live marks toggle on P1 with flashing cells and server overlay totals (ADR-0015, measured) |

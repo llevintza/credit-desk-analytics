@@ -18,7 +18,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0012](0012-insights-per-source-endpoints.md) | Insights: per-source endpoints + per-task connections vs 20 calls vs one call; plain-table tiles (measured) | 6 Insights Board | Accepted |
 | [0013](0013-lateral-vs-row-number.md) | "Any one bond per deal": LATERAL … LIMIT 1 vs ROW_NUMBER() = 1 vs DISTINCT ON (EXPLAIN ANALYZE, measured) | 7 Deal Explorer | Accepted |
 | 0014 | Free-tier guardrails (rate limits, cache-first, maintenance mode) | 9 Hardening | Planned |
-| 0015 | Intraday overlay transport: SSE vs polling vs WebSockets | 10 Intraday (stretch) | Planned |
+| [0015](0015-intraday-overlay-transport-sse.md) | Intraday overlay transport: SSE read with `fetch` (bearer header) vs polling vs WebSockets; bounded stream lifetime, idle pause (measured) | 10 Intraday (stretch) | Proposed |
 | [0016](0016-continuous-deployment.md) | CD: Actions-driven migrate → seed → Render deploy hook → smoke test | 0 Scaffold | Accepted |
 | [0017](0017-deploy-path-safety.md) | Deploy-path safety: pipefail, main-only release, step-scoped DATABASE_URL | 0 Scaffold (follow-up) | Accepted |
 | [0018](0018-coverage-gates-and-ci-hardening.md) | Coverage gates, action pinning, and CI hardening | 0 Scaffold (follow-up) | Accepted |
