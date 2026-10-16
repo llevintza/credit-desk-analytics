@@ -56,6 +56,7 @@ Any unchecked item means request changes.
 | Pages untrusted-script check tests (#355) | `node --experimental-vm-modules --test .github/scripts/pages-script-check.test.mjs` |
 | Pages untrusted-script check on a build (#355) | `node --experimental-vm-modules .github/scripts/pages-script-check.mjs web/dist/web/browser --base / --no-csp` |
 | Deploy Swagger/OpenAPI exposure smoke (#110) | `node --test .github/scripts/swagger-exposure-smoke.test.mjs` |
+| Render deploy id and status helper, stubbed Render (#302) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/render-deploy.mjs .github/scripts/render-deploy.test.mjs` |
 | Cloudflare IP range comparison, fixture only (#161) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/cloudflare-ips.mjs .github/scripts/cloudflare-ips.test.mjs` (never run `cloudflare-ips.mjs` itself in a session: its fetch belongs to the weekly `cloudflare-ips.yml`) |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 
