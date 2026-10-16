@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { INLINE_ALLOWLIST, checkHtml, checkSite, parseArgs, selfFile } from "./pages-script-check.mjs";
+import { INLINE_ALLOWLIST, checkHtml, commandData, checkSite, parseArgs, selfFile } from "./pages-script-check.mjs";
 
 // #355: the published Pages site loads no third-party or untrusted script (ADR-0024's one-origin rule).
 const SCRIPT = fileURLToPath(new URL("pages-script-check.mjs", import.meta.url));
@@ -66,6 +66,16 @@ test("CLI: exit 0 on the clean fixture, 1 with one ::error:: per finding, 2 on b
     assert.equal(r.status, 2, `args ${JSON.stringify(args)}`);
     assert.match(r.stderr, /^usage: /);
   }
+});
+
+test("CLI: a newline or % in the site's text can't inject a workflow command", () => {
+  assert.equal(commandData("a%b\r\n::add-mask::x"), "a%25b%0D%0A::add-mask::x");
+  const dir = site({ "index.html": page(`<script src="https://x.test/a.js\n::add-mask::secret%"></script>`) });
+  const r = run(dir);
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(r.stdout.split("\n").filter((l) => l.startsWith("::")), [
+    '::error::index.html: <script src="https://x.test/a.js%0A::add-mask::secret%25"> is not this site',
+  ]);
 });
 
 test("CLI: refuses to run without --experimental-vm-modules (no parser, no pass)", () => {

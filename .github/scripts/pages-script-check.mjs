@@ -153,6 +153,10 @@ export function checkSite(dir, { base = "/credit-desk-analytics/", requireCsp = 
   return findings;
 }
 
+// Findings quote the site's own text (URLs, specifiers, parser errors): escape it as @actions/core does, so a newline
+// in an attribute can't start a workflow command of its own.
+export const commandData = (s) => s.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+
 export function parseArgs(argv) {
   const opts = { dir: null, base: "/credit-desk-analytics/", requireCsp: true };
   for (let i = 0; i < argv.length; i++) {
@@ -171,7 +175,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exit(2);
   }
   const findings = checkSite(opts.dir, opts);
-  for (const f of findings) console.log(`::error::${f}`);
+  for (const f of findings) console.log(`::error::${commandData(f)}`);
   console.log(findings.length ? `${findings.length} untrusted-script finding(s) in ${opts.dir}` : `No untrusted scripts in ${opts.dir}.`);
   process.exit(findings.length ? 1 : 0);
 }
