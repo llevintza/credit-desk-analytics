@@ -34,6 +34,13 @@ public sealed partial class ProductionLimitsGuardTests
         ["EXPORT_TIMEOUT_SECONDS"] = Defaults.ExportTimeout.TotalSeconds,
     };
 
+    /// <summary>Keys that may only lower a built-in cap (#277): a raised value is clamped back to the default, so a
+    /// production path can't raise them and the scan needn't flag them.</summary>
+    private static readonly IReadOnlyDictionary<string, double> LowerOnly = new Dictionary<string, double>
+    {
+        ["EXPORT_MAX_ROWS"] = Defaults.ExportMaxRows,
+    };
+
     [Fact]
     public void Defaults_are_the_readme_limits()
     {
@@ -43,15 +50,26 @@ public sealed partial class ProductionLimitsGuardTests
     [Fact]
     public void Ceilings_cover_every_key_LimitsOptions_reads()
     {
-        // A new limit key must be added to the scan: setting each listed key to a raised value changes every field.
-        var raised = new ConfigurationBuilder().AddInMemoryCollection(
-            Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, (c.Value + 1).ToString(CultureInfo.InvariantCulture)))).Build();
-        var options = LimitsOptions.From(raised);
+        // A new limit key must be added to the scan: setting each listed key to a raised value (a lower-only key to a
+        // lowered one, as it can't be raised) changes every field.
+        var moved = new ConfigurationBuilder().AddInMemoryCollection(
+            Ceilings.Select(c => Setting(c.Key, c.Value + 1)).Concat(LowerOnly.Select(c => Setting(c.Key, c.Value - 1)))).Build();
+        var options = LimitsOptions.From(moved);
         var unchanged = typeof(LimitsOptions).GetProperties()
             .Where(p => Equals(p.GetValue(options), p.GetValue(Defaults)))
             .Select(p => p.Name);
         Assert.Empty(unchanged);
     }
+
+    [Fact]
+    public void A_lower_only_key_set_above_its_default_resolves_to_the_default()
+    {
+        var raised = new ConfigurationBuilder().AddInMemoryCollection(LowerOnly.Select(c => Setting(c.Key, c.Value + 1))).Build();
+        Assert.Equal(Defaults, LimitsOptions.From(raised));
+    }
+
+    private static KeyValuePair<string, string?> Setting(string key, double value) =>
+        new(key, value.ToString(CultureInfo.InvariantCulture));
 
     [Fact]
     public void Production_appsettings_resolve_to_the_defaults()
