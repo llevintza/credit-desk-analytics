@@ -530,7 +530,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - per signed-in user concurrency: 1 request in flight, queue 8, then 429 (`RATE_LIMIT_PER_USER_CONCURRENCY` / `RATE_LIMIT_PER_USER_QUEUE`); exports are capped separately (below)
   - per signed-in user, insights source reads (`GET /api/insights/{source}`) in their own partition: 5 in flight, queue 15, then 429 (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY` / `RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`), so the P3 board's five sources load in parallel (ADR-0005, #357)
   - **global concurrency limiter** on DB-bound endpoints: 8 concurrent, queue 32, then 429 with `Retry-After`
-- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows.
+- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows (`EXPORT_MAX_ROWS` may lower it, never raise it; over the cap, see §8 `X-Export-Truncated`).
 - **Exports:** 1 at a time per user and `EXPORT_GLOBAL_SLOTS` (2) in total, without waiting: 429 with `Retry-After`. Deadline `EXPORT_TIMEOUT_SECONDS` (60) on the whole stream: 503 before any output; mid-stream the connection is aborted, so a truncated download fails.
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
@@ -589,7 +589,8 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Response compression:** Brotli and gzip, on HTTPS too.
 - **Caching:** `IMemoryCache` with a size limit, keyed per the P1 rules, expiring at the next batch time (06:30 America/New_York), plus `ETag` / `If-None-Match`.
 - **Observability:**
-  - A `Server-Timing` header (db, serialize, total) on every data endpoint, and `X-Cache: HIT|MISS`.
+  - A `Server-Timing` header (db, serialize, total) on every data endpoint, and `X-Cache: HIT|MISS`. On the CSV export both are set before the first byte: `db` is the time to the first row, `ser` is 0 (rows are written as they stream), and `X-Cache` is always `MISS`.
+- **CSV export truncation:** the export counts the matching rows up to one past its cap (`LIMIT cap + 1`, no sort) in the same round trip as the rows. When more rows match than the cap, it writes the cap's rows and sends `X-Export-Truncated: true` before the first byte; otherwise the header is absent.
   - Structured logs with request id.
   - The slowest 20 queries per day are visible on the admin page.
 - **Static SPA:** `UseStaticFiles` + `MapFallbackToFile("index.html")`. Long-cache hashed assets, and `no-cache` for `index.html`.
