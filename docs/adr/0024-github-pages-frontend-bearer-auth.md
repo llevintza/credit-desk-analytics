@@ -155,6 +155,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - **Mitigations:**
     - The refresh token lasts **8 hours** idle and never past **24 hours** from sign-in. The access token lasts **5 minutes**.
     - Rule: **no Pages site on the `llevintza` account loads untrusted third-party scripts.**
+      - Enforced for this app's site since #355 (Helms, 2026-10-16): `.github/scripts/pages-script-check.mjs` fails `pages.yml` before the upload, and CI's web job on every PR, when the site references a script that isn't one of its own files, ships an inline script outside an (empty) allowlist, or a meta CSP whose `script-src` isn't `'self'`. It can't see the account's other Pages repos (e.g. `/energlens`); for those the rule stays a manual check.
   - Revisit with a custom domain (option 1), which gives this app an origin of its own.
 - **No HTTP security headers on Pages:**
   - GitHub Pages doesn't let a site set response headers, so the Pages copy gets no CSP, `frame-ancestors`, HSTS preload, `Permissions-Policy` or `X-Frame-Options` from us.
