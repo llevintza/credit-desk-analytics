@@ -148,7 +148,9 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
     public async Task Unknown_pages_are_404_and_writes_need_a_token()
     {
         var (client, _, _) = await api.SignedInAsync();
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/presets/funds", Ct)).StatusCode);
+        var unknown = await client.GetAsync("/api/presets/funds", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.False(unknown.Headers.Contains("X-Cache")); // no cache was read, like the other problem responses (#67)
         Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Put, "/api/presets/funds", new { name = "x", state = new { } }), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/positions"), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.SendAsync(Send(HttpMethod.Delete, "/api/presets/funds?name=x"), Ct)).StatusCode);
