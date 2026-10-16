@@ -37,6 +37,7 @@ public sealed class OpenApiResponsesTests(PostgresApiFactory api)
         ["GET /api/marks/stream"] = "200,400,401,429,503",
         ["POST /api/marks/totals"] = "200,400,401,415,429,503",
         ["POST /api/admin/cache/clear"] = "204,401,403,429,503",
+        ["GET /api/admin/usage"] = "200,400,401,403,429,503",
     };
 
     public static TheoryData<string> PinnedOperations => [.. Pinned.Keys];

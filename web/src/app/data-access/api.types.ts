@@ -125,6 +125,23 @@ export interface DealPosition {
 
 export interface DealDetail { asOf: string; deal: DealInfo; tranches: Tranche[]; surveillance: RemitMonth[]; positions: DealPosition[]; }
 
+/** Admin Usage (README §7.2, #70): one user's audited requests on one UTC day. */
+export interface UserDayUsage { day: string; userName: string | null; requests: number; hits: number; misses: number; errors: number; avgMs: number; }
+
+/** One UTC day; `hitRatio` is null when no cacheable request ran. */
+export interface DayUsage { day: string; requests: number; hits: number; misses: number; hitRatio: number | null; }
+
+/** One of the slowest 20 requests of its UTC day. */
+export interface SlowRequest {
+  id: number; day: string; at: string; userName: string | null; endpoint: string; status: number; rows: number | null; ms: number; cache: string | null;
+}
+
+/** `GET /api/admin/usage`: days and users newest first, slowest grouped by day (newest first), slowest first. */
+export interface UsageReport {
+  from: string; to: string; requests: number; hits: number; misses: number; hitRatio: number | null;
+  days: DayUsage[]; users: UserDayUsage[]; slowest: SlowRequest[];
+}
+
 /** One simulated intraday mark (README §6 P6): `seq` only grows for a bond, across reconnects and restarts. */
 export interface Mark { bondId: number; seq: number; eventTs: string; price: number; spreadBp: number | null; }
 /** The first event of a stream. */

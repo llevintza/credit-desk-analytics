@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Desk.Api.Auth;
 using Desk.Api.Marks;
 using Desk.Api.Positions;
+using Desk.Data.App;
 using Desk.Data.Deals;
 using Desk.Data.Funds;
 using Desk.Data.Insights;
@@ -37,6 +38,7 @@ namespace Desk.Api;
 [JsonSerializable(typeof(Mark))]
 [JsonSerializable(typeof(MarkBye))]
 [JsonSerializable(typeof(MarkTotalsResponse))]
+[JsonSerializable(typeof(UsageReport))]
 // P3 grid cells are object: the runtime types they can hold must be known to the generator.
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(decimal))]

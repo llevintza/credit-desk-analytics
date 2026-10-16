@@ -4,7 +4,7 @@ import { Observable, defer, filter, finalize, map, shareReplay } from 'rxjs';
 import type { Tokens } from '../core/token.store';
 import {
   AsOf, CatalogColumn, DealDetail, DealList, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, MarkTotals, Me, Portfolio, Preset,
-  PresetState, RequestInfo,
+  PresetState, RequestInfo, UsageReport,
 } from './api.types';
 
 /** A positions request in flight: when it started, and whether another one ran at the same time. */
@@ -93,6 +93,16 @@ export class DeskApi {
   /** P4: one deal's capital structure, surveillance trend and the scope's positions in it. */
   deal(dealId: number, asOf: string | null, portfolioIds: number[]): Observable<DealDetail> {
     return this.http.get<DealDetail>(`/api/deals/${dealId}`, { params: DeskApi.scopeParams(asOf, portfolioIds) });
+  }
+
+  /** Admin: requests per user per day, cache hit ratio and the slowest requests of the last `days` UTC days. */
+  usage(days: number): Observable<UsageReport> {
+    return this.http.get<UsageReport>('/api/admin/usage', { params: { days } });
+  }
+
+  /** Admin: drops the server's cached reference data and grid blocks (after a manual reseed). */
+  clearCache(): Observable<void> {
+    return this.http.post<void>('/api/admin/cache/clear', null);
   }
 
   private static scopeParams(asOf: string | null, portfolioIds: number[]): Record<string, string> {

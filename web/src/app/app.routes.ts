@@ -18,7 +18,7 @@ export const routes: Routes = [
       { path: 'insights', loadComponent: () => import('./insights/insights-board').then((m) => m.InsightsBoard), title: 'Insights · Credit Desk Analytics' },
       { path: 'deals', loadComponent: () => import('./deals/deal-explorer').then((m) => m.DealExplorer), title: 'Deals · Credit Desk Analytics' },
       { path: 'lab', component: Placeholder, data: { title: 'Performance Lab', phase: 'phase 8' }, title: 'Performance Lab · Credit Desk Analytics' },
-      { path: 'usage', component: Placeholder, canActivate: [adminGuard], data: { title: 'Usage', phase: 'phase 9' }, title: 'Usage · Credit Desk Analytics' },
+      { path: 'usage', loadComponent: () => import('./usage/usage').then((m) => m.UsagePage), canActivate: [adminGuard], title: 'Usage · Credit Desk Analytics' },
     ],
   },
   { path: '**', redirectTo: '' },
