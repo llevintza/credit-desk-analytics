@@ -2,17 +2,20 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * README §11 e2e: runs against the docker compose stack (BASE_URL, default http://localhost:8080), seeded,
- * with an account from Desk.UserAdmin in DESK_EMAIL / DESK_PASSWORD (never committed).
+ * with an account from Desk.UserAdmin in DESK_EMAIL / DESK_PASSWORD (never committed), and an admin account in
+ * DESK_ADMIN_EMAIL / DESK_ADMIN_PASSWORD for the admin project's *.admin.spec.ts (#278).
  */
+// The ADR-0009 and ADR-0028 (PERF) and ADR-0014 (DEMO_SESSION) measurement runs are opt-in: without their
+// variable they are not collected at all, so the default run reports 0 skipped (#210). Each spec keeps its own
+// test.skip guard as a backstop.
+const optIn = [
+  ...(process.env.PERF ? [] : ['**/perf.spec.ts', '**/perf-lab.spec.ts']),
+  ...(process.env.DEMO_SESSION ? [] : ['**/demo-session.spec.ts']),
+];
+
 export default defineConfig({
   testDir: './tests',
-  // The ADR-0009 and ADR-0028 (PERF) and ADR-0014 (DEMO_SESSION) measurement runs are opt-in: without their
-  // variable they are not collected at all, so the default run reports 0 skipped (#210). Each spec keeps its own
-  // test.skip guard as a backstop.
-  testIgnore: [
-    ...(process.env.PERF ? [] : ['**/perf.spec.ts', '**/perf-lab.spec.ts']),
-    ...(process.env.DEMO_SESSION ? [] : ['**/demo-session.spec.ts']),
-  ],
+  testIgnore: optIn,
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
@@ -30,6 +33,9 @@ export default defineConfig({
     { name: 'setup', testMatch: /auth\.setup\.ts/, use: { trace: 'off' } },
     // The guard's own checks, next to it: no browser, no stack.
     { name: 'guard', testDir: './reporters' },
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 900 }, storageState: '.auth/state.json' }, dependencies: ['setup'] },
+    { name: 'chromium', testIgnore: [...optIn, '**/*.admin.spec.ts'], use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 900 }, storageState: '.auth/state.json' }, dependencies: ['setup'] },
+    // The admin pages (#278), as the admin account. Its own setup and session files; same login rules as setup.
+    { name: 'admin-setup', testMatch: /admin\.setup\.ts/, use: { trace: 'off' } },
+    { name: 'admin', testMatch: /\.admin\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 900 }, storageState: '.auth/admin-state.json' }, dependencies: ['admin-setup'] },
   ],
 });

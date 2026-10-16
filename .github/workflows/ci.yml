@@ -693,7 +693,8 @@ jobs:
 
   e2e:
     # README §11 / §14.1 step 10: Playwright against the compose stack seeded at scale 0.2, logged in as a
-    # throwaway viewer (generated, masked password). Uploads the report and the dark/light screenshots.
+    # throwaway viewer, and as a throwaway admin for the admin pages (#278); both generated, masked passwords.
+    # Uploads the report and the dark/light screenshots.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -725,7 +726,7 @@ jobs:
       # Built here, outside the password capture, so restore/build output and errors stay visible (#137).
       - name: Build the UserAdmin CLI (no secrets; output visible)
         run: dotnet build -c Release src/Desk.UserAdmin --nologo
-      - name: Migrate, seed (scale 0.2) and create a throwaway viewer
+      - name: Migrate, seed (scale 0.2) and create a throwaway viewer and admin
         run: |
           set -a; . ./.env; set +a
           export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
@@ -738,6 +739,13 @@ jobs:
           if [ -z "$pw" ]; then echo "::error::Desk.UserAdmin printed no password line"; exit 1; fi
           echo "::add-mask::${pw//%/%25}"
           echo "DESK_PASSWORD=$pw" >> "$GITHUB_ENV"
+          # The admin account for the admin project (#278): this job's own database, same capture and mask.
+          out=$(dotnet run -c Release --no-build --project src/Desk.UserAdmin -- add --email e2e-admin@example.com --role admin --expires 2099-12-31)
+          pw=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
+          unset out
+          if [ -z "$pw" ]; then echo "::error::Desk.UserAdmin printed no admin password line"; exit 1; fi
+          echo "::add-mask::${pw//%/%25}"
+          echo "DESK_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
       - name: Install Playwright
         working-directory: e2e
         run: |
@@ -748,6 +756,7 @@ jobs:
         env:
           BASE_URL: http://localhost:8080
           DESK_EMAIL: e2e@example.com
+          DESK_ADMIN_EMAIL: e2e-admin@example.com
         run: |
           ok=; for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && { ok=1; break; }; sleep 2; done; [ -n "$ok" ] || { echo "::error::app /health never came up"; exit 1; }
           npx playwright test

@@ -70,9 +70,11 @@ test("#137: UserAdmin is built in its own step and never inside the password cap
     assert.ok(build >= 0, `${label}: separate UserAdmin build step`);
     assert.ok(capture > build, `${label}: the capture runs --no-build after the build`);
     assert.doesNotMatch(job, /out=\$\(dotnet run(?![^)]*--no-build)/, `${label}: a capture without --no-build`);
-    const after = job.slice(capture);
-    // unset right after the sed; an explicit error (not `test -n`) before the mask.
-    assert.match(after, /\| sed -n 's\/\^Password \(shown once, share it out of band\): \/\/p'\)\n\s+unset out\n\s+if \[ -z "\$\w+" \]; then echo "::error::Desk\.UserAdmin printed no password line"; exit 1; fi\n\s+echo "::add-mask::/);
+    // Every capture (e2e has two since #278): unset right after the sed; an explicit error (not `test -n`) before the mask.
+    const captures = job.split("out=$(dotnet run -c Release --no-build --project src/Desk.UserAdmin -- add").slice(1);
+    assert.ok(captures.length >= 1, label);
+    for (const after of captures)
+      assert.match(after, /^[^\n]*\n\s+\w+=\$\(printf '%s\\n' "\$out" \| sed -n 's\/\^Password \(shown once, share it out of band\): \/\/p'\)\n\s+unset out\n\s+if \[ -z "\$\w+" \]; then echo "::error::Desk\.UserAdmin printed no (admin )?password line"; exit 1; fi\n\s+echo "::add-mask::/, label);
     assert.doesNotMatch(job, /echo "?\$out|printf '%s\\n' "\$out" \|(?! sed)/, `${label}: $out is never echoed`);
     assert.doesNotMatch(job, /test -n "\$(DESK_PASSWORD|pw)"/, label);
   }
@@ -111,6 +113,23 @@ test("#155: the e2e artifact leaves out test-results (traces) and expires within
 test("#155: the login setup project never records a trace (the fill carries the password)", () => {
   const cfg = readFileSync(new URL("../../e2e/playwright.config.ts", import.meta.url), "utf8");
   assert.match(cfg, /\{ name: 'setup', testMatch: \/auth\\\.setup\\\.ts\/, use: \{ trace: 'off'(, screenshot: 'off')?(, video: 'off')? \} \}/);
+  // #278: the admin's login setup, the same way.
+  assert.match(cfg, /\{ name: 'admin-setup', testMatch: \/admin\\\.setup\\\.ts\/, use: \{ trace: 'off'(, screenshot: 'off')?(, video: 'off')? \} \}/);
+});
+
+test("#278: e2e creates a throwaway admin on its own database, masked, and hands Playwright only the env", () => {
+  const step = stepBlock(E2E, "Migrate, seed (scale 0.2) and create a throwaway viewer and admin");
+  const url = step.indexOf('export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"');
+  const admin = step.indexOf("out=$(dotnet run -c Release --no-build --project src/Desk.UserAdmin -- add --email e2e-admin@example.com --role admin --expires ");
+  assert.ok(url >= 0 && admin > url, "the admin is created after DATABASE_URL points at the job's own compose Postgres");
+  const after = step.slice(admin);
+  assert.match(after, /echo "::add-mask::\$\{pw\/\/%\/%25\}"\n\s+echo "DESK_ADMIN_PASSWORD=\$pw" >> "\$GITHUB_ENV"/);
+  // The job's only database is the compose stack: no secrets, no environment, no other connection string.
+  assert.doesNotMatch(E2E, /\$\{\{\s*secrets\.|^ {4}environment:|neon|render\.com/im);
+  assert.doesNotMatch(E2E, /DESK_ADMIN_PASSWORD:|Password=[^$]/);
+  const playwright = stepBlock(E2E, "Playwright");
+  assert.match(playwright, /^ {10}DESK_EMAIL: e2e@example\.com\n {10}DESK_ADMIN_EMAIL: e2e-admin@example\.com\n/m);
+  assert.match(E2E, /^ {6}contents: read\n/m);
 });
 
 test("#278: gate-tests runs the security-headers tests, and each #67 script against the bar on its own", () => {
