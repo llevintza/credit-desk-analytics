@@ -806,15 +806,29 @@ services:
         sync: false
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
+      - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED   # X-Forwarded-Proto + behind-proxy client address (below)
+        value: "true"
       - key: SEED_DEMO
         value: "false"
       - key: MAINTENANCE_MODE
         value: "false"
       - key: CORS_ALLOWED_ORIGINS   # the GitHub Pages front end (ADR-0024); unset = no cross-origin access
         value: https://llevintza.github.io
+      - key: RATE_LIMIT_PER_USER_PER_MIN     # §7.2; the code default matches
+        value: "60"
+      - key: RATE_LIMIT_GLOBAL_CONCURRENCY   # §7.2; the code default matches
+        value: "8"
       - key: DEMO_ACCOUNTS_JSON
         sync: false
 ```
+
+- **Blueprint sync wins over the dashboard.** A sync writes every `value:` key back, `MAINTENANCE_MODE` and the rate limits included, so a dashboard-only change lasts until the next sync. Change those in `render.yaml`. `sync: false` keys (`DATABASE_URL`, `DEMO_ACCOUNTS_JSON`) are set in the dashboard and never overwritten, and a var set in the dashboard that the file omits is kept.
+- **Client address behind the proxy** (`ClientAddress`, ADR-0005, #116, #165). `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` turns on the host's `X-Forwarded-Proto` handling (the app strips `X-Forwarded-For` from it, so the remote address stays the socket peer) and puts the resolver into behind-proxy mode. That key feeds the per-IP login window and the anonymous token bucket.
+  - Headers are believed only when the socket peer is a private address (Render's network) or is in `CLIENT_ADDRESS_TRUSTED_HOPS`.
+  - Trailing `X-Forwarded-For` hops that are private or trusted are skipped. A Cloudflare hop always ends the skip.
+  - If the hop Render saw is a Cloudflare range, the client is `CF-Connecting-IP`. Without that header the key is the edge, which every client behind it shares (fail closed). If the hop isn't Cloudflare, that hop is the client. `True-Client-IP` and the rest of `X-Forwarded-For` are never used.
+  - Unset (local, compose, CI), the socket peer is the client.
+- **`CLIENT_ADDRESS_TRUSTED_HOPS`** (optional, dashboard only, not in `render.yaml`; default empty, so nothing extra is trusted). It lists public proxy CIDRs between Cloudflare and the app, comma or space separated; unparsable entries are dropped. A peer in a listed range is believed, and a trailing hop in one is skipped like a private hop. It exists to fix, without a release, a shared login key that the `Client address fell back to a shared key (DirectHop)` log line traces to an unlisted hop. The start-up line `Client address resolver: … TrustedHops=…` shows what was parsed. **Never list a range clients connect from:** every client in it would be skipped or believed. Nothing rejects an over-wide range yet.
 
 - **`deploy/Dockerfile`**, multi-stage:
   1. `node:22` builds `web/` (`npm ci && npm run build`).
