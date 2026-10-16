@@ -8,24 +8,33 @@ import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult, Tes
  * html reporter, whose onEnd has written the report by the time this one's runs, and fails the run if any step title,
  * error or file under the report or output folders (including the report's embedded zip and trace zips) holds the
  * password. It fails closed: a run that logs in (any project but the guard's own checks) fails when DESK_PASSWORD is empty
- * or shorter than the app's minimum, since the scan would then pass without looking for anything.
+ * or shorter than the app's minimum, since the scan would then pass without looking for anything. The admin projects
+ * (#278) log in with DESK_ADMIN_PASSWORD instead, which the guard scans for too and requires only when they run.
  */
 export default class SecretGuard implements Reporter {
   private readonly secrets: string[];
+  private readonly accounts: Account[];
   private readonly dirs: string[];
   private root = process.cwd();
   private readonly leaks: string[] = [];
-  private weakSecret = false;
+  private weak: string[] = [];
 
   constructor(options: { dirs?: string[]; secrets?: string[] } = {}) {
-    this.secrets = options.secrets ?? [process.env.DESK_PASSWORD ?? ''];
+    this.accounts = options.secrets?.map((secret) => ({ name: 'DESK_PASSWORD', secret, logsIn: () => true })) ?? [
+      { name: 'DESK_PASSWORD', secret: process.env.DESK_PASSWORD ?? '', logsIn: (project) => !adminProjects.includes(project) },
+      { name: 'DESK_ADMIN_PASSWORD', secret: process.env.DESK_ADMIN_PASSWORD ?? '', logsIn: (project) => adminProjects.includes(project) },
+    ];
+    this.secrets = this.accounts.map((a) => a.secret);
     this.dirs = options.dirs ?? ['playwright-report', 'test-results'];
   }
 
   onBegin(config: FullConfig, suite?: Suite): void {
     if (config.configFile) this.root = dirname(config.configFile);
-    const logsIn = suite?.allTests().some((t) => t.parent.project()?.name !== selfCheckProject) ?? false;
-    this.weakSecret = logsIn && this.secrets.some((s) => s.length < minSecretLength);
+    const projects = new Set(suite?.allTests().map((t) => t.parent.project()?.name ?? '') ?? []);
+    projects.delete(selfCheckProject);
+    this.weak = [...new Set(this.accounts
+      .filter((a) => a.secret.length < minSecretLength && [...projects].some(a.logsIn))
+      .map((a) => a.name))];
   }
 
   onStepEnd(test: TestCase, _result: TestResult, step: TestStep): void {
@@ -41,13 +50,13 @@ export default class SecretGuard implements Reporter {
 
   async onEnd(): Promise<{ status?: FullResult['status'] } | void> {
     for (const dir of this.dirs) this.leaks.push(...scanDir(resolve(this.root, dir), this.secrets));
-    if (this.weakSecret) {
+    if (this.weak.length) {
       // Never print the value or its length.
-      console.error(`\nsecret-guard (#155): DESK_PASSWORD is empty or shorter than ${minSecretLength} characters, so the leak check can't run. Set it to the Desk.UserAdmin password.`);
+      console.error(`\nsecret-guard (#155): ${this.weak.join(' and ')} ${this.weak.length > 1 ? 'are' : 'is'} empty or shorter than ${minSecretLength} characters, so the leak check can't run. Set it to the Desk.UserAdmin password.`);
       return { status: 'failed' };
     }
     if (!this.leaks.length) return;
-    console.error(`\nsecret-guard (#155): DESK_PASSWORD is in the run's output: ${this.leaks.join(', ')}`);
+    console.error(`\nsecret-guard (#155): DESK_PASSWORD or DESK_ADMIN_PASSWORD is in the run's output: ${this.leaks.join(', ')}`);
     return { status: 'failed' };
   }
 
@@ -58,6 +67,12 @@ export default class SecretGuard implements Reporter {
 
 /** The project that runs the guard's own checks (playwright.config.ts): it needs no password. */
 const selfCheckProject = 'guard';
+
+/** The projects that log in as the admin account (playwright.config.ts, #278); every other one logs in as the viewer. */
+const adminProjects = ['admin-setup', 'admin'];
+
+/** A password to scan for, the variable it comes from, and which projects log in with it. */
+type Account = { name: string; secret: string; logsIn: (project: string) => boolean };
 
 /** Identity's minimum (IdentityPolicy.MinPasswordLength); Desk.UserAdmin's generated passwords are longer. */
 const minSecretLength = 14;
