@@ -77,7 +77,7 @@ public static class MetaEndpoints
     {
         var meta = await MetaAsync(http, cache, ct);
         var allowed = entitlements.For(http.User, meta);
-        return Results.Ok(meta.Portfolios.Where(p => allowed.Contains(p.PortfolioId))
+        return Results.Ok(meta.UnscopedPortfolios.Where(p => allowed.Contains(p.PortfolioId))
             .Select(p => new PortfolioResponse(p.PortfolioId, p.Name, p.FundId, p.FundName)).ToArray());
     }
 

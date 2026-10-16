@@ -32,6 +32,38 @@ public sealed class DemoAccountsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_demo_account_gets_its_configured_portfolios_and_one_without_gets_none()
+    {
+        // ADR-0021 E2: the entry's portfolios become grants; grants mode shows exactly those, and none for an entry without.
+        var withPortfolios = $"demo-{Guid.NewGuid():N}@example.com";
+        var without = $"demo-{Guid.NewGuid():N}@example.com";
+        var json = $$"""[{"email":"{{withPortfolios}}","password":"{{PostgresApiFactory.Password}}","role":"viewer","expires":"2099-01-01T00:00:00Z","portfolios":[3,2,2,0]},"""
+            + $$"""{"email":"{{without}}","password":"{{PostgresApiFactory.Password}}","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""";
+        await using var host = api.WithSettings((DemoAccounts.ConfigKey, json), (Desk.Api.Positions.EntitlementsMode.ConfigKey, "grants"));
+
+        var demo = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(demo, withPortfolios);
+        Assert.Equal(new[] { 2, 3 }, await PortfolioIdsAsync(demo));
+        var none = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(none, without);
+        Assert.Empty(await PortfolioIdsAsync(none));
+
+        await using var db = api.NewContext();
+        var grants = await db.PortfolioGrants.AsNoTracking()
+            .Where(g => db.Users.Any(u => u.Id == g.UserId && u.Email == withPortfolios))
+            .OrderBy(g => g.PortfolioId).ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal([2, 3], grants.Select(g => g.PortfolioId));
+        Assert.All(grants, g => Assert.Equal(DemoAccounts.GrantedBy, g.GrantedBy));
+        Assert.All(grants, g => Assert.Equal(api.Time.GetUtcNow(), g.GrantedAt));
+    }
+
+    private static async Task<int[]> PortfolioIdsAsync(HttpClient client)
+    {
+        var body = await client.GetStringAsync("/api/meta/portfolios", TestContext.Current.CancellationToken);
+        return [.. System.Text.Json.JsonDocument.Parse(body).RootElement.EnumerateArray().Select(p => p.GetProperty("portfolioId").GetInt32()).Order()];
+    }
+
+    [Fact]
     public async Task A_demo_account_whose_password_breaks_the_policy_is_not_created()
     {
         var email = $"demo-{Guid.NewGuid():N}@example.com";
@@ -176,6 +208,16 @@ public sealed class DemoAccountsTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public void Parse_keeps_positive_distinct_portfolios_and_leaves_them_null_when_absent()
+    {
+        var parsed = DemoAccounts.Parse(
+            """[{"email":"a@example.com","password":"p","role":"viewer","expires":"2099-01-01T00:00:00Z","portfolios":[5,-1,0,5,2]},"""
+            + """{"email":"b@example.com","password":"p","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""", NullLogger.Instance);
+        Assert.Equal([2, 5], parsed["a@example.com"].Portfolios!);
+        Assert.Null(parsed["b@example.com"].Portfolios);
+    }
+
+    [Fact]
     public void Parse_is_case_insensitive_on_email()
     {
         var parsed = DemoAccounts.Parse("""[{"email":"Mixed@Example.com","password":"p","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""", NullLogger.Instance);
@@ -193,10 +235,13 @@ public sealed class DemoAccountRaceTests
         new Microsoft.Extensions.Configuration.ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [DemoAccounts.ConfigKey] = $$"""[{"email":"{{Email}}","password":"{{PostgresApiFactory.Password}}","role":"viewer","expires":"2099-01-01T00:00:00Z"}]""",
+                [DemoAccounts.ConfigKey] = $$"""[{"email":"{{Email}}","password":"{{PostgresApiFactory.Password}}","role":"viewer","expires":"2099-01-01T00:00:00Z","portfolios":[1,4]}]""",
             })
             .Build(),
         logger ?? NullLogger<DemoAccounts>.Instance);
+
+    private static PortfolioGrant[] Tracked(AppDbContext db) =>
+        [.. db.ChangeTracker.Entries<PortfolioGrant>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).OrderBy(g => g.PortfolioId)];
 
     /// <summary>A context that is never opened: the stubs don't touch the database.</summary>
     private static AppDbContext Db() => new(new DbContextOptionsBuilder<AppDbContext>().UseNpgsql().Options);
@@ -307,6 +352,32 @@ public sealed class DemoAccountRaceTests
         Assert.Equal(Email, user!.Email);
         Assert.Equal([Roles.Viewer], users.RolesAdded);
         Assert.Empty(users.Deleted);
+    }
+
+    [Fact]
+    public async Task A_new_account_s_grants_are_saved_with_its_role()
+    {
+        // Tracked on the request's context before AddToRoleAsync, whose save writes them in the same transaction.
+        var db = Db();
+        var users = new StubUsers(create: () => IdentityResult.Success);
+        var user = await Demo().FindOrCreateAsync(Email, users, db, TestContext.Current.CancellationToken);
+        var grants = Tracked(db);
+        Assert.Equal([1, 4], grants.Select(g => g.PortfolioId));
+        Assert.All(grants, g => Assert.Equal(user!.Id, g.UserId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_role_leaves_no_grant_tracked(bool throws)
+    {
+        // The removal (or the request's next save) must not try to insert grants for the removed account.
+        var db = Db();
+        var users = new StubUsers(
+            create: () => IdentityResult.Success,
+            addToRole: () => throws ? throw new DbUpdateException("constraint") : IdentityResult.Failed(new IdentityError { Code = "ConcurrencyFailure" }));
+        Assert.Null(await Demo().FindOrCreateAsync(Email, users, db, TestContext.Current.CancellationToken));
+        Assert.Empty(Tracked(db));
     }
 
     /// <summary>First lookup misses (the account doesn't exist yet); the create loses; the re-lookup finds the winner's row.</summary>
