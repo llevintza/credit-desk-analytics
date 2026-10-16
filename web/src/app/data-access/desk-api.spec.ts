@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { HttpHeaders, HttpResponse, provideHttpClient } from '@angular/common/http';
+import { HttpEventType, HttpHeaders, HttpResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { firstValueFrom } from 'rxjs';
 import { DeskApi } from './desk-api';
@@ -49,6 +49,33 @@ describe('DeskApi', () => {
     http.expectOne('/api/meta/columns').flush([{ name: 'dv01' }]);
     expect(await second).toEqual([{ name: 'dv01' }]);
     expect(await firstValueFrom(api.columns())).toEqual([{ name: 'dv01' }]); // no new request
+  });
+
+  it('streams the marks as the response text so far, with the scope and the resume point as parameters', () => {
+    const texts: string[] = [];
+    let done = false;
+    api.markStream([3, 7], 42).subscribe({ next: (t) => texts.push(t), complete: () => (done = true) });
+    const req = http.expectOne((r) => r.url === '/api/marks/stream');
+    expect(req.request.urlWithParams).toBe('/api/marks/stream?portfolioIds=3,7&lastEventId=42');
+    expect(req.request.reportProgress).toBe(true);
+    expect(req.request.responseType).toBe('text');
+    req.event({ type: HttpEventType.DownloadProgress, loaded: 5, partialText: 'data:' });
+    req.event({ type: HttpEventType.DownloadProgress, loaded: 9 });
+    req.flush('data: x\n\n');
+    expect(texts).toEqual(['data:', '']);
+    expect(done).toBe(true);
+
+    api.markStream([], null).subscribe();
+    expect(http.expectOne((r) => r.url === '/api/marks/stream').request.urlWithParams).toBe('/api/marks/stream');
+  });
+
+  it('asks for the overlay totals with the view and no paging', async () => {
+    const totals = firstValueFrom(api.markTotals({ columns: ['price'], quickFilter: 'clo' }));
+    const req = http.expectOne('/api/marks/totals');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ columns: ['price'], quickFilter: 'clo', startRow: 0, endRow: 0 });
+    req.flush({ asOf: '2026-10-06', seq: 30, eventTs: 't', rowCount: 1, summary: { price: 99 } });
+    expect((await totals).seq).toBe(30);
   });
 
   it('exports with the view and no paging, as a blob', async () => {

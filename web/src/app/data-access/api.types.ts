@@ -124,3 +124,12 @@ export interface DealPosition {
 }
 
 export interface DealDetail { asOf: string; deal: DealInfo; tranches: Tranche[]; surveillance: RemitMonth[]; positions: DealPosition[]; }
+
+/** One simulated intraday mark (README §6 P6): `seq` only grows for a bond, across reconnects and restarts. */
+export interface Mark { bondId: number; seq: number; eventTs: string; price: number; spreadBp: number | null; }
+/** The first event of a stream. */
+export interface MarkHello { asOf: string; bonds: number; tickMs: number; endsAt: string; seq: number; }
+/** The last event: `lifetime` (reconnect while the user is there) or `empty` (nothing to mark). */
+export interface MarkBye { reason: string; }
+/** The overlay totals of a view at tick `seq` (POST /api/marks/totals). */
+export interface MarkTotals { asOf: string; seq: number; eventTs: string; rowCount: number | null; summary: Record<string, number | null>; }
