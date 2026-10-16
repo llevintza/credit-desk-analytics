@@ -1,9 +1,9 @@
-import { HttpClient, HttpResponse } from '@angular/common/http';
+import { HttpClient, HttpDownloadProgressEvent, HttpEventType, HttpResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, inject } from '@angular/core';
-import { Observable, defer, finalize, map, shareReplay } from 'rxjs';
+import { Observable, defer, filter, finalize, map, shareReplay } from 'rxjs';
 import type { Tokens } from '../core/token.store';
 import {
-  AsOf, CatalogColumn, DealDetail, DealList, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, Me, Portfolio, Preset,
+  AsOf, CatalogColumn, DealDetail, DealList, FundPerformance, FundRange, GridBlock, GridRequest, Health, InsightSource, InsightsResult, MarkTotals, Me, Portfolio, Preset,
   PresetState, RequestInfo, UsageReport,
 } from './api.types';
 
@@ -123,6 +123,27 @@ export class DeskApi {
         finalize(() => this.inFlight.delete(mine)),
       );
     });
+  }
+
+  /**
+   * P6: the intraday mark stream (README §6 P6, ADR-0015) as its response text so far, re-emitted as each chunk
+   * arrives. Read with fetch through HttpClient, not EventSource, so the interceptors add the bearer token and
+   * refresh it on a 401 like any other call (ADR-0024). Completes when the server ends the stream; unsubscribing
+   * aborts it. `lastEventId` resumes after that seq.
+   */
+  markStream(portfolioIds: number[], lastEventId: number | null): Observable<string> {
+    const params: Record<string, string> = {};
+    if (portfolioIds.length) params['portfolioIds'] = portfolioIds.join(',');
+    if (lastEventId !== null) params['lastEventId'] = String(lastEventId);
+    return this.http.get('/api/marks/stream', { params, observe: 'events', reportProgress: true, responseType: 'text' }).pipe(
+      filter((e): e is HttpDownloadProgressEvent => e.type === HttpEventType.DownloadProgress),
+      map((e) => e.partialText ?? ''),
+    );
+  }
+
+  /** P6: the view's price and spread totals with the intraday marks applied (same body as a positions block). */
+  markTotals(request: Omit<GridRequest, 'startRow' | 'endRow'>): Observable<MarkTotals> {
+    return this.http.post<MarkTotals>('/api/marks/totals', { ...request, startRow: 0, endRow: 0 });
   }
 
   /** The streamed CSV export as a file (README §6 P1: from the API, not the browser cache). */

@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, e
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { AgGridAngular } from 'ag-grid-angular';
-import type { ColGroupDef, GridApi, GridOptions, GridReadyEvent } from 'ag-grid-community';
+import type { ColGroupDef, GridApi, GridOptions, GridReadyEvent, IRowNode } from 'ag-grid-community';
 import { forkJoin } from 'rxjs';
 import { KeyboardService } from '../core/keyboard.service';
 import { ScopeService } from '../core/scope.service';
@@ -10,14 +10,27 @@ import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { Preset } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
+import { Row } from '../data-access/to-rows';
 import { columnDefs, totalLabel } from './column-defs';
 import { deskGridTheme, registerGridModules } from './grid-setup';
+import { Mark, MarkTotals, markedColumnIds } from './marks';
+import { MarksOverlay, OverlayStatus } from './marks-overlay';
 import { PositionsQuery } from './positions-query';
 import { initialPreset, nextPreset, page, presetColumnState } from './presets';
 
 registerGridModules();
 
 const rememberKey = 'desk.positions.preset';
+
+/** The overlay's state in the toolbar. */
+const liveLabels: Record<OverlayStatus, (bonds: number) => string> = {
+  off: () => '',
+  connecting: () => 'Connecting…',
+  live: (bonds) => `Live · ${bonds} bonds`,
+  paused: () => 'Paused (idle) · click to resume',
+  empty: () => 'No bonds to mark',
+  error: () => 'Live marks unavailable',
+};
 export const firstRowsMark = 'positions:first-rows';
 
 /**
@@ -30,15 +43,16 @@ export const firstRowsMark = 'positions:first-rows';
   templateUrl: './positions.html',
   styleUrl: './positions.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  providers: [PositionsQuery],
+  providers: [PositionsQuery, MarksOverlay],
 })
 export class Positions {
   private readonly api = inject(DeskApi);
   private readonly status = inject(StatusService);
-  private readonly scope = inject(ScopeService);
+  protected readonly scope = inject(ScopeService);
   private readonly theme = inject(ThemeService);
   private readonly keyboard = inject(KeyboardService);
   protected readonly query = inject(PositionsQuery);
+  protected readonly overlay = inject(MarksOverlay);
   private readonly quick = viewChild<ElementRef<HTMLInputElement>>('quick');
 
   protected readonly presets = signal<Preset[]>([]);
@@ -54,6 +68,10 @@ export class Positions {
   private readonly gridReady = signal(false);
   private attached = false;
   private painted = false;
+  /** Row ids per bond in the blocks loaded since the last view change: where a mark lands. */
+  private readonly rowsByBond = new Map<number, Set<string>>();
+  private flashedTotals: MarkTotals | null = null;
+  protected readonly liveLabel = computed(() => liveLabels[this.overlay.status()](this.overlay.bonds()));
 
   protected readonly gridOptions: GridOptions = {
     theme: deskGridTheme,
@@ -70,7 +88,16 @@ export class Positions {
   };
 
   constructor() {
-    this.query.onViewChanged = () => this.grid?.purgeInfiniteCache();
+    this.query.onViewChanged = () => {
+      this.rowsByBond.clear();
+      this.overlay.viewChanged();
+      this.grid?.purgeInfiniteCache();
+    };
+    // README §6 P6: marks go onto every block as it loads, and onto the rows already on screen as they arrive.
+    this.query.decorate = (rows) => (this.overlay.enabled ? rows.map((row) => this.marked(row)) : rows);
+    this.overlay.onMarks = (marks) => this.applyMarks(marks);
+    this.overlay.totalsRequest = () =>
+      this.query.view.columns.some((c) => (markedColumnIds as string[]).includes(c)) ? this.query.exportRequest() : null;
     this.scope.load(); // no-op when the shell already loaded it
     forkJoin({ catalog: this.api.columns(), presets: this.api.presets(page) }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: ({ catalog, presets }) => {
@@ -89,8 +116,11 @@ export class Positions {
       const portfolioIds = this.scope.selected();
       const ready = this.gridReady() && this.scope.ready();
       untracked(() => {
-        if (asOf !== this.query.view.asOf || portfolioIds.join() !== this.query.view.portfolioIds.join())
-          this.query.update({ asOf, portfolioIds });
+        const scopeChanged = asOf !== this.query.view.asOf || portfolioIds.join() !== this.query.view.portfolioIds.join();
+        // Marks are intraday: they apply to the latest as-of only, and follow the selected portfolios.
+        if (this.overlay.enabled && !this.scope.isLatest()) this.setOverlay(false);
+        else if (this.overlay.enabled && scopeChanged) this.overlay.start(portfolioIds);
+        if (scopeChanged) this.query.update({ asOf, portfolioIds });
         if (ready && !this.attached) {
           this.attached = true;
           this.query.setColumns(this.displayed());
@@ -99,12 +129,18 @@ export class Positions {
       });
     });
 
-    // The pinned summary row and the status bar follow the last block.
+    // The pinned summary row and the status bar follow the last block; with the overlay on, its marked columns
+    // follow the server's overlay totals (README §6 P6: refreshed from the server, never summed on the client).
     effect(() => {
       const block = this.query.lastBlock();
+      const live = this.overlay.totals();
       if (!block || !this.grid) return;
-      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: this.totalRowLabel(), ...block.summary }]);
+      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: this.totalRowLabel(), ...block.summary, ...live?.summary }]);
       this.status.totalRows.set(block.rowCount);
+      // New totals flash once; a block load re-pins the same totals without flashing them again.
+      const total = live && live !== this.flashedTotals ? this.grid.getPinnedBottomRow(0) : undefined;
+      this.flashedTotals = live;
+      if (total) this.flash([total]);
     });
     effect(() => this.status.lastRequest.set(this.query.lastInfo()));
     // Repaint numbers when the negative style changes.
@@ -146,6 +182,47 @@ export class Positions {
     const first = this.grid.getFirstDisplayedRowIndex();
     const last = this.grid.getLastDisplayedRowIndex();
     this.status.visibleRows.set(last >= first ? last - first + 1 : 0);
+  }
+
+  protected toggleOverlay(): void {
+    this.setOverlay(!this.overlay.enabled);
+  }
+
+  private setOverlay(on: boolean): void {
+    if (on) this.overlay.start(this.scope.selected());
+    else this.overlay.stop();
+    this.query.update({ overlay: on });
+  }
+
+  /** A row with its bond's current mark, remembered under its bond so later marks find it. */
+  private marked(row: Row): Row {
+    const bond = row['bond_id'];
+    if (typeof bond === 'number') {
+      const ids = this.rowsByBond.get(bond) ?? new Set<string>();
+      ids.add(String(row['position_id']));
+      this.rowsByBond.set(bond, ids);
+    }
+    return this.overlay.book.overlay(row);
+  }
+
+  /** New marks onto the loaded rows of their bonds (new row objects, never mutated), and those cells flash. */
+  private applyMarks(marks: Mark[]): void {
+    if (!this.grid) return;
+    const nodes: IRowNode[] = [];
+    for (const bond of new Set(marks.map((m) => m.bondId))) {
+      for (const id of this.rowsByBond.get(bond) ?? []) {
+        const node = this.grid.getRowNode(id);
+        if (!node?.data) continue;
+        node.updateData(this.overlay.book.overlay(node.data as Row));
+        nodes.push(node);
+      }
+    }
+    if (nodes.length) this.flash(nodes);
+  }
+
+  private flash(rowNodes: IRowNode[]): void {
+    const columns = this.displayed().filter((c) => (markedColumnIds as string[]).includes(c));
+    if (columns.length) this.grid!.flashCells({ rowNodes, columns });
   }
 
   protected onQuickInput(event: Event): void {

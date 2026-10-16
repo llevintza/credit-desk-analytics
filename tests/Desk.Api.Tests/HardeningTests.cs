@@ -125,7 +125,7 @@ public sealed class HardeningTests(PostgresApiFactory api)
         var paths = doc.RootElement.GetProperty("paths").EnumerateObject().Select(p => p.Name).Order().ToArray();
         Assert.Equal(
         [
-            "/api/admin/cache/clear", "/api/admin/usage", "/api/auth/login", "/api/auth/logout", "/api/auth/refresh", "/api/deals", "/api/deals/{dealId}", "/api/funds/{fundId}/performance", "/api/insights/{source}", "/api/me",
+            "/api/admin/cache/clear", "/api/admin/usage", "/api/auth/login", "/api/auth/logout", "/api/auth/refresh", "/api/deals", "/api/deals/{dealId}", "/api/funds/{fundId}/performance", "/api/insights/{source}", "/api/marks/stream", "/api/marks/totals", "/api/me",
             "/api/meta/as-of", "/api/meta/columns", "/api/meta/portfolios",
             "/api/positions/export", "/api/positions/query", "/api/presets/{page}", "/health", "/health/db",
         ], paths);

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
 using Desk.Api.Auth;
+using Desk.Api.Marks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -16,10 +17,12 @@ public static class RateLimiting
 {
     public const string LoginPolicy = "login";
 
-    public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits, ClientAddress clients)
+    public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits, ClientAddress clients, MarksOptions? marks = null)
     {
+        marks ??= MarksOptions.From(new ConfigurationBuilder().Build());
         services.AddSingleton(limits);
         services.AddSingleton(clients);
+        services.AddSingleton(marks);
         services.AddSingleton<ExportGate>();
         var permits = new DatabasePermits(limits);
         services.AddSingleton(_ => permits); // a factory, so the container disposes it
@@ -58,6 +61,8 @@ public static class RateLimiting
             // the grid back, and a busy grid can't hold the board back. It is read-only and bounded, and it still
             // sits before the user's token bucket and the shared database limiter, like every other partition.
             // A signed-in caller without an account id is refused first, exports included (#361): see NoAccountIdKey.
+            // The intraday mark stream (README §6 P6, ADR-0015) is open for minutes: in the main partition it would hold
+            // its owner's one permit and stall their grid, so it gets its own, a few streams per user and no queue.
             var perUserConcurrency = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("unscoped")
@@ -65,6 +70,12 @@ public static class RateLimiting
                         ? RateLimitPartition.Get(NoAccountIdKey, _ => DenyAll.Instance)
                     : IsExport(http) || !http.User.IsSignedIn()
                         ? RateLimitPartition.GetNoLimiter("unscoped")
+                    : IsMarkStream(http)
+                        ? RateLimitPartition.GetConcurrencyLimiter(MarkStreamPartitionKey(http, clients), _ => new ConcurrencyLimiterOptions
+                        {
+                            PermitLimit = marks.PerUserStreams,
+                            QueueLimit = 0,
+                        })
                     : IsInsightsSource(http)
                         ? RateLimitPartition.GetConcurrencyLimiter(InsightsPartitionKey(http, clients), _ => new ConcurrencyLimiterOptions
                         {
@@ -78,11 +89,19 @@ public static class RateLimiting
                             QueueLimit = limits.PerUserQueue,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         }));
-            // One limiter instance for the partition and for handlers that take a second permit (DatabasePermits).
+            // One limiter instance for the partition and for handlers that take another permit (DatabasePermits). A mark
+            // stream holds no database permit while it streams (it reads nothing then): it takes one from DatabasePermits
+            // for its start-up read only, and its slot here is a cap on open streams instead.
             var database = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
-                    : RateLimitPartition.Get("db", _ => permits.Shared));
+                    : IsMarkStream(http)
+                        ? RateLimitPartition.GetConcurrencyLimiter("marks", _ => new ConcurrencyLimiterOptions
+                        {
+                            PermitLimit = marks.GlobalStreams,
+                            QueueLimit = 0,
+                        })
+                        : RateLimitPartition.Get("db", _ => permits.Shared));
             o.GlobalLimiter = new AcquireOnce(PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database));
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
@@ -153,6 +172,11 @@ public static class RateLimiting
 
     // UseRouting runs before the limiter, so the matched endpoint is known here.
     internal static bool IsExport(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<ExportEndpoint>() is not null;
+
+    internal static bool IsMarkStream(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<MarkStreamEndpoint>() is not null;
+
+    /// <summary>The caller's mark-stream partition; the prefix keeps it apart from every other partition, like <see cref="InsightsPartitionKey"/>.</summary>
+    internal static string MarkStreamPartitionKey(HttpContext http, ClientAddress clients) => $"marks:{PartitionKey(http, clients)}";
 
     internal static bool IsInsightsSource(HttpContext http) => http.GetEndpoint()?.Metadata.GetMetadata<InsightsSourceEndpoint>() is not null;
 

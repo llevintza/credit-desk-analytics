@@ -7,7 +7,8 @@ namespace Desk.Api.Limits;
 /// pooled connection, so they fit <c>DB_MAX_POOL_SIZE</c> (<see cref="ConnectionBudget"/>). The rate limiter's
 /// <c>db</c> partition hands one to every <c>/api</c> request. A handler that wants a second connection for the
 /// same request (the positions grid's first view, #241) takes a <see cref="TryTakeSpare">spare</see> from the same
-/// limiter, so a connection is never held without a permit.
+/// limiter, and a request that holds none for its whole life (the intraday mark stream, ADR-0015) takes one with
+/// <see cref="AcquireAsync"/> around its database read, so a connection is never held without a permit.
 /// </summary>
 public sealed class DatabasePermits : IDisposable
 {
@@ -40,6 +41,12 @@ public sealed class DatabasePermits : IDisposable
         _permits.GetStatistics() is { CurrentAvailablePermits: >= 2, CurrentQueuedCount: 0 }
             ? _permits.AttemptAcquire(1)
             : RateLimiting.NotAcquired.Instance;
+
+    /// <summary>
+    /// One permit for a request that holds none (the mark stream's start-up read), queued like any request's; a lease
+    /// that isn't acquired means the queue is full (answer 429). Dispose it as soon as the read is done.
+    /// </summary>
+    public ValueTask<RateLimitLease> AcquireAsync(CancellationToken ct) => Shared.AcquireAsync(1, ct);
 
     public void Dispose() => _permits.Dispose();
 
