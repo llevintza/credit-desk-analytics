@@ -1,6 +1,6 @@
 # Roles, skills, `pr-ready` and generated headers
 
-> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/roles-and-skills.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]** and listed in the drafts README.
+> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/roles-and-skills.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]**.
 
 > **Restored in rev 5 (R4-F6).** Rev 4 dropped this detail instead of moving it. The text below is rev 3 verbatim (l.146–154, l.156–167 and l.169–189), with only these edits: headings demoted one level; cross-references renamed (§5 → `drift-checks.md`/`governance.md`, §6 → `adapters.md`, §7 → ADR §7, §8 → `testing.md`); the implementer row's push/merge note updated for H7 (narrow + guard in Cursor). Rev 6: the generator heading demoted to `###` so the roles sit beside it (CR5 N8); the implementer note adds Claude's exact bare deny (H11) and DEP-R1. Rev 7: the implementer note adds the admin denies (H14) and the push-steering line (CR6 N6).
 

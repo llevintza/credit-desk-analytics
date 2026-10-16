@@ -5,7 +5,7 @@ Area file for `src/Desk.Seeder/` (deterministic synthetic data generator, bulk C
 ## Rules
 
 - **Synthetic only.** No real company, employer, client or person names in generated data, fixtures or screenshots.
-- **Bump `SeedVersion`** (`SeedVersion.cs`) whenever the generator or the seeded schema changes. Otherwise production keeps the old data (deploy seeds only when the version changed, README §14.2).
+- **Bump `SeedVersion`** (`SeedVersion.cs`) only when the shape of the seeded data changes: a generator change, or a seeded table or column added, dropped, renamed or retyped. A constraint- or index-only migration that the existing data satisfies (#286) needs no bump. Without a needed bump, production keeps the old data (deploy seeds only when the version changed, README §14.2).
 - **Budgets (README §10):** seeder runtime < 90 s locally at scale 1.0; DB size < 350 MB; the seeder fails above 400 MB.
 - **Never run `--force` seeding or the load benchmark against production or Neon.** `--force` wipes the seeded tables. The load benchmark drops and recreates a `bench` schema in whatever `DATABASE_URL` points to.
 - The app never seeds at start-up; deploy runs the seeder as its own step.
