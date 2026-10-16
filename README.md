@@ -737,6 +737,8 @@ cd web && npm ci && npm start              # http://localhost:4200 (proxies /api
 
 The tools read `DATABASE_URL` (or `ConnectionStrings__<Source>`) from the environment. There's deliberately **no built-in default connection string**: credentials only ever come from `.env` locally, from CI configuration, or from the production secret. Both Npgsql keyword strings and `postgres://` URIs work. Creating accounts (`Desk.UserAdmin`) arrives in phase 2.
 
+- **Agent sessions and credentials:** never export a Neon or production connection string in a shell that runs an agent session (Claude Code, Cursor, Grok). The human exports only local compose values for a session; tests use Testcontainers (ADR-0020 OQ-12).
+
 Or the whole stack in containers: `docker compose up --build` gives the app on http://localhost:8080. Migrate and seed from the host as above; the app never migrates at startup.
 
 **`.env.example`** (key names only):
