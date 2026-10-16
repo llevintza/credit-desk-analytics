@@ -37,6 +37,8 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 | Perf jobs wiring and wire-bytes check (#198, #348) | `node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs` |
 | CI image pin agreement (#255) | `node --test .github/scripts/ci-image-pins.test.mjs` |
 | Seeder cap wiring tests (#224) | `node --test .github/scripts/seed-cap-wiring.test.mjs` |
+| Pages untrusted-script check tests (#355) | `node --experimental-vm-modules --test .github/scripts/pages-script-check.test.mjs` |
+| Pages untrusted-script check on a build (#355) | `node --experimental-vm-modules .github/scripts/pages-script-check.mjs web/dist/web/browser --base / --no-csp` |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 
 A new top-level path, project or test project matches no area, so it runs every job until you add it to `AREA_PREFIXES` in `.github/scripts/ci-changes.mjs` (with a fixture in its test).
