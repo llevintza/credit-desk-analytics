@@ -16,7 +16,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 - No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)` or `governance-paths (base)`.
 - Secrets live only in the `production` environment (sole exception: the capped Claude key in `claude-review`). gitleaks stays on. Nothing removed or loosened.
 - Keep the `# agents-drift:` markers, `disableAllHooks` (planned; arrives with the harness build PR), the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
-- Keep image tags in step with their pins elsewhere (e.g. the gitleaks image in `deploy/ci-images/gitleaks/Dockerfile` and the `docker run` lines in `ci.yml` and `gitleaks.yml`).
+- Keep image tags in step with their pins elsewhere (e.g. the gitleaks image in `deploy/ci-images/gitleaks/Dockerfile` and the `docker run` lines in `ci.yml` and `gitleaks.yml`). `gate-tests` fails when they disagree (`ci-image-pins.test.mjs`, #255).
 
 ## What agents never do here
 
@@ -32,6 +32,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 | Gate-script tests | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/coverage-gate.mjs perf/coverage-gate.test.mjs` |
 | Change-classifier tests (#169) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/ci-changes.mjs .github/scripts/ci-changes.test.mjs` |
 | CI/Deploy concurrency wiring tests (#207) | `node --test .github/scripts/concurrency-wiring.test.mjs` |
+| CI image pin agreement (#255) | `node --test .github/scripts/ci-image-pins.test.mjs` |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 
 A new top-level path, project or test project matches no area, so it runs every job until you add it to `AREA_PREFIXES` in `.github/scripts/ci-changes.mjs` (with a fixture in its test).
