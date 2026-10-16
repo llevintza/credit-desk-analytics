@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -154,8 +154,10 @@ test("#256 item 2: the k6 step's rc handling, run for 0, 99 and 107 (MIN_BOOK=ab
   assert.match(script.summary, /\| k6 produced no summary \|/);
 });
 
+const REVIEW = jobBlock(WORKFLOWS.find(([f]) => f === "claude-review.yml")[1], "review");
+const UPLOAD_PIN = /uses: actions\/upload-artifact@([0-9a-f]{40}) # (v[\d.]+)/;
+
 test("#463: the claude-review job is opt-in via CLAUDE_REVIEW_ENABLED and keeps its guards", () => {
-  const REVIEW = jobBlock(WORKFLOWS.find(([f]) => f === "claude-review.yml")[1], "review");
   const cond = /^ {4}if: >-\n((?: {6}.*\n)+)/m.exec(REVIEW);
   assert.ok(cond, "review job has no folded if: block");
   const terms = cond[1].split("\n").map((l) => l.trim().replace(/ &&$/, "")).filter(Boolean);
@@ -169,4 +171,68 @@ test("#463: the claude-review job is opt-in via CLAUDE_REVIEW_ENABLED and keeps 
   // Every term is AND-ed: an || at the top level would let the job run with the switch off.
   assert.equal(cond[1].trim().split("&&").length, terms.length);
   assert.match(REVIEW, /#463/);
+});
+
+test("#461: the review job uploads the execution output only after the review step failed and the scan was clean", () => {
+  assert.match(stepBlock(REVIEW, "Claude review"), /^ {8}id: review$/m);
+  const scan = stepBlock(REVIEW, "Scan the Claude execution output for secrets");
+  assert.match(scan, /^ {8}id: scan$/m);
+  assert.match(scan, /^ {8}if: failure\(\) && steps\.key\.outputs\.present == 'true' && steps\.review\.outcome == 'failure'$/m);
+  assert.match(scan, /EXECUTION_FILE: \$\{\{ steps\.review\.outputs\.execution_file \}\}/);
+  // The base commit's gitleaks config, read-only, and the same image pin as the ci.yml secrets job.
+  assert.match(scan, /-v "\$PWD\/\.review-base\/\.gitleaks\.toml":\/config\/gitleaks\.toml:ro/);
+  const gitleaks = /ghcr\.io\/gitleaks\/gitleaks:\S+@sha256:[0-9a-f]{64}/;
+  assert.equal(gitleaks.exec(scan)[0], gitleaks.exec(CI)[0]);
+  const upload = stepBlock(REVIEW, "Upload the Claude execution output");
+  assert.match(upload, /^ {8}if: failure\(\) && steps\.key\.outputs\.present == 'true' && steps\.review\.outcome == 'failure' && steps\.scan\.outputs\.clean == 'true'$/m);
+  // Pinned to the same SHA and version as ci.yml's uploads.
+  assert.deepEqual(UPLOAD_PIN.exec(upload).slice(1), UPLOAD_PIN.exec(CI).slice(1));
+  assert.match(upload, /name: claude-review-output-\$\{\{ github\.event\.pull_request\.number \}\}-\$\{\{ github\.run_attempt \}\}/);
+  assert.match(upload, /path: \$\{\{ runner\.temp \}\}\/claude-review-output\/claude-execution-output\.json$/m);
+  assert.match(upload, /if-no-files-found: warn/);
+  const days = Number(/retention-days: (\d+)/.exec(upload)?.[1]);
+  assert.ok(days >= 1 && days <= 7, `retention-days ${days}`);
+  // The job's permissions stay as they were: uploading needs none.
+  assert.match(REVIEW, /permissions:\n {6}contents: read\n {6}pull-requests: write\n {4}steps:/);
+});
+
+test("#461: the scan step, run with a stub docker: clean, a job secret, a gitleaks finding, no file", () => {
+  const scan = stepBlock(REVIEW, "Scan the Claude execution output for secrets");
+  const body = /\n {8}run: \|\n((?: {10}.*\n?|\s*\n)+)/.exec(scan)[1].split("\n").map((l) => l.slice(10)).join("\n");
+  const run = (content, dockerRc) => {
+    const tmp = mkdtempSync(join(tmpdir(), "review-scan-"));
+    const bin = join(tmp, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "docker"), `#!/bin/sh\nexit ${dockerRc}\n`, { mode: 0o755 });
+    if (content !== null) writeFileSync(join(tmp, "claude-execution-output.json"), content);
+    const output = join(tmp, "output");
+    writeFileSync(output, "");
+    const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", body], {
+      cwd: tmp,
+      env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: tmp, GITHUB_OUTPUT: output, KEY: "sk-test-key", TOKEN: "ghs_test" },
+      encoding: "utf8",
+    });
+    const staged = join(tmp, "claude-review-output", "claude-execution-output.json");
+    return { status: r.status, out: r.stdout, output: readFileSync(output, "utf8"), staged: existsSync(staged) };
+  };
+  const clean = run('[{"type":"result","is_error":true}]', 0);
+  assert.equal(clean.status, 0);
+  assert.equal(clean.output, "clean=true\n");
+  assert.ok(clean.staged);
+  for (const leak of ['"sk-test-key"', '"ghs_test"']) {
+    const r = run(`[${leak}]`, 0);
+    assert.equal(r.status, 1);
+    assert.match(r.out, /::error::The Claude execution output contains a job secret; not uploaded\./);
+    assert.equal(r.output, "");
+    assert.ok(!r.staged);
+  }
+  const flagged = run("[]", 1);
+  assert.equal(flagged.status, 1);
+  assert.match(flagged.out, /::error::gitleaks flagged the Claude execution output; not uploaded\./);
+  assert.equal(flagged.output, "");
+  assert.ok(!flagged.staged);
+  const missing = run(null, 0);
+  assert.equal(missing.status, 0);
+  assert.match(missing.out, /::warning::No Claude execution output at /);
+  assert.equal(missing.output, "");
 });
