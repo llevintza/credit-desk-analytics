@@ -40,7 +40,8 @@ public sealed class HardeningTests(PostgresApiFactory api)
         // HSTS skips localhost by design; use a real-looking host.
         var client = api.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://desk.example.test") });
         var res = await client.GetAsync("/health", Ct);
-        Assert.StartsWith("max-age=", res.Headers.GetValues("Strict-Transport-Security").Single());
+        // #66: a year, not ASP.NET Core's 30-day default. No includeSubDomains: the host is a shared platform domain.
+        Assert.Equal("max-age=31536000", res.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]

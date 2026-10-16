@@ -32,6 +32,8 @@ builder.Services.AddDeskData(builder.Configuration);
 builder.Services.AddDeskAuth();
 builder.Services.AddDeskCors(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<DemoAccounts>();
+// A year, not the 30-day default (#66); UseHsts below sends it outside Development, over https only.
+builder.Services.AddHsts(o => o.MaxAge = SecurityHeaders.HstsMaxAge);
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
