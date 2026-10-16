@@ -4,6 +4,7 @@
 //     -e BASE_URL=http://host.docker.internal:5181 -e DESK_EMAIL=… -e DESK_PASSWORD=… \
 //     grafana/k6:1.3.0 run - < perf/positions.js
 //
+// handleSummary() (end of file) prints a short summary; add -e SUMMARY_JSON=/out/k6.json and a -v mount for the JSON.
 // The API must run with the per-user limit raised for the run (RATE_LIMIT_PER_USER_PER_MIN/BURST): k6 is one user.
 // MISS requests are the whole book under a filter value that has never been asked for, so neither the block nor the
 // summary is cached: the first block of a brand-new view over every row, the worst case for the Risk preset (#129).
@@ -117,4 +118,31 @@ export function all(data) {
     'All MISS': (r) => r.headers['X-Cache'] === 'MISS',
     'All whole book': (r) => r.json('rowCount') === data.book,
   });
+}
+
+// #271: the end-of-test summary, from k6 itself (k6 v2 discourages --summary-export). With SUMMARY_JSON set, the
+// metrics go to that file for the budgets job's step summary. Only `metrics`: setup_data (the bearer token) and
+// state stay out. stdout gets a short text summary in place of k6's default one, with no remote jslib import.
+export function handleSummary(data) {
+  const out = {};
+  if (__ENV.SUMMARY_JSON) out[__ENV.SUMMARY_JSON] = JSON.stringify({ metrics: data.metrics }, null, 2);
+  const ms = (x) => (x == null ? 'n/a' : `${Math.round(x * 10) / 10} ms`);
+  const lines = [];
+  for (const [label, key] of [
+    ['MISS, Risk preset, whole book', 'http_req_duration{scenario:miss}'],
+    ['HIT, Risk preset', 'http_req_duration{scenario:hit}'],
+    ['MISS, All preset, whole book', 'all_miss'],
+  ]) {
+    const v = (data.metrics[key] && data.metrics[key].values) || {};
+    lines.push(`${label}: p50 ${ms(v['p(50)'])}, p95 ${ms(v['p(95)'])}, max ${ms(v.max)}`);
+  }
+  const c = (data.metrics.checks && data.metrics.checks.values) || {};
+  lines.push(`checks: ${c.passes || 0} passed, ${c.fails || 0} failed`);
+  const crossed = [];
+  for (const [name, m] of Object.entries(data.metrics)) {
+    for (const [expr, t] of Object.entries(m.thresholds || {})) if (!t.ok) crossed.push(`threshold crossed: ${name} ${expr}`);
+  }
+  lines.push(...(crossed.length ? crossed : ['thresholds: all passed']));
+  out.stdout = `${lines.join('\n')}\n`;
+  return out;
 }

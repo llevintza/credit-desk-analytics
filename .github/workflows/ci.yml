@@ -361,6 +361,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: CI/Deploy concurrency wiring tests (#207)
         run: node --test .github/scripts/concurrency-wiring.test.mjs
+      - name: k6 handleSummary and the budgets jq (#271)
+        run: node --test .github/scripts/k6-summary.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
@@ -494,9 +496,9 @@ jobs:
           # Image pin tracked in deploy/ci-images/k6/Dockerfile for Dependabot. Grafana's own ghcr.io image:
           # the same index digest as grafana/k6 on Docker Hub (#332).
           docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP":/out \
-            -e BASE_URL=http://localhost:8080 -e DESK_EMAIL -e DESK_PASSWORD \
+            -e BASE_URL=http://localhost:8080 -e DESK_EMAIL -e DESK_PASSWORD -e SUMMARY_JSON=/out/k6.json \
             ghcr.io/grafana/k6:1.3.0@sha256:3ddc8b1a33a2c3d8edc6e99b6a762ae36cba08788463458f5e6a7703e14eb77d \
-            run --quiet --summary-export /out/k6.json - < perf/positions.js || rc=$?
+            run --quiet - < perf/positions.js || rc=$?
           {
             echo "### API latency p95 (k6: scale 1.0, 1 VU, 30 s per scenario)"
             echo
@@ -508,13 +510,13 @@ jobs:
                   ["HIT, Risk preset", "http_req_duration{scenario:hit}", 15],
                   ["MISS, All preset, whole book", "all_miss", 150]
                 | . as [$label, $key, $budget]
-                | ($m[$key] // {}) as $t
+                | ($m[$key].values // {}) as $t
                 | def ms: if . == null then "n/a" else (. * 10 | round / 10 | tostring) end;
                   "| \($label) | \($t["p(50)"] | ms) | \($t["p(95)"] | ms) | \($t.max | ms) | \($budget) | \(
                     if $t["p(95)"] == null then "no data" elif $t["p(95)"] < $budget then "ok" else "OVER" end) |"' \
                 "$RUNNER_TEMP/k6.json"
               echo
-              jq -r '.metrics.checks | "Checks: \(.passes) passed, \(.fails) failed (HIT asserts X-Cache: HIT; MISS asserts X-Cache: MISS and the whole book; the book is ≥ 19,000 rows)."' \
+              jq -r '.metrics.checks.values | "Checks: \(.passes) passed, \(.fails) failed (HIT asserts X-Cache: HIT; MISS asserts X-Cache: MISS and the whole book; the book is ≥ 19,000 rows)."' \
                 "$RUNNER_TEMP/k6.json"
             else
               echo "| k6 produced no summary | | | | | FAIL |"
