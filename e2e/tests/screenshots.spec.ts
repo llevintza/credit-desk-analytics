@@ -45,7 +45,7 @@ for (const theme of ['dark', 'light'] as const) {
     await gridReady(page);
     await page.getByTestId('live-marks').click();
     await expect(page.getByTestId('live-status')).toContainText('Live');
-    await expect(page.locator('.ag-body-viewport .ag-cell-data-changed').first()).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator('.ag-row:not(.summary-row) .ag-cell-data-changed').first()).toBeAttached({ timeout: 30_000 });
     await page.screenshot({ path: `${dir}/positions-live-${theme}.png` });
   });
 

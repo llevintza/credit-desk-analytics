@@ -20,7 +20,7 @@ test.describe('P6 intraday overlay (README §6 P6, #71/#72)', () => {
 
     // Each new mark flashes its price and spread cells in the body rows (AG Grid's change highlight); every 4th
     // bond of the default order is marked, so the first screen has some. The pinned Total row is not counted here.
-    await expect(page.locator('.ag-body-viewport .ag-cell-data-changed').first()).toBeAttached({ timeout: 30_000 });
+    await expect(page.locator('.ag-row:not(.summary-row) .ag-cell-data-changed').first()).toBeAttached({ timeout: 30_000 });
 
     // The pinned totals come from the server with the marks applied.
     const res = await totals;
