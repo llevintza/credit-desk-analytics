@@ -33,7 +33,13 @@ const kb = (bytes) => (bytes / 1024).toFixed(1);
 let failed = false;
 console.log('| File | Raw KB | Wire br KB | Script (q1, 16 KB slices) KB | Script − wire (bytes) | One-shot q1 KB |');
 console.log('|---|---|---|---|---|---|');
-for (const file of readdirSync(dir).filter((f) => /\.(?:js|css)$/.test(f)).sort()) {
+const files = readdirSync(dir).filter((f) => /\.(?:js|css)$/.test(f)).sort();
+// Fail closed (#348): CI runs this, and an empty or wrong directory must not pass with no rows.
+if (files.length === 0) {
+  console.error(`FAIL: no .js or .css files in ${dir}`);
+  process.exit(1);
+}
+for (const file of files) {
   const bytes = readFileSync(join(dir, file));
   const [onWire, measured] = [await wire(`/${file}`), sliced(bytes)];
   if (measured < onWire) failed = true;

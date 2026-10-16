@@ -135,6 +135,7 @@ const SHARED = [
   "Directory.Packages.props",
   "global.json",
   "dotnet-tools.json",
+  ".config/dotnet-tools.json",
   "CreditDesk.slnx",
   "Other.sln",
   "docker-compose.yml",
@@ -270,6 +271,40 @@ test("main rejects missing or short SHAs", () => {
   assert.throws(() => main(["--base", SHA_A, "--head", "HEAD"], {}, deps), /full commit SHAs/);
 });
 
+// Cleanup only, so a straggling writer can't fail a test (#265, as #249/#263 in coverage-gate.test.mjs).
+// Each attempt walks the tree again: rmSync's own maxRetries only retries the rmdir and keeps failing
+// once a late write lands in a directory it already emptied.
+function removeRepo(dir, rm = rmSync) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 });
+      return;
+    } catch (err) {
+      if (attempt >= 5 || (err.code !== "ENOTEMPTY" && err.code !== "EBUSY")) throw err;
+    }
+  }
+}
+
+test("removeRepo re-walks on ENOTEMPTY/EBUSY, at most 5 times, and rethrows anything else", () => {
+  const fails = (codes) => {
+    let calls = 0;
+    const rm = () => {
+      const code = codes[calls++];
+      if (code) throw Object.assign(new Error(code), { code });
+    };
+    return { rm, calls: () => calls };
+  };
+  const twice = fails(["ENOTEMPTY", "EBUSY"]);
+  removeRepo("x", twice.rm);
+  assert.equal(twice.calls(), 3);
+  const always = fails(Array(9).fill("ENOTEMPTY"));
+  assert.throws(() => removeRepo("x", always.rm), { code: "ENOTEMPTY" });
+  assert.equal(always.calls(), 5);
+  const other = fails(["EACCES"]);
+  assert.throws(() => removeRepo("x", other.rm), { code: "EACCES" });
+  assert.equal(other.calls(), 1);
+});
+
 test("changedPaths diffs from the merge-base, lists both sides of a rename, and fails on a bad SHA", () => {
   const dir = mkdtempSync(join(tmpdir(), "ci-changes-"));
   try {
@@ -278,6 +313,10 @@ test("changedPaths diffs from the merge-base, lists both sides of a rename, and 
     git("config", "user.email", "t@example.com");
     git("config", "user.name", "t");
     git("config", "commit.gpgsign", "false");
+    // `git commit` otherwise forks a detached `git maintenance run --auto` that can still be writing
+    // .git/objects when the finally block removes the repo (ENOTEMPTY, #265).
+    git("config", "maintenance.auto", "false");
+    git("config", "gc.auto", "0");
     mkdirSync(join(dir, "web"), { recursive: true });
     writeFileSync(join(dir, "web", "a.ts"), "a\n");
     writeFileSync(join(dir, "README.md"), "r\n");
@@ -298,7 +337,7 @@ test("changedPaths diffs from the merge-base, lists both sides of a rename, and 
     assert.deepEqual(changedPaths(dir, base, head).sort(), ["web/a.ts", "web/b.ts"]);
     assert.throws(() => changedPaths(dir, "f".repeat(40), head));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeRepo(dir);
   }
 });
 
@@ -337,7 +376,7 @@ test("ci.yml: each heavy job needs changes and skips only on its own flag being 
 });
 
 test("ci.yml: always-run jobs have no needs and no job-level if", () => {
-  for (const id of ["secrets", "workflows", "gate-tests"]) {
+  for (const id of ["secrets", "workflows", "gate-tests", "perf-deps"]) {
     const block = jobBlock(id);
     assert.doesNotMatch(block, /^    (needs|if):/m, id);
   }
