@@ -17,5 +17,5 @@ public interface IPortfolioEntitlements
 
 public sealed class AllPortfolios : IPortfolioEntitlements
 {
-    public IReadOnlyCollection<int> For(ClaimsPrincipal user, MetaSnapshot meta) => meta.Portfolios.Select(p => p.PortfolioId).ToHashSet();
+    public IReadOnlyCollection<int> For(ClaimsPrincipal user, MetaSnapshot meta) => meta.UnscopedPortfolios.Select(p => p.PortfolioId).ToHashSet();
 }
