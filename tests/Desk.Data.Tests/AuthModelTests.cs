@@ -39,6 +39,21 @@ public sealed class AuthModelTests
             t => Assert.All(t.GetProperties(), p => Assert.Equal(p.GetColumnName(), p.GetColumnName().ToLowerInvariant())));
     }
 
+    [Fact]
+    public void Portfolio_grants_key_on_user_and_portfolio_with_the_only_fk_to_users()
+    {
+        // ADR-0021: app.portfolio_grant, PK (user_id, portfolio_id), FK to auth.users only (cascade), index on portfolio_id.
+        using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseNpgsql("Host=localhost").Options);
+        var grant = db.Model.FindEntityType(typeof(PortfolioGrant))!;
+        Assert.Equal(("app", "portfolio_grant"), (grant.GetSchema(), grant.GetTableName()));
+        Assert.Equal(["user_id", "portfolio_id"], grant.FindPrimaryKey()!.Properties.Select(p => p.GetColumnName()));
+        var fk = Assert.Single(grant.GetForeignKeys());
+        Assert.Equal(typeof(DeskUser), fk.PrincipalEntityType.ClrType);
+        Assert.Equal(DeleteBehavior.Cascade, fk.DeleteBehavior);
+        Assert.Contains(grant.GetIndexes(), i => i.Properties.Select(p => p.GetColumnName()).SequenceEqual(["portfolio_id"]));
+        Assert.Equal(256, grant.FindProperty(nameof(PortfolioGrant.GrantedBy))!.GetMaxLength());
+    }
+
     [Theory]
     [InlineData(false, 1, true)]
     [InlineData(true, 1, false)]
