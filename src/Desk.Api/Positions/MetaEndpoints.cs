@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json;
+using Desk.Api.Audit;
 using Desk.Data.Grid;
 
 namespace Desk.Api.Positions;
@@ -34,19 +35,19 @@ public static class MetaEndpoints
             .WithName("GetPortfolios").WithSummary("The portfolios the current user is entitled to.")
             .Produces<PortfolioResponse[]>();
 
-        // Server-Timing on every data endpoint (#44, #130 N9-timing): presets aren't cached, so the handler's time is the
-        // database time.
-        var presets = api.MapGroup("/presets").WithTags("Presets").AddEndpointFilter(TimedAsync);
+        // Server-Timing on every data endpoint (#44, #130 N9-timing). The list is cached per user (ADR-0014) and times
+        // itself; a write isn't cached, so its handler's time is the database time.
+        var presets = api.MapGroup("/presets").WithTags("Presets");
         presets.MapGet("/{page}", ListPresetsAsync)
             .WithName("ListPresets").WithSummary("Built-in presets plus the current user's saved presets for a page.")
             .Produces<PresetResponse[]>().ProducesProblem(StatusCodes.Status404NotFound);
         presets.MapPut("/{page}", SavePresetAsync)
             .WithName("SavePreset").WithSummary("Creates or replaces one of the current user's presets.")
             .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict);
+            .ProducesProblem(StatusCodes.Status409Conflict).AddEndpointFilter(TimedAsync);
         presets.MapDelete("/{page}", DeletePresetAsync)
             .WithName("DeletePreset").WithSummary("Deletes one of the current user's presets (?name=).")
-            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound).AddEndpointFilter(TimedAsync);
         return api;
     }
 
@@ -55,7 +56,7 @@ public static class MetaEndpoints
     {
         var started = Stopwatch.GetTimestamp();
         var (meta, loadMs) = await cache.GetWithStatusAsync(ct);
-        PositionsEndpoints.SetTiming(http, loadMs is null ? "HIT" : "MISS", loadMs ?? 0, 0, started);
+        MarkCache(http, loadMs is null ? "HIT" : "MISS", loadMs ?? 0, started);
         return meta;
     }
 
@@ -81,15 +82,31 @@ public static class MetaEndpoints
             .Select(p => new PortfolioResponse(p.PortfolioId, p.Name, p.FundId, p.FundName)).ToArray());
     }
 
-    internal static async Task<IResult> ListPresetsAsync(string page, HttpContext http, PresetRepository presets, CancellationToken ct)
+    internal static async Task<IResult> ListPresetsAsync(string page, HttpContext http, PresetRepository presets, PresetListCache cache, CancellationToken ct)
     {
-        if (!Pages.Contains(page)) return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown page");
-        var own = (await presets.ListAsync(UserId(http.User), page, ct))
+        var started = Stopwatch.GetTimestamp();
+        if (!Pages.Contains(page))
+        {
+            PositionsEndpoints.SetTiming(http, "MISS", 0, 0, started);
+            return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown page");
+        }
+        var user = UserId(http.User);
+        if (cache.TryGet(user, page, out var cached))
+        {
+            MarkCache(http, "HIT", 0, started);
+            return Results.Bytes(cached!, "application/json");
+        }
+        var version = cache.Version(user, page); // before the read: a save landing during it must not leave a stale list
+        var own = (await presets.ListAsync(user, page, ct))
             .Select(p => new PresetResponse(p.Name, false, JsonElement.Parse(p.State), p.UpdatedAt));
-        return Results.Ok(BuiltIns.Concat(own).ToArray());
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(BuiltIns.Concat(own).ToArray(), DeskJsonContext.Default.PresetResponseArray);
+        cache.Store(user, page, bytes, version);
+        MarkCache(http, "MISS", Stopwatch.GetElapsedTime(started).TotalMilliseconds, started);
+        return Results.Bytes(bytes, "application/json");
     }
 
-    internal static async Task<IResult> SavePresetAsync(string page, SavePresetRequest body, HttpContext http, PresetRepository presets, CancellationToken ct)
+    internal static async Task<IResult> SavePresetAsync(string page, SavePresetRequest body, HttpContext http, PresetRepository presets,
+        PresetListCache cache, CancellationToken ct)
     {
         if (!Pages.Contains(page)) return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown page");
         var name = body.Name?.Trim();
@@ -102,7 +119,9 @@ public static class MetaEndpoints
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid preset state",
                 detail: $"State must be a JSON object of at most {MaxPresetStateBytes / 1024} KB, without NUL characters.");
 
-        return await presets.SaveAsync(UserId(http.User), page, name, state, ct) switch
+        var saved = await presets.SaveAsync(UserId(http.User), page, name, state, ct);
+        cache.Invalidate(UserId(http.User), page);
+        return saved switch
         {
             PresetSaveResult.Saved => Results.NoContent(),
             PresetSaveResult.AtLimit => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Too many presets",
@@ -111,10 +130,21 @@ public static class MetaEndpoints
         };
     }
 
-    internal static async Task<IResult> DeletePresetAsync(string page, string? name, HttpContext http, PresetRepository presets, CancellationToken ct) =>
-        Pages.Contains(page) && name is not null && await presets.DeleteAsync(UserId(http.User), page, name, ct)
-            ? Results.NoContent()
-            : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "No such preset");
+    internal static async Task<IResult> DeletePresetAsync(string page, string? name, HttpContext http, PresetRepository presets,
+        PresetListCache cache, CancellationToken ct)
+    {
+        if (!Pages.Contains(page) || name is null || !await presets.DeleteAsync(UserId(http.User), page, name, ct))
+            return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "No such preset");
+        cache.Invalidate(UserId(http.User), page);
+        return Results.NoContent();
+    }
+
+    /// <summary>X-Cache and Server-Timing, and the cache status on the audit row, so Usage counts these reads too.</summary>
+    private static void MarkCache(HttpContext http, string cache, double dbMs, long started)
+    {
+        PositionsEndpoints.SetTiming(http, cache, dbMs, 0, started);
+        if (http.Features.Get<AuditFeature>() is { } audit) audit.Cache = cache;
+    }
 
     private static async ValueTask<object?> TimedAsync(EndpointFilterInvocationContext ctx, EndpointFilterDelegate next)
     {
