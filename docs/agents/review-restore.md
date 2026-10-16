@@ -1,6 +1,6 @@
 # CI review isolation: `claude-review.yml` changes, §A restore script
 
-> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/review-restore.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]** and listed in the drafts README. In the repo, the scripts live in `claude-review.yml` between the markers; this page mirrors them, and `review-restore-matrix` tests the real block. §A is CR §A verbatim (sha256 `f9802941…34d20d6`).
+> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/review-restore.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]**. In the repo, the scripts live in `claude-review.yml` between the markers; this page mirrors them, and `review-restore-matrix` tests the real block. §A is CR §A verbatim (sha256 `f9802941…34d20d6`).
 
 **`claude-review.yml` changes** (the build work (Claude Code issue) edits `main`'s workflow; #7's pre-step `rm -rf -- .review-base .review-pr .review-context` stays unchanged before the base checkout):
 
