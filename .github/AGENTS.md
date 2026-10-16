@@ -51,6 +51,7 @@ Any unchecked item means request changes.
 | Perf jobs wiring and wire-bytes check (#198, #348) | `node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs` |
 | CI image pin agreement (#255) | `node --test .github/scripts/ci-image-pins.test.mjs` |
 | Seeder cap wiring tests (#224) | `node --test .github/scripts/seed-cap-wiring.test.mjs` |
+| Demo-session report and cache-memory fill tests (#67) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/demo-session-report.mjs --test-coverage-include=perf/cache-memory.mjs perf/demo-session-report.test.mjs` |
 | Pages untrusted-script check tests (#355) | `node --experimental-vm-modules --test .github/scripts/pages-script-check.test.mjs` |
 | Pages untrusted-script check on a build (#355) | `node --experimental-vm-modules .github/scripts/pages-script-check.mjs web/dist/web/browser --base / --no-csp` |
 | Deploy Swagger/OpenAPI exposure smoke (#110) | `node --test .github/scripts/swagger-exposure-smoke.test.mjs` |
