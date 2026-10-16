@@ -198,19 +198,33 @@ jobs:
           fi
           ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" --cap-mb "$SEED_CAP_MB" | tee seed.txt
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.tip.outputs.allowed == 'true'
+        with:
+          node-version: 22
+
+      # #302: the hook answers {"deploy":{"id":"dep-…"}}. render-deploy.mjs logs the id, adds it to the summary
+      # and outputs it with the service id from the hook URL's path, so the smoke step never sees the hook URL.
       - name: Trigger Render deploy of this commit
+        id: hook
         if: steps.tip.outputs.allowed == 'true'
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           case "$HOOK" in *\?*) sep='&' ;; *) sep='?' ;; esac
-          curl -fsS --max-time 30 -X POST "${HOOK}${sep}ref=${SHA}" > /dev/null
+          curl -fsS --max-time 30 -X POST "${HOOK}${sep}ref=${SHA}" > hook-response.json
           echo "Deploy requested for ${SHA}"
+          node .github/scripts/render-deploy.mjs hook < hook-response.json
 
       - name: Smoke test (wait for the new build to serve /health)
         if: steps.tip.outputs.allowed == 'true'
         env:
           APP_URL: ${{ vars.APP_URL }}
+          # #302: read only when the smoke fails. An empty key prints "could not be read (no API key)";
+          # the smoke fails the same way either way.
+          DEPLOY_ID: ${{ steps.hook.outputs.deploy_id }}
+          SERVICE_ID: ${{ steps.hook.outputs.service_id }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
           # Free-tier Docker builds plus cold start can take several minutes.
           v=""
@@ -221,7 +235,11 @@ jobs:
             [ "$v" = "$SHA" ] && break
             sleep 15
           done
-          [ "$v" = "$SHA" ] || { echo "::error::$APP_URL did not report $SHA within 15 minutes"; exit 1; }
+          if [ "$v" != "$SHA" ]; then
+            echo "::error::$APP_URL did not report $SHA within 15 minutes"
+            node .github/scripts/render-deploy.mjs status || true
+            exit 1
+          fi
           root_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/")
           me_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/api/me")
           echo "GET / -> $root_code"
