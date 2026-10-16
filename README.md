@@ -1012,7 +1012,7 @@ The same SPA that Render serves from `wwwroot` is also published to `https://lle
 ### 14.7 Scheduled: `.github/workflows/cloudflare-ips.yml`, weekly (Monday 06:41 UTC) or `workflow_dispatch`
 
 - Compares `ClientAddress.Cloudflare` (`src/Desk.Api/Limits/ClientAddress.cs`) with the ranges Cloudflare publishes (#161, ADR-0005). A range Cloudflare adds that the app doesn't know keys every client behind it on the edge, the shared login bucket of #116. The run fails on drift and prints the added and removed ranges; the fix is an app PR that updates the list.
-- Read-only: `contents: read`, no secrets, no environment, no writes, no issue creation. The comparison is tested with a fixture in `gate-tests` (`.github/scripts/cloudflare-ips.test.mjs`); agents never run the live fetch.
+- Read-only: `contents: read`, no secrets, no environment, no writes, no issue creation. `concurrency: cloudflare-ips` with `cancel-in-progress: false`: a dispatch during the scheduled run waits for it, and a running check is never cut off. The comparison is tested with a fixture in `gate-tests` (`.github/scripts/cloudflare-ips.test.mjs`); agents never run the live fetch.
 - **Who watches it:** a failed scheduled run notifies only through GitHub's default Actions notification to the account that last edited the workflow (every bot acts as `llevintza`), so Leo watches the Actions emails for it.
 
 ---
