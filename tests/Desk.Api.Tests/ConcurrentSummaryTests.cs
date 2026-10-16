@@ -1,14 +1,82 @@
 using System.Data;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Desk.Api.Limits;
 using Desk.Data;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
 using Desk.Data.Sources;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 
 namespace Desk.Api.Tests;
 
-/// <summary>#241: <see cref="GridRepository.ReadBlockAsync"/> with <c>concurrentSummary</c>: the page and the totals on two connections at once.</summary>
+/// <summary>
+/// #241: a first view reads its page and its totals on two pooled connections at once, but only with a spare shared
+/// database permit for the second one (<see cref="DatabasePermits.TryTakeSpare"/>): every connection a request holds
+/// is still a permit, so the permits keep fitting the pool (<see cref="ConnectionBudget"/>).
+/// </summary>
+public sealed class DatabasePermitsTests
+{
+    private static DatabasePermits Permits(int concurrency) =>
+        new(LimitsOptions.From(new ConfigurationBuilder().Build()) with { GlobalConcurrency = concurrency });
+
+    [Fact]
+    public void A_spare_is_taken_only_while_another_permit_stays_free()
+    {
+        using var permits = Permits(3);
+        using var request = permits.Shared.AttemptAcquire(1); // the rate limiter's permit for the request itself
+        Assert.True(request.IsAcquired);
+
+        using var spare = permits.TryTakeSpare();
+        Assert.True(spare.IsAcquired);
+        Assert.Equal(1, permits.Shared.GetStatistics()!.CurrentAvailablePermits); // one shared count, not two limiters
+
+        // The last free permit is left for the next request.
+        Assert.False(permits.TryTakeSpare().IsAcquired);
+        spare.Dispose();
+        using var again = permits.TryTakeSpare();
+        Assert.True(again.IsAcquired);
+    }
+
+    [Fact]
+    public void With_a_single_permit_there_is_never_a_spare()
+    {
+        using var permits = Permits(1);
+        Assert.False(permits.TryTakeSpare().IsAcquired);
+        Assert.Equal(1, permits.Shared.GetStatistics()!.CurrentAvailablePermits);
+    }
+
+    [Fact]
+    public async Task A_spare_is_never_taken_while_a_request_waits_for_a_permit()
+    {
+        using var permits = Permits(3);
+        var held = Enumerable.Range(0, 3).Select(_ => permits.Shared.AttemptAcquire(1)).ToList();
+        var waiting = permits.Shared.AcquireAsync(1, TestContext.Current.CancellationToken);
+        Assert.False(waiting.IsCompleted);
+
+        Assert.False(permits.TryTakeSpare().IsAcquired);
+        held[0].Dispose(); // the freed permit goes to the queued request, not to a spare
+        using var served = await waiting;
+        Assert.True(served.IsAcquired);
+        Assert.False(permits.TryTakeSpare().IsAcquired);
+        held.ForEach(l => l.Dispose());
+    }
+
+    [Fact]
+    public void The_shared_limiter_is_never_idle_so_the_rate_limiter_keeps_the_same_instance()
+    {
+        using var permits = Permits(8);
+        Assert.Null(permits.Shared.IdleDuration);
+    }
+}
+
+/// <summary>#241: <see cref="GridRepository.ReadBlockAsync"/> with <c>concurrentSummary</c>, and the endpoint that chooses it.</summary>
 [Collection(ApiCollection.Name)]
 public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
 {
@@ -109,6 +177,88 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         Assert.Equal(0, sources.Open);
     }
 
+    [Fact]
+    public async Task The_endpoint_reads_a_first_view_on_two_connections_and_a_later_block_on_one()
+    {
+        var sources = new Holder();
+        await using var host = WithCountingSources(sources);
+        var client = await SignedInAsync(host);
+
+        var first = await PostAsync(client, Filtered(-1e15 - 1, startRow: 0));
+        Assert.Equal(2, sources.Value!.Peak);
+        sources.Value.Reset();
+        var later = await PostAsync(client, Filtered(-1e15 - 1, startRow: 100));
+        Assert.Equal(1, sources.Value.Peak);
+        Assert.Equal(first.GetProperty("rowCount").GetInt32(), later.GetProperty("rowCount").GetInt32());
+        Assert.Equal(first.GetProperty("summary").GetRawText(), later.GetProperty("summary").GetRawText());
+    }
+
+    [Fact]
+    public async Task Without_a_spare_permit_the_first_view_is_one_batch_on_one_connection()
+    {
+        var sources = new Holder();
+        await using var host = WithCountingSources(sources, ("RATE_LIMIT_GLOBAL_CONCURRENCY", "1"));
+        var client = await SignedInAsync(host);
+
+        var first = await PostAsync(client, Filtered(-1e15 - 2, startRow: 0));
+        Assert.Equal(1, sources.Value!.Peak);
+        Assert.True(first.GetProperty("rowCount").GetInt32() > 0);
+    }
+
+    [Fact]
+    public async Task Many_first_views_at_once_all_finish_and_never_hold_more_connections_than_permits()
+    {
+        // Three permits for six users who all open a brand-new view at the same moment: no request waits on a second
+        // permit while holding its first (no deadlock), and connections never outnumber the permits.
+        var sources = new Holder();
+        await using var host = WithCountingSources(sources, ("RATE_LIMIT_GLOBAL_CONCURRENCY", "3"), ("RATE_LIMIT_GLOBAL_QUEUE", "32"));
+        var clients = new List<HttpClient>();
+        for (var i = 0; i < 6; i++)
+            clients.Add(await SignedInAsync(host));
+        sources.Value!.Reset();
+
+        var responses = await Task.WhenAll(clients.Select((c, i) => PostAsync(c, Filtered(-1e15 - 10 - i, startRow: 0))))
+            .WaitAsync(TimeSpan.FromSeconds(60), Ct);
+
+        Assert.All(responses, r => Assert.True(r.GetProperty("rowCount").GetInt32() > 0));
+        Assert.InRange(sources.Value.Peak, 1, 3);
+    }
+
+    private static object Filtered(double threshold, int startRow) => new
+    {
+        startRow,
+        endRow = startRow + 100,
+        columns = BuiltInPresets.All,
+        sortModel = new[] { new { colId = "market_value", sort = "desc" } },
+        filterModel = new Dictionary<string, object> { ["spread_bp"] = new { filterType = "number", type = "greaterThan", filter = threshold } },
+    };
+
+    private static async Task<JsonElement> PostAsync(HttpClient client, object body)
+    {
+        var res = await client.PostAsJsonAsync("/api/positions/query", body, Ct);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        return JsonDocument.Parse(await res.Content.ReadAsStringAsync(Ct)).RootElement.Clone();
+    }
+
+    private async Task<HttpClient> SignedInAsync(WebApplicationFactory<Program> host)
+    {
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+        return client;
+    }
+
+    private WebApplicationFactory<Program> WithCountingSources(Holder holder, params (string Key, string Value)[] settings) =>
+        api.WithWebHostBuilder(b =>
+        {
+            foreach (var (key, value) in settings) b.UseSetting(key, value);
+            b.ConfigureTestServices(s =>
+            {
+                s.RemoveAll<IDataSourceRegistry>();
+                s.AddSingleton<IDataSourceRegistry>(sp => holder.Value = new CountingSources(
+                    new DataSourceRegistry(sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<DbConnectionCounter>())));
+            });
+        });
+
     private static IEnumerable<object?> Values(GridColumn column) => column switch
     {
         Int64Column c => c.Values.Cast<object?>(),
@@ -120,6 +270,11 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         BoolColumn c => c.Values.Cast<object?>(),
         _ => throw new InvalidOperationException(column.GetType().Name),
     };
+
+    private sealed class Holder
+    {
+        public CountingSources? Value { get; set; }
+    }
 
     /// <summary>Counts the <c>core</c> connections open at once (Dapper's reads); everything else passes through.</summary>
     private sealed class CountingSources(IDataSourceRegistry inner) : IDataSourceRegistry
