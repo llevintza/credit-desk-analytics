@@ -677,7 +677,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
             ["RATE_LIMIT_PER_USER_PER_MIN"] = "0",
             ["RATE_LIMIT_GLOBAL_CONCURRENCY"] = "lots",
             ["RATE_LIMIT_GLOBAL_QUEUE"] = "-3",
-            ["RATE_LIMIT_PER_USER_BURST"] = "40",
+            ["RATE_LIMIT_PER_USER_BURST"] = "-1", // the default, 60: a fast tour of all four pages needs up to 42 (ADR-0014)
             ["RATE_LIMIT_PER_USER_CONCURRENCY"] = "0",
             ["RATE_LIMIT_PER_USER_QUEUE"] = "3",
             ["RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY"] = "0",
@@ -685,7 +685,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
             ["EXPORT_GLOBAL_SLOTS"] = "x",
             ["EXPORT_TIMEOUT_SECONDS"] = "-1",
         }).Build();
-        Assert.Equal(new LimitsOptions(60, 40, 5, 8, 32, 1, 3, 5, 15, 2, TimeSpan.FromSeconds(60), 25_000), LimitsOptions.From(config));
+        Assert.Equal(new LimitsOptions(60, 60, 5, 8, 32, 1, 3, 5, 15, 2, TimeSpan.FromSeconds(60), 25_000), LimitsOptions.From(config));
         foreach (var bad in new[] { "0", "NaN", "Infinity", "soon", "", "3600.5", "1e7", "1e300" })
             Assert.Equal(TimeSpan.FromSeconds(60), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", bad))).ExportTimeout);
         Assert.Equal(TimeSpan.FromSeconds(0.5), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "0.5"))).ExportTimeout);

@@ -1,5 +1,5 @@
 # E2E override (README §11, CI `e2e` job): the same stack with higher per-user limits. One test account loads
-# every page many times a minute, which the production limit (60/min, burst 20) would throttle. The limits stay
+# every page many times a minute, which the production limit (60/min, burst 60) would throttle. The limits stay
 # on (AGENTS.md: off only in unit tests) — just sized for an automated user. DEV_FAULT_INJECTION lets the P3
 # e2e hold one insights source back with X-Debug-Delay-Ms (README §6 P3 acceptance); production never sets it.
 services:

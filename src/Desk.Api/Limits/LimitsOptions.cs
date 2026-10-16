@@ -18,7 +18,10 @@ public sealed record LimitsOptions(
 {
     public static LimitsOptions From(IConfiguration config) => new(
         PerUserPerMinute: Positive(config, "RATE_LIMIT_PER_USER_PER_MIN", 60),
-        PerUserBurst: Positive(config, "RATE_LIMIT_PER_USER_BURST", 20),
+        // ADR-0014: a user clicking through all four pages as fast as they paint spent 38-42 tokens in 5-7 s, sign-in
+        // included (5 runs); a human-paced session needs 6. One minute's worth admits the fast tour with room to
+        // spare; the sustained 60/min is unchanged.
+        PerUserBurst: Positive(config, "RATE_LIMIT_PER_USER_BURST", 60),
         LoginPerIpPerMinute: Positive(config, "RATE_LIMIT_LOGIN_PER_IP_PER_MIN", 5),
         GlobalConcurrency: Positive(config, "RATE_LIMIT_GLOBAL_CONCURRENCY", 8),
         GlobalQueue: Positive(config, "RATE_LIMIT_GLOBAL_QUEUE", 32),
