@@ -228,6 +228,10 @@ jobs:
       - run: npm run lint
       - run: npm test -- --watch=false --coverage
       - run: npm run build
+      # #355: the same check pages.yml runs before publishing, on the PR's build, so a foreign script fails here and
+      # not after the merge. The plain build has no meta CSP (pages.yml adds it), hence --no-csp.
+      - name: No untrusted scripts in the build (#355)
+        run: node --disable-warning=ExperimentalWarning --experimental-vm-modules ../.github/scripts/pages-script-check.mjs dist/web/browser --base / --no-csp
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-web
@@ -377,6 +381,13 @@ jobs:
             perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
+      - name: Pages script check tests (#355, ≥80% line/branch)
+        run: |
+          node --experimental-vm-modules --disable-warning=ExperimentalWarning \
+            --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=.github/scripts/pages-script-check.mjs \
+            .github/scripts/pages-script-check.test.mjs
 
   perf-deps:
     # Dependabot /perf bumps (#190, #198): install perf/ from its lockfile and round-trip the
