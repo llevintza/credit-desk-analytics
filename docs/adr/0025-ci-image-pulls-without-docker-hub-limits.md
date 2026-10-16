@@ -17,7 +17,7 @@ Every Docker Hub pull in CI on `main` @ `342dce8`:
 | `zricethezav/gitleaks:v8.30.1` | `docker run` in `ci.yml`, `gitleaks.yml`; `deploy/ci-images/gitleaks` | `secrets`, weekly gitleaks |
 | `rhysd/actionlint:1.7.12` | `docker run`; `deploy/ci-images/actionlint` | `workflows` |
 | `koalaman/shellcheck:stable` | `docker run`; `deploy/ci-images/shellcheck` | `workflows` |
-| `grafana/k6:1.3.0` | `docker run`; `deploy/ci-images/k6` | `budgets` |
+| `grafana/k6:1.3.0` (2.3.0 since #270) | `docker run`; `deploy/ci-images/k6` | `budgets` |
 | `postgres:17-alpine` | `services:` in `api`; `docker-compose.yml`; Testcontainers literals in `tests/` | `api`, `compose-smoke`, `budgets`, `e2e` |
 | `node:22-alpine` | `deploy/Dockerfile` (built by compose) | `compose-smoke`, `budgets`, `e2e` |
 | `testcontainers/ryuk` (chosen by the Testcontainers version) | Testcontainers | `api` |
@@ -73,6 +73,7 @@ Combine 2 and 3:
 - A normal PR run makes no anonymous Docker Hub pull, unless mirror.gcr.io misses an image. Then that one pull falls back to Docker Hub, which is the behaviour before this change.
 - If mirror.gcr.io ever drops `library/postgres@b0f9…`, the `api` job's service fails to start. There's no fallback for that one pull. It's among the most-pulled images and CI requests it on every run, so we accept the risk. The fix would be to start that database from a step (after the mirror action) instead of `services:`.
 - `deploy/ci-images/k6/Dockerfile` had drifted to `grafana/k6:2.3.0` (a Dependabot bump) while `ci.yml` still runs 1.3.0. It is realigned to the 1.3.0 digest CI actually runs. A k6 2.x upgrade needs its own PR that moves both lines and re-measures the budgets. #255 (assert the ci-images digests match `ci.yml`) would catch this drift.
+- **Update (#270, #398):** both lines now pin `ghcr.io/grafana/k6:2.3.0@sha256:9c2dee7f…`, the same index as Docker Hub's `grafana/k6:2.3.0`. Both registries list the same four per-platform manifests (`06181d5d 7ddfb40d 98305727 fb288a6f`, `bash perf/ci-image-mirrors.sh`). The budgets were re-measured on a local stack in that PR. The k6 numbers in ADR-0006 and ADR-0011 were taken with 1.3.0 and stay as recorded.
 - Dependabot's docker ecosystem now reads the gitleaks and k6 pins from ghcr.io (public, anonymous tag listing). If it can't, the symptom is missing bump PRs, not a broken build.
 - Testcontainers' Ryuk is the one tag-only pull in CI (before and after this change). It now resolves through mirror.gcr.io first, so for that image we trust Google's cache of Docker Hub as well as Docker Hub. Every other image is pulled by digest, which the daemon checks against the content, so neither the mirror nor the fallback can serve different bytes. Pinning Ryuk by digest through the Testcontainers config would close that gap.
 - Local commands in docs still show the Docker Hub names. They pull the same digests, and the rate limit isn't a problem off shared runner IPs.
