@@ -287,6 +287,58 @@ public sealed class PortfolioGrantsTests(PostgresApiFactory api)
             Assert.Equal(stamp, (await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct)).SecurityStamp);
     }
 
+    private async Task<int[]> IdsAsync(string sql, int[]? portfolios = null)
+    {
+        await using var conn = new NpgsqlConnection(api.ConnectionString);
+        await conn.OpenAsync(Ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("p", portfolios ?? []);
+        cmd.Parameters.AddWithValue("asof", PostgresApiFactory.AsOf);
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+        var ids = new List<int>();
+        while (await reader.ReadAsync(Ct)) ids.Add(reader.GetInt32(0));
+        return [.. ids];
+    }
+
+    [Fact]
+    public async Task Funds_insights_and_deals_follow_real_grants()
+    {
+        // Every fund 2 portfolio plus one of fund 1's: fund 2 is visible, fund 1 isn't (all-or-nothing gate).
+        var fund1 = await IdsAsync("SELECT portfolio_id FROM core.portfolio WHERE fund_id = 1 ORDER BY 1");
+        var fund2 = await IdsAsync("SELECT portfolio_id FROM core.portfolio WHERE fund_id = 2 ORDER BY 1");
+        int[] granted = [.. fund2, fund1[0]];
+        await using var host = GrantsHost();
+        var client = await SignedInAsync(host, Roles.Viewer, granted);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/funds/2/performance", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/funds/1/performance", Ct)).StatusCode);
+
+        // Insights: P&L by portfolio lists exactly the granted portfolios.
+        var core = await JsonAsync(await client.GetAsync("/api/insights/core", Ct));
+        var pnl = core.GetProperty("grids").EnumerateArray().Single(g => g.GetProperty("id").GetString() == "pnl_attribution_portfolio");
+        var names = (await NamesAsync(granted)).Order();
+        Assert.Equal(names, pnl.GetProperty("rows").EnumerateArray().Select(r => r[0].GetString()!).Order());
+
+        // Deals: holdings only in the granted portfolios.
+        var held = await IdsAsync("SELECT DISTINCT deal_id FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@p) ORDER BY 1", granted);
+        var deals = (await JsonAsync(await client.GetAsync("/api/deals", Ct))).GetProperty("deals").EnumerateArray()
+            .Where(d => d.GetProperty("positions").ValueKind != JsonValueKind.Null)
+            .Select(d => d.GetProperty("dealId").GetInt32()).Order();
+        Assert.Equal(held, deals);
+    }
+
+    private async Task<string[]> NamesAsync(int[] portfolios)
+    {
+        await using var conn = new NpgsqlConnection(api.ConnectionString);
+        await conn.OpenAsync(Ct);
+        await using var cmd = new NpgsqlCommand("SELECT name FROM core.portfolio WHERE portfolio_id = ANY(@p)", conn);
+        cmd.Parameters.AddWithValue("p", portfolios);
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+        var names = new List<string>();
+        while (await reader.ReadAsync(Ct)) names.Add(reader.GetString(0));
+        return [.. names];
+    }
+
     [Fact]
     public async Task Deleting_an_account_deletes_its_grants()
     {
