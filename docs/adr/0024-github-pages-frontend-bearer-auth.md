@@ -281,6 +281,6 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
     - `Permissions-Policy`, `Cross-Origin-Opener-Policy` and `X-Content-Type-Options` have no meta form. GitHub Pages' own headers apply instead; the live check records them.
     - `frame-ancestors` is still missing as a header. The frame guard covers it while script runs.
     - HSTS on `github.io` is GitHub's (the domain is preloaded).
-  - **Live-site check:** `perf/security-headers.mjs --api <Render origin> --pages <Pages URL>` is the recorded check. Over https it also fails an HSTS shorter than a year. A human runs it against the live site (agents measure only local stacks) and posts the table on #66.
+  - **Live-site check:** `perf/security-headers.mjs --live --api <Render origin> --pages <Pages URL>` is the recorded check. Without `--live` the script refuses any non-local host (README §7.3). Over https it also fails an HSTS shorter than a year. A human runs it against the live site (agents measure only local stacks) and posts the table on #66.
   - A future page that must be framed (none is planned) would need an allowlist in the guard and a matching `frame-ancestors`.
 
