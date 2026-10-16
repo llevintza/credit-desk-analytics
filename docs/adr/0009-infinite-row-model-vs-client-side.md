@@ -69,6 +69,7 @@ PERF=1 BASE_URL=http://localhost:5182 DESK_EMAIL=… DESK_PASSWORD=… npx playw
 - First paint stays flat however wide the preset: the "All" preset is a 117 KB first block, not 28.7 MB.
 - Memory stays at what's on screen plus the block cache (≤ 50 blocks).
 - Every scroll into an unloaded region is a request. The server's per-view caching (ADR-0006) makes revisits cheap, and the per-user rate limit is sized for it. Bursts beyond it are retried after `Retry-After`.
+- Block queries (POSTs, which return a weak ETag and 304 on `If-None-Match`, but whose ETag the SPA doesn't echo) and the meta GETs (`/api/meta/as-of`, `/columns`, `/portfolios`, presets), which send no ETag, rely on the server-side caches only (the per-view block cache and the per-batch `MetaCache`), not on browser revalidation: a 304 would save bytes but no database work, and the cross-origin bearer flow (ADR-0024) doesn't change that (#152).
 - Grouping or pivoting in the browser isn't possible with this model. That's out of scope for Community (README §16), and the server already returns the totals.
 - Sort and filter semantics are the server's. The Community column filters (text, number, date) map one-to-one onto the API's filter model; the set filter is Enterprise and isn't offered.
 - Copy (Ctrl+C) copies the focused cell only: range selection is Enterprise (README §9.3).

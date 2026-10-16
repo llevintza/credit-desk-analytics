@@ -21,7 +21,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    // No trace for the login: it would record the throwaway password's fill (#155).
+    { name: 'setup', testMatch: /auth\.setup\.ts/, use: { trace: 'off' } },
     { name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 900 }, storageState: '.auth/state.json' }, dependencies: ['setup'] },
   ],
 });
