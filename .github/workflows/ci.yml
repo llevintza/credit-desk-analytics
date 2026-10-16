@@ -363,6 +363,12 @@ jobs:
         run: node --test .github/scripts/concurrency-wiring.test.mjs
       - name: CI image pins agree with their tracked Dockerfiles (#255)
         run: node --test .github/scripts/ci-image-pins.test.mjs
+      - name: Payload-size check tests (#136, ≥80% line/branch)
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=perf/payload-size.mjs \
+            perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
 
