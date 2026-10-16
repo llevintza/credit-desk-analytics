@@ -64,8 +64,8 @@ first   GET   429  /api/insights/market
 first   GET   429  /api/insights/reference
 ```
 
-A burst of 40 still refused one call in one of six runs (that run needed 42). With 60, eight fast runs and two
-human-paced runs on the final code had **0 refusals**. The sustained rate (60/min) is never the constraint: the
+A burst of 40 still refused one call in one of two fast runs, and the unthrottled runs needed up to 42. With 60,
+eight fast runs and two human-paced runs on the final code had **0 refusals**. The sustained rate (60/min) is never the constraint: the
 busiest minute of a human session is 39–43 requests.
 
 The concurrency limits hold: the main partition never had more than 2–4 calls waiting (queue 8), the insights board
