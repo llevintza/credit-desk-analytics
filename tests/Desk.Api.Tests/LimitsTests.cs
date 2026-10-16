@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Threading.RateLimiting;
 using Desk.Api.Auth;
 using Desk.Api.Limits;
 using Desk.Api.Positions;
@@ -481,11 +482,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task Login_also_waits_for_the_shared_database_limit()
     {
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
             b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -497,7 +499,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         // Another user fills the shared queue (the same user would wait in their own per-user queue instead).
         var queued = other.GetAsync("/api/me", Ct);
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(1);
         var login = await PostgresApiFactory.PostLoginAsync(PostgresApiFactory.NewClient(host), admin.Email!);
         Assert.Equal(HttpStatusCode.TooManyRequests, login.StatusCode);
 
@@ -519,11 +521,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task Db_endpoints_share_one_concurrency_limit_then_429()
     {
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
             b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -536,7 +539,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = client.GetAsync(HoldsAPermit, Ct);   // holds the only permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = second.GetAsync(HoldsAPermit, Ct);    // waits in the queue
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(1);
         var rejected = await third.GetAsync(HoldsAPermit, Ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
@@ -717,10 +720,11 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task One_request_per_user_in_flight_with_a_small_queue_and_other_users_unaffected()
     {
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_PER_USER_QUEUE", "1");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -729,7 +733,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one permit, held in the database
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = client.GetAsync("/api/me", Ct);           // the user's one queue place
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(1);
         var rejected = await client.GetAsync("/api/me", Ct);
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.False(queued.IsCompleted);
@@ -759,11 +763,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task A_request_waiting_in_its_users_queue_holds_no_database_permit()
     {
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "2");
             b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -773,7 +778,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = client.GetAsync(HoldsAPermit, Ct);   // A's one permit, and one of the two database permits
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = new[] { client.GetAsync("/api/me", Ct), client.GetAsync("/api/me", Ct) }; // in A's own queue
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(2);
 
         // Had A's queued requests taken the second database permit and the shared queue place, B would get a 429.
         Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
@@ -791,13 +796,14 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // #184: the middleware tries a synchronous acquire before it queues. A token spent on that failed attempt is
         // never given back, so a request that waits for a database permit would cost its caller two.
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
             b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "1");
             b.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "1");
             b.UseSetting("RATE_LIMIT_PER_USER_BURST", "3");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var holder = PostgresApiFactory.NewClient(host);
@@ -807,7 +813,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = holder.GetAsync(HoldsAPermit, Ct);    // holds the only database permit
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = user.GetAsync("/api/me", Ct);           // waits in the shared queue: token 1 of 3
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(1);
         Assert.False(queued.IsCompleted);
 
         gate.Release.TrySetResult();
@@ -824,12 +830,13 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // Anonymous calls from one address share a key; with a per-key cap of 1 and a queue of 1, the third would be
         // a 429. They wait only for the shared database limiter, then get their 401.
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_PER_USER_QUEUE", "1");
             b.UseSetting("RATE_LIMIT_GLOBAL_CONCURRENCY", "1");
             b.UseSetting("RATE_LIMIT_GLOBAL_QUEUE", "8");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -839,7 +846,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var anonymous = PostgresApiFactory.NewClient(host);
         var calls = Enumerable.Range(0, 3).Select(_ => anonymous.GetAsync("/api/me", Ct)).ToArray();
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(3); // all three wait for the database permit; none was refused
 
         gate.Release.TrySetResult();
         Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
@@ -852,11 +859,12 @@ public sealed class LimitsTests(PostgresApiFactory api)
     {
         // No refill during the test: 4 tokens are all this user gets.
         var gate = new BlockingCommands();
+        var probe = new QueueProbe();
         await using var host = api.WithWebHostBuilder(b =>
         {
             b.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "1");
             b.UseSetting("RATE_LIMIT_PER_USER_BURST", "4");
-            b.ConfigureTestServices(s => s.AddSingleton<IInterceptor>(gate));
+            b.ConfigureTestServices(s => { s.AddSingleton<IInterceptor>(gate); probe.Install(s); });
         });
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
@@ -866,7 +874,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var second = client.GetAsync("/api/me", Ct);           // both queue behind it
         var third = client.GetAsync("/api/me", Ct);
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(2);
 
         gate.Release.TrySetResult();
         Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
@@ -1174,7 +1182,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
     /// <summary>One surveillance grid: a single connection, held by <see cref="GatedSources"/>.</summary>
     private const string HeldInsights = "/api/insights/surveillance?grid=oc_cushion_buckets";
 
-    private WebApplicationFactory<Program> WithGatedSurveillance(GatedSources[] gate, IInterceptor? commands, params (string Key, string Value)[] settings) =>
+    private WebApplicationFactory<Program> WithGatedSurveillance(GatedSources[] gate, IInterceptor? commands, QueueProbe probe, params (string Key, string Value)[] settings) =>
         api.WithWebHostBuilder(b =>
         {
             foreach (var (key, value) in settings)
@@ -1186,6 +1194,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
                     sp.GetRequiredService<Desk.Data.Sources.DataSourceRegistry>(), ConnectionStrings.Surveillance));
                 if (commands is not null)
                     s.AddSingleton(commands);
+                probe.Install(s);
             });
         });
 
@@ -1203,7 +1212,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task Insights_reads_have_their_own_in_flight_cap_and_queue_then_429()
     {
         var gate = new GatedSources[1];
-        await using var host = WithGatedSurveillance(gate, null,
+        var probe = new QueueProbe();
+        await using var host = WithGatedSurveillance(gate, null, probe,
             ("RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY", "2"), ("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE", "1"));
         var client = await SignedInOnAsync(host);
         var other = await SignedInOnAsync(host);
@@ -1211,7 +1221,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = new[] { client.GetAsync(HeldInsights, Ct), client.GetAsync(HeldInsights, Ct) }; // both permits
         var held = await HeldAsync(gate, 2);
         var queued = client.GetAsync("/api/insights/core", Ct);   // the one queue place
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(1);
         var rejected = await client.GetAsync("/api/insights/market", Ct);
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
         Assert.Equal("1", rejected.Headers.RetryAfter?.ToString());
@@ -1234,13 +1244,14 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task By_default_a_user_has_5_insights_reads_in_flight_and_15_queued_then_429()
     {
         var gate = new GatedSources[1];
-        await using var host = WithGatedSurveillance(gate, null);
+        var probe = new QueueProbe();
+        await using var host = WithGatedSurveillance(gate, null, probe);
         var client = await SignedInOnAsync(host);
 
         var running = Enumerable.Range(0, 5).Select(_ => client.GetAsync(HeldInsights, Ct)).ToArray();
         var held = await HeldAsync(gate, 5);
         var queued = Enumerable.Range(0, 15).Select(_ => client.GetAsync("/api/insights/core", Ct)).ToArray();
-        await Task.Delay(200, Ct);
+        await probe.WaitForAsync(15);
         Assert.All(queued, q => Assert.False(q.IsCompleted));
         var rejected = await client.GetAsync("/api/insights/core", Ct);
         Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
@@ -1255,8 +1266,9 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task With_insights_reads_in_flight_other_routes_still_run_one_at_a_time_with_a_queue_of_8()
     {
         var gate = new GatedSources[1];
+        var probe = new QueueProbe();
         var commands = new BlockingCommands();
-        await using var host = WithGatedSurveillance(gate, commands);
+        await using var host = WithGatedSurveillance(gate, commands, probe);
         var admin = await api.CreateUserAsync(Roles.Admin);
         var client = PostgresApiFactory.NewClient(host);
         await PostgresApiFactory.LoginAsync(client, admin.Email!);
@@ -1267,7 +1279,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = client.GetAsync(HoldsAPermit, Ct);   // the user's one main permit, held in the database
         await commands.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         var queued = Enumerable.Range(0, 8).Select(_ => client.GetAsync("/api/me", Ct)).ToArray(); // the 8 queue places
-        await Task.Delay(200, Ct);
+        await probe.WaitForAsync(8);
         Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/api/me", Ct)).StatusCode);
         Assert.All(queued, q => Assert.False(q.IsCompleted));
 
@@ -1287,7 +1299,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
     public async Task An_insights_read_waiting_in_its_users_queue_holds_no_database_permit()
     {
         var gate = new GatedSources[1];
-        await using var host = WithGatedSurveillance(gate, null,
+        var probe = new QueueProbe();
+        await using var host = WithGatedSurveillance(gate, null, probe,
             ("RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY", "1"), ("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE", "2"),
             ("RATE_LIMIT_GLOBAL_CONCURRENCY", "2"), ("RATE_LIMIT_GLOBAL_QUEUE", "1"));
         var client = await SignedInOnAsync(host);
@@ -1296,7 +1309,7 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var running = client.GetAsync(HeldInsights, Ct);        // A's one insights permit, and one of the two database permits
         var held = await HeldAsync(gate, 1);
         var queued = new[] { client.GetAsync("/api/insights/core", Ct), client.GetAsync("/api/insights/market", Ct) }; // in A's own queue
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(2);
 
         // Had A's queued reads taken the second database permit and the shared queue place, B would get a 429.
         Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/insights/reference", Ct)).StatusCode);
@@ -1314,7 +1327,8 @@ public sealed class LimitsTests(PostgresApiFactory api)
         // No refill during the test: 3 tokens are all this user gets, one per read. With the token bucket before the
         // per-user partition, each queued read would pay twice and the third would be a 429.
         var gate = new GatedSources[1];
-        await using var host = WithGatedSurveillance(gate, null,
+        var probe = new QueueProbe();
+        await using var host = WithGatedSurveillance(gate, null, probe,
             ("RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY", "1"),
             ("RATE_LIMIT_PER_USER_PER_MIN", "1"), ("RATE_LIMIT_PER_USER_BURST", "3"));
         var client = await SignedInOnAsync(host);
@@ -1323,12 +1337,69 @@ public sealed class LimitsTests(PostgresApiFactory api)
         var held = await HeldAsync(gate, 1);
         var second = client.GetAsync("/api/insights/core", Ct);
         var third = client.GetAsync("/api/insights/market", Ct);
-        await Task.Delay(100, Ct);
+        await probe.WaitForAsync(2);
 
         held.Release.TrySetResult();
         Assert.Equal(HttpStatusCode.OK, (await running).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await second).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await third).StatusCode);
+    }
+
+    /// <summary>
+    /// #245: counts the requests waiting in the /api limiter chain (a per-user queue or the shared database queue), so a
+    /// test waits until the queue it builds is there instead of sleeping a fixed time. It wraps the global limiter the
+    /// middleware uses and changes nothing else: an acquire that completes at once (granted or refused) never counts.
+    /// </summary>
+    private sealed class QueueProbe : PartitionedRateLimiter<HttpContext>
+    {
+        private PartitionedRateLimiter<HttpContext>? _inner;
+        private int _waiting;
+
+        public int Waiting => Volatile.Read(ref _waiting);
+
+        private PartitionedRateLimiter<HttpContext> Inner => _inner ?? throw new InvalidOperationException("Not installed.");
+
+        public void Install(IServiceCollection services) =>
+            services.PostConfigure<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>(o =>
+            {
+                _inner = o.GlobalLimiter!;
+                o.GlobalLimiter = this;
+            });
+
+        /// <summary>Waits (bounded, 10 s) until exactly <paramref name="count"/> requests are queued.</summary>
+        public async Task WaitForAsync(int count)
+        {
+            for (var i = 0; i < 400 && Waiting != count; i++)
+                await Task.Delay(25, Ct);
+            Assert.Equal(count, Waiting);
+        }
+
+        public override RateLimiterStatistics? GetStatistics(HttpContext resource) => Inner.GetStatistics(resource);
+
+        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount) => Inner.AttemptAcquire(resource, permitCount);
+
+        protected override async ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken)
+        {
+            var pending = Inner.AcquireAsync(resource, permitCount, cancellationToken);
+            if (pending.IsCompleted)
+                return await pending;
+            Interlocked.Increment(ref _waiting);
+            try
+            {
+                return await pending;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _waiting);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _inner?.Dispose();
+        }
+
+        protected override ValueTask DisposeAsyncCore() => _inner?.DisposeAsync() ?? ValueTask.CompletedTask;
     }
 
     /// <summary>A signed-in request that reads the database through the /api limiters (a user's saved presets).</summary>

@@ -3,6 +3,7 @@ using Desk.Data.Auth;
 using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Desk.Api.Auth;
@@ -19,7 +20,7 @@ public static class AuthSetup
     public const string AuthTimeClaim = "desk:auth_time";
     /// <summary>Claim set at login and carried by every refresh: one id per sign-in, so logout can revoke that session only.</summary>
     public const string SessionIdClaim = "desk:sid";
-    /// <summary>Claim on every issued token pair: the id that makes its refresh token single-use (#353, <see cref="RefreshRotations"/>).</summary>
+    /// <summary>Claim on every issued token pair: the id that makes its refresh token single-use (#353, <see cref="SessionStore"/>).</summary>
     public const string RefreshIdClaim = "desk:rid";
 
     /// <summary>
@@ -45,7 +46,8 @@ public static class AuthSetup
         services.AddScoped<TimingGuard>();
         services.AddSingleton(LoginFloorOptions.Default);
         services.AddSingleton<SessionRevocations>();
-        services.AddSingleton(sp => new RefreshRotations(RefreshRotations.GraceFrom(sp.GetRequiredService<IConfiguration>())));
+        services.AddSingleton(sp => new SessionStore(SessionStore.GraceFrom(sp.GetRequiredService<IConfiguration>()),
+            sp.GetRequiredService<IDbContextFactory<AppDbContext>>(), sp.GetRequiredService<SessionRevocations>()));
 
         services.AddAuthentication(Scheme).AddBearerToken(Scheme, o =>
         {
