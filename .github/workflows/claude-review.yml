@@ -21,7 +21,13 @@ jobs:
   review:
     # Advisory only. Do not add this job to the main ruleset's required checks:
     # a skipped draft/fork/Dependabot run would count as passing.
+    # Paused since 2026-10-16: the claude-review key is out of credit ("Credit balance
+    # is too low") until 2026-11-01. Opt-in: unset or any other value skips the job.
+    # To resume, Leo sets the repository variable CLAUDE_REVIEW_ENABLED=true; no PR
+    # is needed. The Orca pr-reviewer advisory is the review of record meanwhile.
+    # #463: https://github.com/llevintza/credit-desk-analytics/issues/463
     if: >-
+      vars.CLAUDE_REVIEW_ENABLED == 'true' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&

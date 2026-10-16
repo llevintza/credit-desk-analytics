@@ -157,6 +157,22 @@ test("#256 item 2: the k6 step's rc handling, run for 0, 99 and 107 (MIN_BOOK=ab
 const REVIEW = jobBlock(WORKFLOWS.find(([f]) => f === "claude-review.yml")[1], "review");
 const UPLOAD_PIN = /uses: actions\/upload-artifact@([0-9a-f]{40}) # (v[\d.]+)/;
 
+test("#463: the claude-review job is opt-in via CLAUDE_REVIEW_ENABLED and keeps its guards", () => {
+  const cond = /^ {4}if: >-\n((?: {6}.*\n)+)/m.exec(REVIEW);
+  assert.ok(cond, "review job has no folded if: block");
+  const terms = cond[1].split("\n").map((l) => l.trim().replace(/ &&$/, "")).filter(Boolean);
+  for (const t of [
+    "vars.CLAUDE_REVIEW_ENABLED == 'true'",
+    "github.event.pull_request.draft == false",
+    "github.event.pull_request.head.repo.full_name == github.repository",
+    "github.event.pull_request.user.login != 'dependabot[bot]'",
+    "(github.actor == 'cursor[bot]' || !endsWith(github.actor, '[bot]'))",
+  ]) assert.ok(terms.includes(t), `review if: is missing ${t}`);
+  // Every term is AND-ed: an || at the top level would let the job run with the switch off.
+  assert.equal(cond[1].trim().split("&&").length, terms.length);
+  assert.match(REVIEW, /#463/);
+});
+
 test("#461: the review job uploads the execution output only after the review step failed and the scan was clean", () => {
   assert.match(stepBlock(REVIEW, "Claude review"), /^ {8}id: review$/m);
   const scan = stepBlock(REVIEW, "Scan the Claude execution output for secrets");

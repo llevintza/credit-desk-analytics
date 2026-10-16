@@ -150,6 +150,10 @@ The review job is **advisory and not a required check**. Leo's decision (2026-10
      - **Value:** the key
 4. It is unknown whether the Claude GitHub App (<https://github.com/apps/claude>) is installed on this repo. The workflow passes its own `GITHUB_TOKEN`, so no App install is required and review comments appear as **github-actions[bot]**. If you later install the App and remove `github_token:` from the workflow, comments post as **claude[bot]** and the job would need `id-token: write`.
 
+**Paused since 2026-10-16 ([#463](https://github.com/llevintza/credit-desk-analytics/issues/463)):** the key is out of credit ("Credit balance is too low") until 2026-11-01, so the job is opt-in behind the repository variable `CLAUDE_REVIEW_ENABLED`. Unset (or any value other than `true`), the `review` job is skipped (grey, not red). While it is paused, the Orca `pr-reviewer` advisory is the review of record.
+
+To resume (Leo, on or after 2026-11-01, once the credit is back): GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **Variables** → **New repository variable**, **Name:** `CLAUDE_REVIEW_ENABLED`, **Value:** `true`. The next PR push runs the review; no PR is needed. To pause again, delete the variable or set it to anything else.
+
 **What the review does:**
 - It runs on every same-repo, non-draft PR against `main` (`.github/workflows/claude-review.yml`).
 - It posts inline comments marked **[blocking]** or **[suggestion]**.
