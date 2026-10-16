@@ -40,7 +40,7 @@ public static class AuthEndpoints
             .Produces<AccessTokenResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
-        auth.MapPost("/logout", Logout)
+        auth.MapPost("/logout", LogoutAsync)
             .WithName("Logout")
             .WithSummary("Ends this sign-in: its access and refresh tokens stop working on this instance.")
             .Produces(StatusCodes.Status204NoContent);
@@ -62,7 +62,7 @@ public static class AuthEndpoints
         AuditQueue audit,
         TimingGuard guard,
         AppDbContext db,
-        RefreshRotations rotations,
+        SessionStore sessions,
         TimeProvider time,
         CancellationToken ct)
     {
@@ -101,7 +101,7 @@ public static class AuthEndpoints
         identity.AddClaim(new Claim(AuthSetup.AuthTimeClaim, now.ToString("O", CultureInfo.InvariantCulture)));
         identity.AddClaim(new Claim(AuthSetup.SessionIdClaim, sid));
         identity.AddClaim(new Claim(AuthSetup.RefreshIdClaim, rid));
-        rotations.Issue(sid, rid, now + AuthSetup.AbsoluteExpiry, now);
+        await sessions.IssueAsync(sid, rid, now + AuthSetup.AbsoluteExpiry, now, ct);
 
         audit.Enqueue(AuditKinds.LoginSuccess, user!.Email, "/api/auth/login", StatusCodes.Status200OK, started, time);
         // The bearer handler writes the AccessTokenResponse body itself.
@@ -120,7 +120,7 @@ public static class AuthEndpoints
     /// unexpired (8 h idle), the session under 24 h and not logged out, the security stamp unchanged (disable,
     /// password reset), and the account still allowed to sign in (not disabled or expired). The new tokens keep the
     /// original sign-in time and session id, so neither limit can be extended by refreshing. Each refresh token works
-    /// once: one that comes back after it was swapped ends the session (#353, <see cref="RefreshRotations"/>), except the
+    /// once: one that comes back after it was swapped ends the session (#353, <see cref="SessionStore"/>), except the
     /// one swapped last, within the short grace window, which gets a pair for the current token without a new swap.
     /// </summary>
     internal static async Task<IResult> RefreshAsync(
@@ -129,9 +129,10 @@ public static class AuthEndpoints
         SignInManager<DeskUser> signIn,
         IOptionsMonitor<BearerTokenOptions> bearer,
         SessionRevocations revoked,
-        RefreshRotations rotations,
-        ILogger<RefreshRotations> logger,
-        TimeProvider time)
+        SessionStore sessions,
+        ILogger<SessionStore> logger,
+        TimeProvider time,
+        CancellationToken ct)
     {
         var now = time.GetUtcNow();
         var ticket = string.IsNullOrEmpty(request.RefreshToken) ? null : bearer.Get(AuthSetup.Scheme).RefreshTokenProtector.Unprotect(request.RefreshToken);
@@ -151,12 +152,12 @@ public static class AuthEndpoints
         // Checked last, so an expired or otherwise dead token is just refused: only a live token can be a replay.
         var sid = ticket.Principal.FindFirstValue(AuthSetup.SessionIdClaim)!;
         var end = SessionLimits.ReadAuthTime(ticket.Principal)!.Value + AuthSetup.AbsoluteExpiry;
-        if (rotations.Rotate(sid, ticket.Principal.FindFirstValue(AuthSetup.RefreshIdClaim), NewId(), end, now) is not { } rid)
-        {
-            revoked.Revoke(sid, end, now);
+        // In the database, so a restart or another instance knows the swap and any logout (#354).
+        var rotation = await sessions.RotateAsync(sid, ticket.Principal.FindFirstValue(AuthSetup.RefreshIdClaim), NewId(), end, now, ct);
+        if (rotation.Replayed)
             logger.LogWarning("A refresh token was used again after it was swapped; the session was ended. UserId={UserId}", user.Id);
+        if (rotation.Rid is not { } rid)
             return Refused();
-        }
 
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.AuthTimeClaim)!.Clone());
         identity.AddClaim(ticket.Principal.FindFirst(AuthSetup.SessionIdClaim)!.Clone());
@@ -170,12 +171,13 @@ public static class AuthEndpoints
 
     private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
 
-    internal static IResult Logout(HttpContext http, SessionRevocations revoked, TimeProvider time)
+    internal static async Task<IResult> LogoutAsync(HttpContext http, SessionStore sessions, TimeProvider time)
     {
         // Signed in here means SessionLimits found both claims valid.
         var sid = http.User.FindFirstValue(AuthSetup.SessionIdClaim)!;
         var authTime = SessionLimits.ReadAuthTime(http.User)!.Value;
-        revoked.Revoke(sid, authTime + AuthSetup.AbsoluteExpiry, time.GetUtcNow());
+        // Stored, so the refresh token is refused on every instance and after a restart (#354).
+        await sessions.RevokeAsync(sid, authTime + AuthSetup.AbsoluteExpiry, time.GetUtcNow());
         return Results.NoContent();
     }
 

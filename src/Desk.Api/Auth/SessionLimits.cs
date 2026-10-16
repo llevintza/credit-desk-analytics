@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Claims;
+using Desk.Data.App;
 using Desk.Data.Auth;
+using Microsoft.EntityFrameworkCore;
 
 namespace Desk.Api.Auth;
 
@@ -40,10 +42,11 @@ public sealed class SessionLimits(RequestDelegate next, SessionRevocations revok
 }
 
 /// <summary>
-/// Sessions ended by logout, in memory until the last token they could have issued is past the 24 h limit. Bearer
-/// tokens are stateless, so this is what makes logout end the access token and the refresh token at once.
-/// Limit (ADR-0024): the list is per process, so a restart or a second instance forgets it; a logged-out token
-/// then lives until its own expiry (5 min access, 8 h refresh). Disabling or resetting the account ends it for good.
+/// This instance's cache of ended sessions, checked on every authenticated request with no database read. Filled by
+/// <see cref="SessionStore"/>: by a logout or a replay here, and by a refresh that finds its session ended in the
+/// database (another instance's logout, or one from before a restart). Kept until the session's 24 h limit.
+/// Limit (ADR-0024, #354): an access token this instance hasn't seen revoked works until its own expiry (5 min);
+/// its refresh token is refused everywhere.
 /// </summary>
 public sealed class SessionRevocations
 {
@@ -63,25 +66,26 @@ public sealed class SessionRevocations
 }
 
 /// <summary>
-/// Single-use refresh tokens with reuse detection (#353, ADR-0024). Each token pair carries a refresh id
-/// (<see cref="AuthSetup.RefreshIdClaim"/>); this holds, per session, the one id whose refresh token may still be
-/// swapped. A refresh that presents any other id replays a token already swapped: a stolen copy, or the owner's own
-/// after a thief swapped it first. The caller then ends the whole session, for both holders.
+/// The sessions' server-side state in Postgres (<c>auth.sessions</c>, #354, ADR-0024): single-use refresh tokens with
+/// reuse detection (#353), and logout. Each token pair carries a refresh id (<see cref="AuthSetup.RefreshIdClaim"/>);
+/// a session's row holds the one id whose refresh token may still be swapped. A refresh that presents any other id
+/// replays a token already swapped: a stolen copy, or the owner's own after a thief swapped it first. The caller then
+/// ends the whole session, for both holders.
 /// One exception, the grace window: for a short time after a swap, the id just swapped gets a pair for the current id
 /// without a new swap. A page reload can abort a refresh after the server swapped the token, and the reloaded page
 /// then sends the old token again; two racing refreshes with one token end up on one id the same way.
-/// Per process, like <see cref="SessionRevocations"/>: after a restart a session's first refresh is believed and its
-/// new id becomes the current one. Only ids and times are kept, never token values.
+/// Read and written only at login, refresh and logout (each already a database call), never per request: the
+/// per-request check is <see cref="SessionRevocations"/>, this instance's cache of the revocations it has seen.
+/// A restart or a second instance shares the rows, so neither forgets a logout or a swap. Only ids and times are
+/// kept, never token values.
 /// </summary>
-public sealed class RefreshRotations(TimeSpan grace)
+public sealed class SessionStore(TimeSpan grace, IDbContextFactory<AppDbContext> contexts, SessionRevocations revoked)
 {
     /// <summary>The grace window when <see cref="GraceSecondsKey"/> is unset or not a positive number of seconds.</summary>
     public static readonly TimeSpan DefaultGrace = TimeSpan.FromSeconds(30);
     /// <summary>The longest grace window a setting can ask for; a larger value is clamped to it.</summary>
     public static readonly TimeSpan MaxGrace = TimeSpan.FromSeconds(120);
     public const string GraceSecondsKey = "AUTH_REFRESH_REUSE_GRACE_SECONDS";
-
-    private readonly ConcurrentDictionary<string, Entry> _current = new(StringComparer.Ordinal);
 
     public TimeSpan Grace => grace;
 
@@ -96,47 +100,91 @@ public sealed class RefreshRotations(TimeSpan grace)
             : DefaultGrace;
 
     /// <summary>A new sign-in: <paramref name="rid"/> is its current id until <paramref name="until"/> (its 24 h limit).</summary>
-    public void Issue(string sid, string rid, DateTimeOffset until, DateTimeOffset now)
+    public async Task IssueAsync(string sid, string rid, DateTimeOffset until, DateTimeOffset now, CancellationToken ct)
     {
-        // Every sign-in prunes, so the map holds at most the sessions started in the last 24 h.
-        foreach (var (key, entry) in _current)
-            if (entry.Until <= now) _current.TryRemove(key, out _);
-        _current[sid] = new Entry(rid, null, now, until);
+        await using var db = await contexts.CreateDbContextAsync(ct);
+        // Every sign-in prunes, so the table holds at most the sessions started in the last 24 h.
+        await db.AuthSessions.Where(s => s.ExpiresAt <= now).ExecuteDeleteAsync(ct);
+        db.AuthSessions.Add(new AuthSession { Sid = sid, Rid = rid, RotatedAt = now, ExpiresAt = until });
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>
-    /// The refresh id the new token pair carries, or null for a replay (the caller ends the session):
+    /// The refresh id the new token pair carries, or a null id when the session is over (the caller refuses):
     /// <list type="bullet">
     /// <item>the current id is swapped for <paramref name="next"/>, which is returned;</item>
     /// <item>the id swapped last, within the grace window, gets the current id back and swaps nothing;</item>
-    /// <item>any other id, or the last one after the window, is a replay.</item>
+    /// <item>a session with no row (a token from before #354, or one pruned) is believed once, as a new chain;</item>
+    /// <item>a session already ended is refused, and remembered here so its access tokens are refused too;</item>
+    /// <item>any other id, or the last one after the window, is a replay: the session is ended.</item>
     /// </list>
-    /// Of concurrent refreshes with one token, exactly one swaps; the others get the id it swapped to.
+    /// Of concurrent refreshes with one token, on any instance, exactly one swaps (a conditional UPDATE); the others
+    /// get the id it swapped to.
     /// </summary>
-    public string? Rotate(string sid, string? presented, string next, DateTimeOffset until, DateTimeOffset now)
+    public async Task<Rotation> RotateAsync(string sid, string? presented, string next, DateTimeOffset until, DateTimeOffset now, CancellationToken ct)
     {
+        await using var db = await contexts.CreateDbContextAsync(ct);
         while (true)
         {
-            if (!_current.TryGetValue(sid, out var entry))
+            if (presented is not null && await db.AuthSessions
+                    .Where(s => s.Sid == sid && s.RevokedAt == null && s.Rid == presented)
+                    .ExecuteUpdateAsync(u => u
+                        .SetProperty(s => s.PreviousRid, s => s.Rid)
+                        .SetProperty(s => s.Rid, next)
+                        .SetProperty(s => s.RotatedAt, now), ct) == 1)
+                return new Rotation(next, Replayed: false);
+
+            var row = await db.AuthSessions.AsNoTracking().Where(s => s.Sid == sid)
+                .Select(s => new { s.Rid, s.PreviousRid, s.RotatedAt, s.RevokedAt })
+                .SingleOrDefaultAsync(ct);
+            if (row is null)
             {
-                if (_current.TryAdd(sid, new Entry(next, presented, now, until)))
-                    return next;
-                continue;
+                if (await db.Database.ExecuteSqlAsync($"""
+                    INSERT INTO auth.sessions (sid, rid, previous_rid, rotated_at, expires_at)
+                    VALUES ({sid}, {next}, {presented}, {now}, {until})
+                    ON CONFLICT (sid) DO NOTHING
+                    """, ct) == 1)
+                    return new Rotation(next, Replayed: false);
+                continue; // another refresh created it first: look again
             }
-            if (string.Equals(entry.Rid, presented, StringComparison.Ordinal))
+            if (row.RevokedAt is not null)
             {
-                if (_current.TryUpdate(sid, new Entry(next, presented, now, until), entry))
-                    return next;
-                continue; // another refresh swapped it first: look again, this id is now the previous one
+                revoked.Revoke(sid, until, now);
+                return new Rotation(null, Replayed: false);
             }
-            return presented is not null && string.Equals(entry.Previous, presented, StringComparison.Ordinal) && now - entry.RotatedAt < grace
-                ? entry.Rid
-                : null;
+            if (presented is not null && string.Equals(row.Rid, presented, StringComparison.Ordinal))
+                continue; // can't stay so: the UPDATE above matches it
+            if (presented is not null && string.Equals(row.PreviousRid, presented, StringComparison.Ordinal) && now - row.RotatedAt < grace)
+                return new Rotation(row.Rid, Replayed: false);
+
+            await RevokeAsync(sid, until, now);
+            return new Rotation(null, Replayed: true);
         }
     }
 
-    public int Count => _current.Count;
-
-    /// <summary>The id that may be swapped, the one swapped for it (and when), and the session's 24 h end.</summary>
-    private sealed record Entry(string Rid, string? Previous, DateTimeOffset RotatedAt, DateTimeOffset Until);
+    /// <summary>
+    /// Ends the session until <paramref name="until"/> (its 24 h limit): logout, or a replay. This instance refuses its
+    /// tokens at once; every instance refuses its refresh token, and so ends it within one access-token life (5 min).
+    /// <para>
+    /// Takes no request token on purpose: a client that drops the connection (a replaying thief, or the reload of
+    /// #366) must not cancel the write and leave the session ended only in this process's memory, to come back on
+    /// another instance or after a restart. The write is bounded by the command timeout instead.
+    /// </para>
+    /// </summary>
+    public async Task RevokeAsync(string sid, DateTimeOffset until, DateTimeOffset now)
+    {
+        revoked.Revoke(sid, until, now);
+        if (until <= now)
+            return;
+        await using var db = await contexts.CreateDbContextAsync(CancellationToken.None);
+        await db.Database.ExecuteSqlAsync($"""
+            INSERT INTO auth.sessions (sid, rotated_at, expires_at, revoked_at)
+            VALUES ({sid}, {now}, {until}, {now})
+            ON CONFLICT (sid) DO UPDATE SET revoked_at = COALESCE(sessions.revoked_at, EXCLUDED.revoked_at)
+            """, CancellationToken.None);
+    }
 }
+
+/// <param name="Rid">The refresh id for the new token pair; null when the refresh is refused.</param>
+/// <param name="Replayed">Refused because a swapped token came back: the session was ended just now.</param>
+public readonly record struct Rotation(string? Rid, bool Replayed);
