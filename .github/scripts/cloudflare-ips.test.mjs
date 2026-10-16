@@ -135,3 +135,8 @@ test("the workflow is weekly plus dispatch, read-only, SHA-pinned, secret-free, 
   assert.match(WORKFLOW, /timeout-minutes: \d+/);
   assert.match(WORKFLOW, /run: node \.github\/scripts\/cloudflare-ips\.mjs\n/);
 });
+
+test("one run at a time: a dispatch during the scheduled run waits, never cancels it (#278, #444 nit)", () => {
+  assert.match(WORKFLOW, /^concurrency:\n  group: cloudflare-ips\n  cancel-in-progress: false\n/m);
+  assert.doesNotMatch(WORKFLOW, /^ {4}concurrency:/m, "workflow-level only");
+});
