@@ -124,6 +124,8 @@ public sealed class UsageTests(PostgresApiFactory api)
         Assert.All(day1, s => Assert.Equal(Day1, s.Day));
         Assert.Equal([124, 124, 123, 122], day1.Take(4).Select(s => s.Ms));
         Assert.Equal(["u24@example.com", "tie@example.com"], day1.Take(2).Select(s => s.UserName)); // same ms: lower id first
+        Assert.True(day1[0].Id < day1[1].Id);
+        Assert.Equal(slowest.Count, slowest.Select(s => s.Id).Distinct().Count()); // the audit row id: a stable key for the page
         Assert.Equal(106, day1[^1].Ms); // 124 twice, then 123 … 106: 20 rows
         var tie = day1[1];
         Assert.Equal((At(Day1, 2), "GET /api/deals", 200, (int?)10, "HIT"), (tie.At, tie.Endpoint, tie.Status, tie.Rows, tie.Cache));

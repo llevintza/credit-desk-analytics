@@ -8,8 +8,8 @@ public sealed record UserDayUsage(DateOnly Day, string? UserName, int Requests, 
 /// <summary>All requests on one UTC day, with that day's cache hit ratio (<c>null</c> when nothing cacheable ran).</summary>
 public sealed record DayUsage(DateOnly Day, int Requests, int Hits, int Misses, double? HitRatio);
 
-/// <summary>One of the slowest audited requests of its UTC day.</summary>
-public sealed record SlowRequest(DateOnly Day, DateTimeOffset At, string? UserName, string Endpoint, int Status, int? Rows, int Ms, string? Cache);
+/// <summary>One of the slowest audited requests of its UTC day; <see cref="Id"/> is its audit row.</summary>
+public sealed record SlowRequest(long Id, DateOnly Day, DateTimeOffset At, string? UserName, string Endpoint, int Status, int? Rows, int Ms, string? Cache);
 
 /// <summary>
 /// The admin Usage page (README §7.2, §8, #70) for the UTC days <see cref="From"/> to <see cref="To"/>, both included.
@@ -56,7 +56,7 @@ public sealed class UsageRepository(IDbContextFactory<AppDbContext> contexts)
         // A top-N heap per day (bounded memory) instead of ranking the whole window with ROW_NUMBER, which sorts every
         // row of a 30-day window and spills it to disk (ADR-0027).
         var slowest = await db.Database.SqlQuery<SlowRequest>($"""
-            SELECT (d AT TIME ZONE 'UTC')::date AS "Day", s.at AS "At", s.user_name AS "UserName", s.endpoint AS "Endpoint",
+            SELECT s.id AS "Id", (d AT TIME ZONE 'UTC')::date AS "Day", s.at AS "At", s.user_name AS "UserName", s.endpoint AS "Endpoint",
                    s.status AS "Status", s.rows AS "Rows", s.ms AS "Ms", s.cache AS "Cache"
             FROM generate_series({start}, {lastDay}, interval '1 day') AS d
             CROSS JOIN LATERAL (
