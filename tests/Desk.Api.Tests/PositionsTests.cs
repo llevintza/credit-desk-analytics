@@ -256,6 +256,9 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         Assert.Equal("text/csv", res.Content.Headers.ContentType?.MediaType);
         Assert.Contains("positions-2026-10-06.csv", res.Content.Headers.ContentDisposition!.ToString());
+        // README §8 observability, set before the first byte (#277 N9): db is the time to the first row.
+        Assert.Matches(@"^db;dur=\d+\.\d, ser;dur=\d+\.\d, total;dur=\d+\.\d$", res.Headers.GetValues("Server-Timing").Single());
+        Assert.False(res.Headers.Contains(PositionsEndpoints.TruncatedHeader));
 
         var lines = (await res.Content.ReadAsStringAsync(Ct)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("Position,Deal,Market value,Price,Spread,Yield,Next pay,Watchlist,Vintage".Split(',').Length, lines[0].Split(',').Length);
@@ -361,6 +364,41 @@ public sealed class PositionsTests(PostgresApiFactory api)
 
         var (viewer, _, _) = await api.SignedInAsync();
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.SendAsync(Query(new { }, path: "/api/admin/cache/clear"), Ct)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData(0, false)] // exactly the cap: every row, no signal
+    [InlineData(1, true)]  // one row over: the cap's rows and the signal (#277)
+    public async Task Export_over_its_row_cap_writes_the_cap_and_says_so_before_the_first_byte(int over, bool truncated)
+    {
+        var matching = (int)await ScalarAsync<long>("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = DATE '2026-10-06' AND sector = 'CLO'");
+        var cap = matching - over;
+        await using var host = api.WithSettings(("EXPORT_MAX_ROWS", cap.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        var user = await api.CreateUserAsync();
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, user.Email!);
+
+        var res = await client.SendAsync(Query(new
+        {
+            columns = new[] { "deal_name", "market_value" },
+            filterModel = new { sector = new { filterType = "set", values = new[] { "CLO" } } },
+            sortModel = new[] { new { colId = "market_value", sort = "desc" } },
+        }, path: "/api/positions/export"), HttpCompletionOption.ResponseHeadersRead, Ct);
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(truncated, res.Headers.TryGetValues(PositionsEndpoints.TruncatedHeader, out var values) && values.Single() == "true");
+        var lines = (await res.Content.ReadAsStringAsync(Ct)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(cap, lines.Length - 1);
+        await api.WaitForAuditAsync(a => a.UserName == user.Email && a.Endpoint == "POST /api/positions/export" && a.Rows == cap);
+    }
+
+    [Fact]
+    public async Task Export_row_cap_from_the_environment_never_goes_above_the_built_in_cap()
+    {
+        await using var host = api.WithSettings(("EXPORT_MAX_ROWS", "1000000"));
+        Assert.Equal(PositionsEndpoints.MaxExportRows, host.Services.GetRequiredService<Desk.Api.Limits.LimitsOptions>().ExportMaxRows);
+        await using var zero = api.WithSettings(("EXPORT_MAX_ROWS", "0"));
+        Assert.Equal(PositionsEndpoints.MaxExportRows, zero.Services.GetRequiredService<Desk.Api.Limits.LimitsOptions>().ExportMaxRows);
     }
 
     [Fact]

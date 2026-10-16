@@ -1,6 +1,6 @@
 # Agent governance: `agents-governance.yml` (planned; arrives with the harness build PR), guards, bootstrap
 
-> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/governance.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]** and listed in the drafts README.
+> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/governance.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]**.
 
 ## Helms's sign-off (H1), recorded for THESE TWO JOBS ONLY
 
@@ -111,7 +111,7 @@ jobs:
 - **Code:** main's `governance.mjs`. It reads the PR number from `$GITHUB_EVENT_PATH`, and the title from the same event JSON; the title is never printed. The file list comes from the shared `pr-data.mjs` functions (guard 10): the 3,000 cap, the count assertion and the status whitelist.
 - **Matching:** both `filename` and `previous_filename`, so a rename out of `.github/` still matches. Deletions are included. Case-insensitive.
 - **Path list:**
-  - `.github/**`, `**/Dockerfile*`, `**/*.Dockerfile`, `render.yaml`, `deploy/**`, `docker-compose*.y*ml`, `compose*.y*ml`
+  - `.github/**`, `**/Dockerfile*`, `**/*.Dockerfile`, `render.yaml`, `deploy/**`, `**/docker-compose*.y*ml`, `**/compose*.y*ml` (recursive, so a nested override such as `e2e/docker-compose.e2e.yml` matches as well as the root `docker-compose.yml`; #157)
   - `.claude/**`, `**/.claude/**`, `.cursor/**`, `.cursorignore`, `.grok/**`, `.mcp.json`
   - `**/AGENTS.md`, `**/AGENT.md`, `**/CLAUDE.md`, `**/CLAUDE.local.md`, `.claudeignore`
   - `docs/agents/**`, `scripts/agents/**`, `.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json`, `.gitmodules` (`.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json` as in main's AGENTS `[workflows]` bullet since #5)
@@ -125,7 +125,7 @@ jobs:
   - Every line and branch value is a number that goes up or stays the same against base, and no field other than `line`/`branch` changes. The floor comes from base, never head.
   - **Any change in the same PR to `perf/coverage-thresholds.json`, `perf/coverage-override.json` (the ADR-0018 measurement-scope override name #108 restores), `tests/testconfig.json`, any other file that sets coverage measurement or thresholds, or another governance path voids the exemption.** That voider set is an explicit allowlist in `governance.mjs` (ADR §7); anything ambiguous fails closed. The PR then needs its own `[workflows]` review; a lowering or a measurement-scope change also needs an override record and sign-off from Code Reviewer, Tech Coordinator and Helms.
   - Code Reviewer's governance check still applies (PR #107).
-  - **Fixtures (`testing.md`; `r10-governance.txt`, 9/9 on the prototype), each must fail the exemption:** a lowered value; an added key; a deleted key; an unparseable file; a change to a non-line/branch field; a raise-only bump plus a `perf/coverage-thresholds.json` change; a raise-only bump plus a `perf/coverage-override.json` change; **a raise-only bump plus a `tests/testconfig.json` change**. Same keys with values that go up or stay the same, and no other coverage or governance file changed, pass.
+  - **Fixtures (`testing.md`; rev 10 *governance* evidence, 9/9 on the prototype), each must fail the exemption:** a lowered value; an added key; a deleted key; an unparseable file; a change to a non-line/branch field; a raise-only bump plus a `perf/coverage-thresholds.json` change; a raise-only bump plus a `perf/coverage-override.json` change; **a raise-only bump plus a `tests/testconfig.json` change**. Same keys with values that go up or stay the same, and no other coverage or governance file changed, pass.
   - **Data path:** main's `adapters.json` blob input set gains `perf/coverage-baseline.json`, so `pr-data.mjs` fetches its head blob as data; the base copy comes from the base checkout.
 - **NOT a security boundary.** The author controls the title. The job is a base-run **signal** that the PR can't remove or shrink. **Human governance review remains the control (Helms decision).**
 
@@ -227,8 +227,8 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 **/Dockerfile* @llevintza
 /deploy/ @llevintza
 /render.yaml @llevintza
-/docker-compose*.yml @llevintza
-/compose*.y*ml @llevintza
+**/docker-compose*.y*ml @llevintza
+**/compose*.y*ml @llevintza
 /src/Desk.UserAdmin/ @llevintza
 /src/Desk.Api/Auth/ @llevintza
 /src/Desk.Data/Auth/ @llevintza
@@ -281,7 +281,7 @@ Once U18 passes, TC verifies Leo's `main` ruleset (DEP-R1, **PENDING**) and Leo 
 
 **Ruleset sync (rev 12, R11-F2):** the ruleset lists required checks by literal name, so "every `ci.yml` job at the base" is kept true by hand. **Owner: Leo** (a normal ruleset edit, not break-glass). **Trigger:** any merge that adds, renames or removes a `ci.yml` job; Leo updates the ruleset, and TC's per-merge read-only check flags any drift between the base `ci.yml` job names and the required list. A rename or removal **fails closed**: the old required name never reports, so every PR blocks until Leo updates the ruleset. TC records the sync and the new `updated_at`, so it isn't read as drift. **Invariant:** no required job may be conditionally skippable while its peers pass (a skipped required check counts as passing). `coverage`, `compose-smoke` and `budgets` have `needs: [api, web]`, so `api` and `web` stay required and unconditional, and no `ci.yml` job gets a job-level `if:` (true at `9b83f7ef`; build-PR drift fixture in [`testing.md`](testing.md#dep-r1-required-check-invariant-rev-12-r11-f2)). Any drift in items 1–6: stop and escalate to Leo.
 
-**How: TC's check commands** (read-only; canonical form only, H16 (4); they MUST stay allowed, and both deny lists and the guard allow them: fixtures in `testing.md`, `r9-benign`, `r9-claude-glob`):
+**How: TC's check commands** (read-only; canonical form only, H16 (4); they MUST stay allowed, and both deny lists and the guard allow them: fixtures in `testing.md`, rev 9 *benign* evidence, rev 9 *claude glob* evidence):
 - `gh ruleset list` (also `gh ruleset list --repo <o/r>`)
 - `gh ruleset view <id>` (also `gh ruleset view <id> --repo <o/r>`)
 - `gh repo view --json defaultBranchRef` (also `gh repo view <o/r> --json defaultBranchRef`)
@@ -310,7 +310,7 @@ Helms (CTO) made these rulings on 2026-10-07. PR #107 (head `8ad56687`) was merg
 2. **Agents never force-push; a gitleaks finding means stop and report.**
    > The CI `secrets` job (gitleaks, `.gitleaks.toml`) scans the **full history** of every PR. Agents **never force-push**, including `--force-with-lease`. If gitleaks flags an agent's **own unmerged** commit, the agent **stops and reports to Tech Coordinator**. Rewrite (lease-protected, feature branch only) only when Tech Coordinator or Helms authorizes it. `main` is **never** rewritten.
 
-   Rev 10 backs this in config: G9 blocks every force form, lease included; N10 and N64 become must-block; both deny lists gain the lease pattern (`MIN_DENY` 71 / `MIN_DENY_CURSOR` 70, re-verified for rev 10, `r10-verify.txt`). Branches are updated by merge, and `gh pr update-branch --rebase` is blocked by the guard only (G14; no deny-list entry). **Authorized rewrites (Helms, 2026-10-07):** An authorized rewrite is Leo running Tech Coordinator's exact commands (the branch, the expected old sha, and a lease-protected push of a feature branch only, never `main`) in a plain terminal, outside any harness session. There is no exception and no bypass; G9 still blocks every force form in agent sessions. Agents only stop and report (Helms, 2026-10-07, option (a)). A leaked secret must still be rotated: a rewrite doesn't un-expose a pushed secret (CR6 N3). Agent-facing text: [`workflow.md`](workflow.md).
+   Rev 10 backs this in config: G9 blocks every force form, lease included; N10 and N64 become must-block; both deny lists gain the lease pattern (`MIN_DENY` 71 / `MIN_DENY_CURSOR` 70, re-verified for rev 10, rev 10 *verify* evidence). Branches are updated by merge, and `gh pr update-branch --rebase` is blocked by the guard only (G14; no deny-list entry). **Authorized rewrites (Helms, 2026-10-07):** An authorized rewrite is Leo running Tech Coordinator's exact commands (the branch, the expected old sha, and a lease-protected push of a feature branch only, never `main`) in a plain terminal, outside any harness session. There is no exception and no bypass; G9 still blocks every force form in agent sessions. Agents only stop and report (Helms, 2026-10-07, option (a)). A leaked secret must still be rotated: a rewrite doesn't un-expose a pushed secret (CR6 N3). Agent-facing text: [`workflow.md`](workflow.md).
 3. **Delegated sign-off.**
    > Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
 
@@ -349,11 +349,11 @@ Used only for a deliberate change that main's base checks reject (a loosened inv
 
 ## Baseline (rev 11)
 
-- **Rev 13 re-check:** HEAD is `5f91d26f` (#140, 12:42 AM ET Oct 8). #140 changed no `AGENTS.md`, `.github/`, `ci.yml` or gate copy (README §17 rows only), so everything below still holds; the gate hash is unchanged (`r13-gate-diff.txt`).
+- **Rev 13 re-check:** HEAD is `5f91d26f` (#140, 12:42 AM ET Oct 8). #140 changed no `AGENTS.md`, `.github/`, `ci.yml` or gate copy (README §17 rows only), so everything below still holds; the gate hash is unchanged (rev 13 *gate diff* evidence).
 - **`main` @ `9b83f7ef`** (#125, 11:43 PM ET; HEAD re-checked via cursor-github), with the gate text unchanged since **#107 @ `79ceff6f`** (10:12 PM ET). The rev 10 baseline was `c91c4b51` (#119, 10:38 PM ET); the rev 9 baseline was #104 @ `27c1c35a` (8:35 PM ET).
 - **Since rev 10:** #121 `0cc350d7` (11:29 PM ET; Phase 3 positions API; README §17 + raise-only `perf/coverage-baseline.json` bump to 99.7/98.0) and #125 `9b83f7ef` (11:43 PM ET; `[workflows]` CI `budgets` job, AGENTS.md perf command rows, README §14.1 item). **Both merged outside the gate with no Code Reviewer verdict** (Helms, H19). Root `AGENTS.md` is 116 lines / metric 117. #6 merged earlier as `be83b190` (9:19 PM ET).
 - Chain since #104 (rev 10 record): #96 `ea2b7dd1`, #100 `e75af6cd`, #103 `487236ca`, #99 `99c0911e`, #106 `4baeeb94`, #107 `79ceff6f`, #105 `5ce7f0ef`, #119 `c91c4b51`.
 - #107 added to `AGENTS.md`: the raise-only coverage exemption, the force-push ban (incl. `--force-with-lease`), gitleaks stop-and-report, and Helms's delegated sign-off. #105 and #119 are feature PRs that touched no governance path except #105's README §17 Status row and a raise-only `perf/coverage-baseline.json` bump (dotnet line 99.1→99.6, branch 96.7→97.1; web unchanged).
 - #108 is an **open issue** (re-sync the coverage config). If it lands, re-sync the quoted ruling text and keep `perf/coverage-override.json` in the enforced paths.
-- The gate text (header and clauses 1–3) is **byte-identical** at `9b83f7ef` across README §14.5 (l.876–881), README §15 (l.916–921), both `AGENTS.md` copies, `docs/deployment-setup.md` step 5 (blob unchanged) and ADR §7 (canonical sha256 `f3e13ef3c8e54955`; `r11-gate-diff.txt`; at `c91c4b51`: `r10-verify.txt`).
+- The gate text (header and clauses 1–3) is **byte-identical** at `9b83f7ef` across README §14.5 (l.876–881), README §15 (l.916–921), both `AGENTS.md` copies, `docs/deployment-setup.md` step 5 (blob unchanged) and ADR §7 (canonical sha256 `f3e13ef3c8e54955`; rev 11 *gate diff* evidence; at `c91c4b51`: rev 10 *verify* evidence).
 
