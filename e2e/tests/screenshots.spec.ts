@@ -36,6 +36,19 @@ for (const theme of ['dark', 'light'] as const) {
     }
   });
 
+  test(`screenshots: live marks overlay, ${theme}`, async ({ page }) => {
+    // README §6 P6: the overlay on, with marked cells flashing in the accent colour.
+    await page.goto('/positions');
+    await setTheme(page, theme);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await gridReady(page);
+    await page.getByTestId('live-marks').click();
+    await expect(page.getByTestId('live-status')).toContainText('Live');
+    await expect(page.locator('.ag-row .ag-cell-data-changed').first()).toBeAttached({ timeout: 30_000 });
+    await page.screenshot({ path: `${dir}/positions-live-${theme}.png` });
+  });
+
   test(`screenshots: login, ${theme}`, async ({ browser }) => {
     const page = await browser.newPage({ viewport: { width: 1600, height: 900 } }); // no session
     await page.goto('/login');
