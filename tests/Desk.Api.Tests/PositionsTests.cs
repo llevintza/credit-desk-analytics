@@ -72,6 +72,45 @@ public sealed class PositionsTests(PostgresApiFactory api)
         Assert.True(mv.Zip(mv.Skip(1)).All(p => p.First >= p.Second));
     }
 
+    [Fact]
+    public async Task Face_weighted_price_totals_match_independent_sql()
+    {
+        // #459: every price average on the Total row is Σ(p·|face|) / Σ|face| over rows with a price, computed here
+        // straight from current_face (not the stored face_weight_f8 the builder reads).
+        var prices = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.WeightedByCurrentFace).Select(c => c.Name).ToArray();
+        Assert.Contains("price", prices);
+        var (client, _, _) = await api.SignedInAsync();
+        var doc = await ReadJson(await client.SendAsync(Query(new
+        {
+            columns = prices.Append("current_face").ToArray(),
+            endRow = 1,
+            filterModel = new { sector = new { filterType = "set", values = new[] { "CLO", "CMBS" } } },
+        }), Ct));
+        var summary = doc.GetProperty("summary");
+
+        await using var conn = new NpgsqlConnection(api.ConnectionString);
+        await conn.OpenAsync(Ct);
+        var select = string.Join(", ", prices.Select(p =>
+            $"sum(\"{p}\" * abs(current_face)::float8) / nullif(sum(abs(current_face)::float8) FILTER (WHERE \"{p}\" IS NOT NULL), 0)"));
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT {select} FROM core.position_snapshot WHERE as_of_date = DATE '2026-10-06' AND sector IN ('CLO', 'CMBS')", conn);
+        await using var reader = await cmd.ExecuteReaderAsync(Ct);
+        Assert.True(await reader.ReadAsync(Ct));
+        for (var i = 0; i < prices.Length; i++)
+        {
+            var actual = summary.GetProperty(prices[i]);
+            if (reader.IsDBNull(i))
+                Assert.Equal(JsonValueKind.Null, actual.ValueKind);
+            else
+                Assert.Equal(reader.GetDouble(i), actual.GetDouble(), 6);
+        }
+        // And it is not the |MV|-weighted average the Total row showed before (the seed's prices aren't all par).
+        var mvWeighted = await ScalarAsync<double>(
+            "SELECT sum(price * abs(market_value)::float8) / nullif(sum(abs(market_value)::float8) FILTER (WHERE price IS NOT NULL), 0) " +
+            "FROM core.position_snapshot WHERE as_of_date = DATE '2026-10-06' AND sector IN ('CLO', 'CMBS')");
+        Assert.NotEqual(mvWeighted, summary.GetProperty("price").GetDouble(), 6);
+    }
+
     [Theory]
     [InlineData("market_value", "desc")]
     [InlineData("sector", "asc")]
