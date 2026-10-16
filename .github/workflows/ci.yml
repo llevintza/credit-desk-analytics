@@ -254,10 +254,25 @@ jobs:
       - run: npm run lint
       - run: npm test -- --watch=false --coverage
       - run: npm run build
+      # #278: the script check comes from BASE_SHA, like the classifier, so a PR that edits it cannot relax its own
+      # check. pages.yml on main runs main's copy before publishing.
+      - name: Base checkout for the script check (#278)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          path: _base
+          persist-credentials: false
       # #355: the same check pages.yml runs before publishing, on the PR's build, so a foreign script fails here and
       # not after the merge. The plain build has no meta CSP (pages.yml adds it), hence --no-csp.
       - name: No untrusted scripts in the build (#355)
-        run: node --disable-warning=ExperimentalWarning --experimental-vm-modules ../.github/scripts/pages-script-check.mjs dist/web/browser --base / --no-csp
+        run: |
+          CHECK=$GITHUB_WORKSPACE/_base/.github/scripts/pages-script-check.mjs
+          # Never the head copy: a base without the check (older than #355) fails closed. Merge main.
+          if [ ! -f "$CHECK" ]; then
+            echo "::error::The base commit has no .github/scripts/pages-script-check.mjs; merge main. Failing closed."
+            exit 1
+          fi
+          node --disable-warning=ExperimentalWarning --experimental-vm-modules "$CHECK" dist/web/browser --base / --no-csp
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-web
