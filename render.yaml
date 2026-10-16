@@ -26,11 +26,12 @@ services:
       # it, that edge: one shared key); otherwise the client is that hop. Unset, the socket peer is the client.
       - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED
         value: "true"
-      # CLIENT_ADDRESS_TRUSTED_HOPS (not listed, so it defaults to empty and nothing extra is trusted): public proxy
-      # CIDRs between Cloudflare and the app, comma or space separated; unparsable entries are dropped. A peer in
-      # them is believed and a trailing hop in them is skipped, to fix a shared key the diagnostics show (#165)
-      # without a release. Set it in the dashboard only; a sync keeps dashboard vars this file omits. Never list a
-      # range clients connect from: nothing rejects an over-wide range yet.
+      # CLIENT_ADDRESS_TRUSTED_HOPS (not listed, so it defaults to empty and nothing extra is trusted; unset is fine):
+      # public proxy CIDRs between Cloudflare and the app, comma or space separated. A peer in them is believed and a
+      # trailing hop in them is skipped, to fix a shared key the diagnostics show (#165) without a release. Set it in
+      # the dashboard only; a sync keeps dashboard vars this file omits. Never list a range clients connect from.
+      # Start-up fails on an entry wider than IPv4 /8 or IPv6 /32, or one that isn't a CIDR (a typo, a bare address,
+      # bits past the prefix, an IPv4-mapped range), naming only that entry (#418, README §13.2).
       # A Blueprint sync writes every value: below back over the dashboard, MAINTENANCE_MODE included, so a
       # dashboard-only flip lasts until the next sync. Change the value here to keep it.
       - key: MAINTENANCE_MODE

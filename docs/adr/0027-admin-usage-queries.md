@@ -76,7 +76,7 @@ Option (c) saves one round trip, about 1 ms on Render to Neon in the same region
 
 `GET /api/admin/usage?days=N` (admin only) runs two parameterised statements through `UsageRepository` (EF Core `SqlQuery`, `src/Desk.Data/App/UsageRepository.cs`), one after the other on one pooled context. The first is a `GROUP BY` UTC day and user over `[from, to + 1 day)`, which also gives the hit and miss counts. The second is a `LATERAL` top-20 per UTC day ordered by `ms DESC, id`. Only `kind = 'request'` rows count. The day and overall hit ratios are summed in C# from the per-user rows, and they are `null`, never `NaN`, when nothing cacheable ran. There is no new index.
 
-The window is `days` UTC days ending today: 7 by default, 1 to 31 (any other value is a 400 problem), and never more than `AUDIT_RETENTION_DAYS`. The response is live and never cached (`Cache-Control: no-store`). The endpoint's own audit row carries no cache status, so opening the page doesn't move the hit ratio.
+The window is `days` UTC days ending today: 7 by default, 1 to 31 (any other value is a 400 problem), and never more than `AUDIT_RETENTION_DAYS`. Every day shown is whole, the oldest included: a purge at time t deletes rows older than t minus the retention window, which always falls in the day before the oldest one shown (#70 follow-up; `UsageTests.At_full_retention_the_oldest_day_shown_is_whole`). The response is live and never cached (`Cache-Control: no-store`). The endpoint's own audit row carries no cache status, so opening the page doesn't move the hit ratio.
 
 ## Consequences
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { apiRows, cspRows, main, mainScript, metaContent, pagesRows, parseArgs, parseCsp, table } from './security-headers.mjs';
+import { apiRows, cspRows, isLocalHost, LOCAL_HOSTS, main, mainScript, metaContent, pagesRows, parseArgs, parseCsp, table } from './security-headers.mjs';
 
 // #66: the header check fails closed. A missing or loosened header fails, a page that isn't a 200 is exit 2,
 // and the Pages copy is held to its meta CSP, meta referrer and frame guard.
@@ -116,6 +116,28 @@ test('parseArgs: --api is required, both take http(s) URLs, the API is reduced t
   assert.throws(() => parseArgs(['--nope', 'x']), /unknown argument --nope/);
 });
 
+test('isLocalHost: only loopback and the compose service names', () => {
+  for (const h of ['localhost', '127.0.0.1', '[::1]', 'app', 'postgres', 'LOCALHOST']) assert.equal(isLocalHost(h), true, h);
+  for (const h of ['example.test', 'localhost.example.test', '127.0.0.2', '10.0.0.1', 'app.onrender.com', 'llevintza.github.io', ''])
+    assert.equal(isLocalHost(h), false, h);
+  assert.deepEqual([...LOCAL_HOSTS], ['localhost', '127.0.0.1', '[::1]', 'app', 'postgres']);
+});
+
+test('parseArgs: a non-local --api or --pages is refused unless --live is given', () => {
+  for (const url of ['http://localhost:8080', 'http://127.0.0.1:8066', 'http://[::1]:8080', 'http://app:8080'])
+    assert.equal(parseArgs(['--api', url]).api, new URL(url).origin);
+  assert.deepEqual(parseArgs(['--api', 'http://localhost:8080', '--pages', 'http://127.0.0.1:4366/app/']),
+    { api: 'http://localhost:8080', pages: 'http://127.0.0.1:4366/app/' });
+  assert.throws(() => parseArgs(['--api', 'https://desk.example.test']),
+    /refusing --api https:\/\/desk\.example\.test: local stacks only/);
+  assert.throws(() => parseArgs(['--api', 'http://localhost:8080', '--pages', 'https://pages.example.test/app/']),
+    /refusing --pages https:\/\/pages\.example\.test: local stacks only/);
+  assert.throws(() => parseArgs(['--api', 'http://localhost.example.test']), /local stacks only/);
+  assert.deepEqual(parseArgs(['--live', '--api', 'https://desk.example.test/x', '--pages', 'https://pages.example.test/app/']),
+    { api: 'https://desk.example.test', pages: 'https://pages.example.test/app/', live: true });
+  assert.throws(() => parseArgs(['--live', 'yes', '--api', 'http://localhost:8080']), /unknown argument yes/);
+});
+
 async function serve(routes) {
   const server = http.createServer((req, res) => {
     const r = routes[req.url];
@@ -168,4 +190,7 @@ test('main: a non-200 page, an unreachable origin or bad arguments exit 2', asyn
   const args = await run([]);
   assert.equal(args.code, 2);
   assert.match(args.out, /--api <origin> is required/);
+  const remote = await run(['--api', 'https://desk.example.test']);
+  assert.equal(remote.code, 2);
+  assert.match(remote.out, /local stacks only/);
 });
