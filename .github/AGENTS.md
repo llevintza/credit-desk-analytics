@@ -16,6 +16,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 - No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)` or `governance-paths (base)`.
 - Secrets live only in the `production` environment (sole exception: the capped Claude key in `claude-review`). gitleaks stays on. Nothing removed or loosened.
 - Keep the `# agents-drift:` markers, `disableAllHooks` (planned; arrives with the harness build PR), the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
+- A script that decides or polices a PR's checks runs from the `_base` checkout, never the head copy: the classifier, the coverage gate and the PR-time Pages script check (#278). A base without the script fails closed or runs every job; it never falls back to the head.
 - Keep image tags in step with their pins elsewhere (e.g. the gitleaks image in `deploy/ci-images/gitleaks/Dockerfile` and the `docker run` lines in `ci.yml` and `gitleaks.yml`). `gate-tests` fails when they disagree (`ci-image-pins.test.mjs`, #255).
 
 ## Reviewer checklist: the `changes` job and heavy-job wiring (#187)
@@ -24,6 +25,7 @@ The classifier runs from `_base`, but on `pull_request` the PR's own `ci.yml` ex
 
 - [ ] Skips happen only on an exact `'false'`: every heavy job's `if:` uses `needs.changes.outputs.<flag> != 'false'`, never `== 'true'` or a truthiness test.
 - [ ] `CLASSIFIER=_base/.github/scripts/ci-changes.mjs`, with `_base` checked out at `github.event.pull_request.base.sha`. Never the head copy.
+- [ ] One pinned diff base (#213, #278): the `changes` job's `base` step has no `if:` (it runs on push too), sets `base_sha`, and writes a `::warning::` whenever a PR keeps the event base. The classifier gets `--base "$DIFF_BASE"` from `steps.base.outputs.base_sha`. The coverage gate's `DIFF_BASE` is `needs.changes.outputs.base_sha` with the event base only as the fallback, and writes a `::warning::` when that output is empty. `_base` (classifier rules, gate script, thresholds, floor) stays at the event base, never at the pinned SHA. The `#213` and `#278` tests in `ci-changes.test.mjs` are ci.yml wiring tests under the last item.
 - [ ] Every job that needs `api` or `web` has a job-level `if:` with `!cancelled()` plus `contains(fromJSON('["success", "skipped"]'), needs.<job>.result)` for each of `needs.api.result` and `needs.web.result` it needs.
 - [ ] No workflow-level `paths:` or `paths-ignore:` under `on:`.
 - [ ] The ci.yml wiring tests in `.github/scripts/ci-changes.test.mjs` (the `ci.yml: …` tests and the dependency checker) are unchanged or only strengthened: no assertion removed, loosened or skipped.
