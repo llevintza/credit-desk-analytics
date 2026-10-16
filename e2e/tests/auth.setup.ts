@@ -10,7 +10,13 @@ setup('log in', async ({ page }) => {
   await page.goto('/positions');
   await expect(page).toHaveURL(/\/login$/); // no session: the data is not public
   await page.getByTestId('email').fill(email);
-  await page.getByTestId('password').fill(password);
+  // Not fill(): its step title carries the typed value into the public HTML report (#155). evaluate's title is just
+  // "Evaluate", and the input event is what a typed value fires. reporters/secret-guard.ts fails the run on a leak.
+  await page.getByTestId('password').evaluate((input: HTMLInputElement, value) => {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, password);
   await page.getByTestId('sign-in').click();
   await expect(page).toHaveURL(/\/positions$/);
   await expect(page.getByTestId('positions-grid')).toBeVisible();

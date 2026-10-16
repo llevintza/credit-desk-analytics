@@ -409,6 +409,12 @@ jobs:
             perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
+      - name: Cloudflare IP range check, fixture only (#161, ≥80% line/branch)
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=.github/scripts/cloudflare-ips.mjs \
+            .github/scripts/cloudflare-ips.test.mjs
 
   perf-deps:
     # Dependabot /perf bumps (#190, #198): install perf/ from its lockfile and round-trip the
