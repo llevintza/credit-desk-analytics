@@ -113,6 +113,18 @@ test("#155: the login setup project never records a trace (the fill carries the 
   assert.match(cfg, /\{ name: 'setup', testMatch: \/auth\\\.setup\\\.ts\/, use: \{ trace: 'off'(, screenshot: 'off')?(, video: 'off')? \} \}/);
 });
 
+test("#278: gate-tests runs the security-headers tests, and each #67 script against the bar on its own", () => {
+  const GATE = jobBlock(CI, "gate-tests");
+  const headers = stepBlock(GATE, "Security headers check tests (#66, ≥80% line/branch)");
+  assert.match(headers, /--test-coverage-lines=80 --test-coverage-branches=80/);
+  assert.match(headers, /--test-coverage-include=perf\/security-headers\.mjs \\\n\s+perf\/security-headers\.test\.mjs/);
+  const each = stepBlock(GATE, "Demo-session report and cache-memory fill tests, each script ≥80% line/branch (#67)");
+  assert.match(each, /for script in perf\/demo-session-report\.mjs perf\/cache-memory\.mjs; do/);
+  assert.match(each, /--test-coverage-lines=80 --test-coverage-branches=80/);
+  assert.match(each, /--test-coverage-include="\$script" \\\n\s+perf\/demo-session-report\.test\.mjs/);
+  assert.doesNotMatch(GATE + headers + each, /continue-on-error|\|\| true/);
+});
+
 test("#256 item 2: k6 errors are rc-specific and the compose logs follow a k6 failure", () => {
   const k6 = stepBlock(BUDGETS, "API latency p95 (k6)");
   assert.match(k6, /^ {8}id: k6$/m);
