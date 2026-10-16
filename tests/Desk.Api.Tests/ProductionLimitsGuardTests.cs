@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Desk.Api.Limits;
+using Desk.Api.Positions;
 using Microsoft.Extensions.Configuration;
 
 namespace Desk.Api.Tests;
@@ -16,7 +17,7 @@ public sealed partial class ProductionLimitsGuardTests
     private static readonly LimitsOptions Defaults = new(
         PerUserPerMinute: 60, PerUserBurst: 20, LoginPerIpPerMinute: 5, GlobalConcurrency: 8, GlobalQueue: 32,
         PerUserConcurrency: 1, PerUserQueue: 8, InsightsConcurrency: 5, InsightsQueue: 15, ExportSlots: 2,
-        ExportTimeout: TimeSpan.FromSeconds(60));
+        ExportTimeout: TimeSpan.FromSeconds(60), ExportMaxRows: PositionsEndpoints.MaxExportRows);
 
     /// <summary>Every key <see cref="LimitsOptions.From"/> reads, with the largest value a production path may carry.</summary>
     private static readonly IReadOnlyDictionary<string, double> Ceilings = new Dictionary<string, double>
@@ -32,6 +33,7 @@ public sealed partial class ProductionLimitsGuardTests
         ["RATE_LIMIT_PER_USER_INSIGHTS_QUEUE"] = Defaults.InsightsQueue,
         ["EXPORT_GLOBAL_SLOTS"] = Defaults.ExportSlots,
         ["EXPORT_TIMEOUT_SECONDS"] = Defaults.ExportTimeout.TotalSeconds,
+        ["EXPORT_MAX_ROWS"] = Defaults.ExportMaxRows,
     };
 
     [Fact]
@@ -43,14 +45,20 @@ public sealed partial class ProductionLimitsGuardTests
     [Fact]
     public void Ceilings_cover_every_key_LimitsOptions_reads()
     {
-        // A new limit key must be added to the scan: setting each listed key to a raised value changes every field.
-        var raised = new ConfigurationBuilder().AddInMemoryCollection(
-            Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, (c.Value + 1).ToString(CultureInfo.InvariantCulture)))).Build();
-        var options = LimitsOptions.From(raised);
+        // A new limit key must be added to the scan. Raising each listed key by one changes every field.
+        // EXPORT_MAX_ROWS cannot use that pattern: LimitsOptions.From clamps it at PositionsEndpoints.MaxExportRows,
+        // so a value above the cap leaves ExportMaxRows unchanged. A value one below the default proves the key is read.
+        var probed = Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key,
+            (c.Key == "EXPORT_MAX_ROWS" ? c.Value - 1 : c.Value + 1).ToString(CultureInfo.InvariantCulture)));
+        var options = LimitsOptions.From(new ConfigurationBuilder().AddInMemoryCollection(probed).Build());
         var unchanged = typeof(LimitsOptions).GetProperties()
             .Where(p => Equals(p.GetValue(options), p.GetValue(Defaults)))
             .Select(p => p.Name);
         Assert.Empty(unchanged);
+
+        var aboveCap = new ConfigurationBuilder().AddInMemoryCollection(
+            [new KeyValuePair<string, string?>("EXPORT_MAX_ROWS", (Defaults.ExportMaxRows + 1).ToString(CultureInfo.InvariantCulture))]).Build();
+        Assert.Equal(Defaults.ExportMaxRows, LimitsOptions.From(aboveCap).ExportMaxRows);
     }
 
     [Fact]
@@ -100,6 +108,7 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("EXPORT_GLOBAL_SLOTS=3")]
     [InlineData("RATE_LIMIT_PER_USER_PER_MIN=6000 # temporary")] // a comment doesn't hide a raised value
     [InlineData("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE=16")]
+    [InlineData("EXPORT_MAX_ROWS=50000")] // above the built-in cap; the runtime clamp does not excuse a raised production value
     public void A_seeded_regression_is_caught(string text)
     {
         Assert.NotEmpty(RaisedLimits(text));
@@ -113,6 +122,8 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("EXPORT_TIMEOUT_SECONDS=0.5")]
     [InlineData("RATE_LIMIT_PER_USER_PER_MIN=60 # was 100")] // a trailing comment isn't a value
     [InlineData("      - key: RATE_LIMIT_PER_USER_PER_MIN\n        value: \"60\" # e2e uses 6000")]
+    [InlineData("EXPORT_MAX_ROWS=25000")] // the built-in cap is the ceiling
+    [InlineData("EXPORT_MAX_ROWS=24999")] // tighter is fine
     public void Default_or_tighter_values_pass(string text)
     {
         Assert.Empty(RaisedLimits(text));
