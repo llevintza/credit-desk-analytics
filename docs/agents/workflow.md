@@ -139,7 +139,7 @@ The group and the verb are the first two words after `gh`; for `gh api`, the end
 ## Who signs off
 
 - Gate: Tech Coordinator plus Code Reviewer (AGENTS item 6). Tech Coordinator merges.
-- `[workflows]` PRs are reviewed by hand by Tech Coordinator and Leo. Helms (CTO) signs off on `[workflows]` and rules PRs on Leo's behalf (delegated 2026-10-07); Leo can take any PR back for his own review.
+- `[workflows]` PRs are reviewed by hand by Tech Coordinator and Leo. Helms (CTO) signs off on `[workflows]` and rules PRs (any PR that changes agent rules: an `AGENTS.md` or `CLAUDE.md`, `.claude/`, `.cursor/`, `.grok/`, `docs/agents/` or `scripts/agents/`) on Leo's behalf (delegated 2026-10-07, 10:02 PM ET); Leo can take any PR back for his own review.
 
 ## Things only Tech Coordinator (or a human) does
 
