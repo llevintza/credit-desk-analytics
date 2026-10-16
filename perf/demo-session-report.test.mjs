@@ -144,3 +144,41 @@ test('cache-memory stops on a refused sign-in', async () => {
   assert.equal(out.status, 1);
   assert.match(out.stderr, /login failed: HTTP 401/);
 });
+
+test('cache-memory defaults BASE_URL to the local stack, and still refuses to run without credentials', () => {
+  const out = run('./cache-memory.mjs', []);
+  assert.equal(out.status, 1);
+  assert.match(out.stderr, /Set DESK_EMAIL and DESK_PASSWORD/);
+});
+
+test('cache-memory stops when the book runs out before the size, and counts no refused or unlabelled body', async () => {
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/api/auth/login') return res.end(JSON.stringify({ accessToken: 't' }));
+      if (req.url === '/api/meta/columns') return res.end(JSON.stringify([{ name: 'a' }]));
+      const q = JSON.parse(body);
+      if (q.endRow === 1) return res.end(JSON.stringify({ rowCount: 600 }));
+      // Block 0: no X-Cache header at all. Block 500: a refused MISS (503), which stores nothing.
+      if (q.startRow === 500) { res.statusCode = 503; res.setHeader('x-cache', 'MISS'); }
+      res.end('x'.repeat(1024));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const out = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [new URL('./cache-memory.mjs', import.meta.url).pathname, '--parallel', '2'], {
+      env: { PATH: process.env.PATH, BASE_URL: `http://127.0.0.1:${server.address().port}`, DESK_EMAIL: 'a@example.com', DESK_PASSWORD: 'x' },
+    });
+    let stdout = '';
+    child.stdout.on('data', (c) => (stdout += c));
+    child.on('close', (status) => resolve({ status, stdout }));
+  });
+  server.close();
+  assert.equal(out.status, 0);
+  // Two blocks (600 rows, one sort column), well short of the default 160 MB: both workers drain the queue and stop.
+  assert.match(out.stdout, /CACHE_FILL requests=2 miss_mb=0\.0 /);
+  assert.match(out.stdout, /"200 -":1/);
+  assert.match(out.stdout, /"503 MISS":1/);
+});

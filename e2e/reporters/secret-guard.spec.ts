@@ -171,3 +171,63 @@ test('fails closed when the run needs the password and DESK_PASSWORD is empty, u
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('#278: scans for the admin password too, and requires it only when the admin projects run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'secret-guard-'));
+  const config = { configFile: join(dir, 'playwright.config.ts') } as never;
+  const suite = (...projects: string[]) => ({ allTests: () => projects.map((name) => ({ parent: { project: () => ({ name }) } })) }) as never;
+  const testCase = { title: 'log in as admin', location: { file: 'admin.setup.ts', line: 1, column: 1 } } as never;
+  const printed: string[] = [];
+  const logged = console.error;
+  const saved = { viewer: process.env.DESK_PASSWORD, admin: process.env.DESK_ADMIN_PASSWORD };
+  const adminSecret = 'not-a-real-admin-pw/"9c';
+  console.error = (message: string) => printed.push(message);
+  try {
+    process.env.DESK_PASSWORD = '14-characters!';
+    delete process.env.DESK_ADMIN_PASSWORD;
+    // A viewer-only run (no admin projects) needs no admin password.
+    const viewerOnly = new SecretGuard({ dirs: [dir] });
+    viewerOnly.onBegin(config, suite('guard', 'setup', 'chromium'));
+    expect(await viewerOnly.onEnd()).toBeUndefined();
+
+    for (const projects of [['admin-setup'], ['setup', 'chromium', 'admin-setup', 'admin']]) {
+      const noAdmin = new SecretGuard({ dirs: [dir] });
+      noAdmin.onBegin(config, suite(...projects));
+      expect(await noAdmin.onEnd()).toEqual({ status: 'failed' });
+    }
+    expect(printed.join('\n')).toContain('DESK_ADMIN_PASSWORD is empty or shorter than 14 characters');
+    expect(printed.join('\n')).not.toMatch(/DESK_PASSWORD (and|is)/);
+
+    // An admin-only run needs no viewer password.
+    printed.length = 0;
+    delete process.env.DESK_PASSWORD;
+    process.env.DESK_ADMIN_PASSWORD = adminSecret;
+    const adminOnly = new SecretGuard({ dirs: [dir] });
+    adminOnly.onBegin(config, suite('admin-setup', 'admin'));
+    expect(await adminOnly.onEnd()).toBeUndefined();
+    expect(printed).toEqual([]);
+
+    // Both missing: both named, never a value.
+    delete process.env.DESK_ADMIN_PASSWORD;
+    const neither = new SecretGuard({ dirs: [dir] });
+    neither.onBegin(config, suite('setup', 'admin'));
+    expect(await neither.onEnd()).toEqual({ status: 'failed' });
+    expect(printed.join('\n')).toContain('DESK_PASSWORD and DESK_ADMIN_PASSWORD are empty');
+
+    // The admin password in a step is a leak, like the viewer's.
+    process.env.DESK_PASSWORD = '14-characters!';
+    process.env.DESK_ADMIN_PASSWORD = adminSecret;
+    const leak = new SecretGuard({ dirs: [dir] });
+    leak.onBegin(config, suite('admin-setup', 'admin'));
+    leak.onStepEnd(testCase, {} as never, { title: `Fill "${adminSecret}"`, location: { file: 'login.ts', line: 12, column: 1 } } as never);
+    expect(await leak.onEnd()).toEqual({ status: 'failed' });
+    expect(printed.join('\n')).not.toContain(adminSecret);
+  } finally {
+    console.error = logged;
+    for (const [key, value] of [['DESK_PASSWORD', saved.viewer], ['DESK_ADMIN_PASSWORD', saved.admin]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
