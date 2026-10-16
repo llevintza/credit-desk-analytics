@@ -12,7 +12,7 @@ Area file for `deploy/` (the app Dockerfile, `start.sh`, and the pinned CI tool 
 - `Dockerfile` is multi-stage: node builds `web`, `dotnet publish`, runtime image.
 - No credentials or `Password=…` literals in any Dockerfile, compose file or script.
 - The runtime image publishes only `Desk.Api`, and the db-tools bundle only efbundle and the seeder. Never add `Desk.UserAdmin` to either, or to a workflow that holds production secrets (ADR-0020 §1, H19).
-- `ci-images/*/Dockerfile` pins the CI tools. Keep each pin in step with the workflows that run it (`.github/AGENTS.md`).
+- `ci-images/*/Dockerfile` pins the CI tools. Keep each pin in step with the workflows that run it (`.github/AGENTS.md`); `gate-tests` checks the tag and digest agree (#255).
 
 ## Deploy facts agents must not forget
 

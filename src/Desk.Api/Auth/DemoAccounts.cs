@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Desk.Data.App;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -14,21 +15,27 @@ namespace Desk.Api.Auth;
 public sealed class DemoAccounts
 {
     public const string ConfigKey = "DEMO_ACCOUNTS_JSON";
+    /// <summary>The <c>granted_by</c> of a demo account's portfolio grants.</summary>
+    public const string GrantedBy = ConfigKey;
 
     private readonly Dictionary<string, DemoAccount> _byEmail;
     private readonly ILogger<DemoAccounts> _logger;
+    private readonly TimeProvider _time;
 
-    public DemoAccounts(IConfiguration config, ILogger<DemoAccounts> logger)
+    public DemoAccounts(IConfiguration config, ILogger<DemoAccounts> logger, TimeProvider? time = null)
     {
         _logger = logger;
+        _time = time ?? TimeProvider.System;
         _byEmail = Parse(config[ConfigKey], logger);
     }
 
     /// <summary>
     /// The account for <paramref name="email"/>, creating it first when it's a configured demo account that doesn't
     /// exist yet. One lookup for the common case; null when there is no such account.
-    /// The entry applies only when the account is first created: a later change to its password, role or expiry in
-    /// <c>DEMO_ACCOUNTS_JSON</c> doesn't touch the existing account (manage that one with the UserAdmin CLI).
+    /// The entry applies only when the account is first created: a later change to its password, role, expiry or
+    /// portfolios in <c>DEMO_ACCOUNTS_JSON</c> doesn't touch the existing account (manage that one with the UserAdmin CLI).
+    /// The entry's <c>portfolios</c> become its grants (ADR-0021 E2), saved together with the role, so an account that has
+    /// its role also has its grants; an entry without <c>portfolios</c> gets none.
     /// </summary>
     /// <param name="email">The login email.</param>
     /// <param name="users">The request's user manager.</param>
@@ -57,9 +64,17 @@ public sealed class DemoAccounts
         }
         if (created.Succeeded)
         {
+            // Tracked on the request's context, so the role's save writes them in the same transaction (ADR-0021 E2).
+            var now = _time.GetUtcNow();
+            var grants = (demo.Portfolios ?? []).Select(id => new PortfolioGrant { UserId = user.Id, PortfolioId = id, GrantedAt = now, GrantedBy = GrantedBy }).ToList();
+            db.Set<PortfolioGrant>().AddRange(grants);
             var role = await FailureIfThrown(() => users.AddToRoleAsync(user, demo.Role));
             if (role.Succeeded)
                 return user;
+
+            // Not saved: stop tracking them, so the removal below (or the request's next save) doesn't try to insert them.
+            foreach (var grant in grants)
+                db.Entry(grant).State = EntityState.Detached;
 
             // An account without its role must not sign in: remove it, so the next login tries again. If the removal
             // fails too, LoginAsync still refuses the account (#275).
@@ -131,8 +146,13 @@ public sealed class DemoAccounts
                 logger.LogWarning("Skipping a demo account entry: it needs email, password, expires and a role of viewer or admin.");
                 continue;
             }
-            // Postgres timestamptz takes UTC only (Npgsql rejects other offsets).
-            result[a.Email] = a with { Expires = a.Expires.ToUniversalTime() };
+            // Postgres timestamptz takes UTC only (Npgsql rejects other offsets). Portfolio ids are positive; others can't
+            // match a portfolio, so they're dropped.
+            result[a.Email] = a with
+            {
+                Expires = a.Expires.ToUniversalTime(),
+                Portfolios = a.Portfolios is null ? null : [.. a.Portfolios.Where(id => id > 0).Distinct().Order()],
+            };
         }
         return result;
     }
@@ -142,7 +162,8 @@ public sealed record DemoAccount(
     [property: JsonPropertyName("email")] string Email,
     [property: JsonPropertyName("password")] string Password,
     [property: JsonPropertyName("role")] string Role,
-    [property: JsonPropertyName("expires")] DateTimeOffset Expires);
+    [property: JsonPropertyName("expires")] DateTimeOffset Expires,
+    [property: JsonPropertyName("portfolios")] int[]? Portfolios = null);
 
 [JsonSerializable(typeof(DemoAccount[]))]
 internal sealed partial class DemoAccountJson : JsonSerializerContext;

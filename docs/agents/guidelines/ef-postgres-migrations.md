@@ -23,4 +23,4 @@ Linked from [`src/Desk.Data/AGENTS.md`](../../../src/Desk.Data/AGENTS.md) and th
 
 ## Data
 
-- No seed data in migrations. A seeded-schema change bumps `SeedVersion` (`src/Desk.Seeder/SeedVersion.cs`).
+- No seed data in migrations. Bump `SeedVersion` (`src/Desk.Seeder/SeedVersion.cs`) only when the shape of the seeded data changes: a generator change, or a seeded table or column added, dropped, renamed or retyped. A constraint- or index-only migration that the existing data satisfies (#286) needs no bump.

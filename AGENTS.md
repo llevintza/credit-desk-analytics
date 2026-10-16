@@ -74,7 +74,7 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 - **Money:** use `decimal` / `numeric`. Round only at the display edge. Empty or zero weights return `null`, never `NaN`.
 - **Angular:** OnPush + signals; `switchMap` for supersedable queries; `takeUntilDestroyed` for manual subscriptions; no mutation of bound data; `@for` tracks a stable id. Detail: `web/AGENTS.md`.
 - **AG Grid Community only.** Don't import or enable Enterprise modules.
-- **Respect the free tiers:** no keep-awake pingers; health probes never touch the DB; cache-first reads; rate limits stay on in every environment except unit tests.
+- **Respect the free tiers:** no keep-awake pingers; `/health` never touches the DB; `/health/db` is the one DB probe (README §7.2, #365), never point an uptime monitor at it; cache-first reads; rate limits stay on in every environment except unit tests.
 - **Never run DDL or seeding from the app at startup.** Never run `--force` seeding or the load benchmark against production or Neon. Run the grid benchmarks and k6 only against a local stack (compose or `dotnet run`), never against Render, Neon or production. Run e2e, `perf/payload-size.mjs`, `perf/LastBlockCheck` and k6 only against a local stack (`BASE_URL=http://localhost:8080`) with a throwaway account you created locally with Desk.UserAdmin; never against the Render URL or with a real account's login.
 
 ## Commands (keep them current; area commands are in the area files: create a user in `src/Desk.UserAdmin/AGENTS.md`, e2e in `tests/AGENTS.md`, budgets, benchmarks and k6 in the `perf-budgets` skill)

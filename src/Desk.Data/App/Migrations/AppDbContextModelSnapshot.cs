@@ -18,7 +18,7 @@ namespace Desk.Data.App.Migrations
 #pragma warning disable 612, 618
             modelBuilder
                 .HasDefaultSchema("app")
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -120,6 +120,32 @@ namespace Desk.Data.App.Migrations
                     b.ToTable("column_catalog", "app");
                 });
 
+            modelBuilder.Entity("Desk.Data.App.PortfolioGrant", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer")
+                        .HasColumnName("portfolio_id");
+
+                    b.Property<DateTimeOffset>("GrantedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("granted_at");
+
+                    b.Property<string>("GrantedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("granted_by");
+
+                    b.HasKey("UserId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.ToTable("portfolio_grant", "app");
+                });
+
             modelBuilder.Entity("Desk.Data.App.Preset", b =>
                 {
                     b.Property<long>("Id")
@@ -199,6 +225,42 @@ namespace Desk.Data.App.Migrations
                     b.HasIndex("CompletedAt");
 
                     b.ToTable("seed_metadata", "app");
+                });
+
+            modelBuilder.Entity("Desk.Data.Auth.AuthSession", b =>
+                {
+                    b.Property<string>("Sid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("sid");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("PreviousRid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("previous_rid");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("Rid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("rid");
+
+                    b.Property<DateTimeOffset>("RotatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rotated_at");
+
+                    b.HasKey("Sid");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("sessions", "auth");
                 });
 
             modelBuilder.Entity("Desk.Data.Auth.DeskUser", b =>
@@ -477,6 +539,15 @@ namespace Desk.Data.App.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("user_tokens", "auth");
+                });
+
+            modelBuilder.Entity("Desk.Data.App.PortfolioGrant", b =>
+                {
+                    b.HasOne("Desk.Data.Auth.DeskUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Desk.Data.App.Preset", b =>

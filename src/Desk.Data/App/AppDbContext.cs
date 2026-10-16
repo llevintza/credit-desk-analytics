@@ -22,7 +22,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ColumnCatalogEntry> ColumnCatalog => Set<ColumnCatalogEntry>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
     public DbSet<Preset> Presets => Set<Preset>();
+    public DbSet<PortfolioGrant> PortfolioGrants => Set<PortfolioGrant>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
+    public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -81,6 +83,21 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        // ADR-0021: per-user portfolio grants. The only FK is to auth.users; core.portfolio is truncated by the seeder
+        // and may move to another database.
+        b.Entity<PortfolioGrant>(e =>
+        {
+            e.ToTable("portfolio_grant");
+            e.HasKey(x => new { x.UserId, x.PortfolioId });
+            e.Property(x => x.UserId).HasColumnName("user_id");
+            e.Property(x => x.PortfolioId).HasColumnName("portfolio_id");
+            e.Property(x => x.GrantedAt).HasColumnName("granted_at");
+            e.Property(x => x.GrantedBy).HasColumnName("granted_by").HasMaxLength(256);
+            e.HasIndex(x => x.PortfolioId);
+            // A deleted account takes its grants with it.
+            e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         b.Entity<DeskUser>(e =>
         {
             e.ToTable("users", AuthSchema);
@@ -100,6 +117,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         b.Entity<IdentityUserToken<Guid>>().ToTable("user_tokens", AuthSchema);
         b.Entity<IdentityRoleClaim<Guid>>().ToTable("role_claims", AuthSchema);
         b.Entity<DataProtectionKey>().ToTable("data_protection_keys", AuthSchema);
+        b.Entity<AuthSession>(e =>
+        {
+            // Logout revocations and refresh rotation (#354, ADR-0024): read and written only at login, refresh and
+            // logout, never per request.
+            e.ToTable("sessions", AuthSchema);
+            e.HasKey(x => x.Sid);
+            e.Property(x => x.Sid).HasMaxLength(32);
+            e.Property(x => x.Rid).HasMaxLength(32);
+            e.Property(x => x.PreviousRid).HasMaxLength(32);
+            // Every sign-in deletes the sessions past their 24 h limit.
+            e.HasIndex(x => x.ExpiresAt);
+        });
 
         // Identity's own columns are PascalCase; keep the database snake_case like every other table.
         foreach (var entity in b.Model.GetEntityTypes().Where(t => t.GetSchema() == AuthSchema))

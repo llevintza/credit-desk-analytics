@@ -21,6 +21,7 @@ Area file for `web/` (Angular workspace and Vitest unit tests). The root `AGENTS
 |---|---|
 | Web dev server | `cd web && npm start` (http://localhost:4200, proxies to :5180) |
 | Web lint + unit tests | `cd web && npm run lint && npm test -- --watch=false` |
+| Tooling tests + coverage | `cd web && npm run test:tooling` (`node --test` over `scripts/` and `eslint-rules/`, ≥80% line and branch; `npm test` runs it first, #317) |
 
 ## PRs that touch the UI
 

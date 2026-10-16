@@ -17,7 +17,7 @@
 
   <!-- GitHub -->
   <rect x="40" y="105" width="1420" height="380" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
-  <text x="60" y="134" class="tag">GITHUB · PRIVATE REPOSITORY · GITHUB ACTIONS</text>
+  <text x="60" y="134" class="tag">GITHUB · PUBLIC REPOSITORY · GITHUB ACTIONS</text>
 
   <rect x="60" y="152" width="200" height="150" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
   <text x="76" y="178" class="h">Pull request</text>
@@ -26,6 +26,14 @@
   <text x="76" y="238" class="b">choice, with measured</text>
   <text x="76" y="256" class="b">numbers; Conventional</text>
   <text x="76" y="274" class="b">Commits</text>
+
+  <rect x="60" y="316" width="200" height="150" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="76" y="342" class="h">GitHub Pages</text>
+  <text x="76" y="366" class="b">pages.yml on push to</text>
+  <text x="76" y="384" class="b">main: the SPA built for</text>
+  <text x="76" y="402" class="b">/credit-desk-analytics/</text>
+  <text x="76" y="420" class="b">against vars.APP_URL</text>
+  <text x="76" y="446" class="s">ADR-0024</text>
 
   <line x1="262" y1="227" x2="296" y2="227" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
 
@@ -84,10 +92,10 @@
   <line x1="292" y1="760" x2="326" y2="760" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
   <rect x="328" y="672" width="452" height="180" rx="8" fill="#ffffff" stroke="#86efac"/>
   <text x="344" y="696" class="h">Running container</text>
-  <text x="344" y="720" class="b">One origin serves the SPA and /api (no CORS)</text>
+  <text x="344" y="720" class="b">Serves the SPA and /api; CORS only for configured origins</text>
   <text x="344" y="742" class="b">Starts the app only; never runs DDL at boot</text>
   <text x="344" y="764" class="b">/health returns the build's git SHA</text>
-  <text x="344" y="786" class="b">Secrets only in the Render dashboard (DATABASE_URL)</text>
+  <text x="344" y="786" class="b">Bearer tokens; secrets only in the Render dashboard</text>
   <text x="344" y="808" class="b">Kill switch: MAINTENANCE_MODE=true → 503</text>
   <text x="344" y="830" class="s">Free tier sleeps when idle: first visit takes ~30–60 s to wake</text>
 

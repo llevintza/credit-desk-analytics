@@ -17,6 +17,9 @@ namespace Desk.UserAdmin;
 /// </summary>
 public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFactory? loggerFactory = null, TimeProvider? time = null)
 {
+    /// <summary>The <c>granted_by</c> of grants written here.</summary>
+    public const string GrantedBy = "Desk.UserAdmin";
+
     private readonly ILoggerFactory _loggers = loggerFactory ?? NullLoggerFactory.Instance;
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
@@ -58,6 +61,8 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
                 UserAdminCommand.Add => await AddAsync(users, options, ct),
                 UserAdminCommand.List => await ListAsync(scope.ServiceProvider.GetRequiredService<AppDbContext>(), ct),
                 UserAdminCommand.Disable => await DisableAsync(users, options.Email!, ct),
+                UserAdminCommand.Grant => await GrantAsync(users, scope.ServiceProvider.GetRequiredService<AppDbContext>(), options, ct),
+                UserAdminCommand.Revoke => await RevokeAsync(users, scope.ServiceProvider.GetRequiredService<AppDbContext>(), options, ct),
                 _ => await ResetAsync(users, options.Email!, ct),
             };
         }
@@ -81,6 +86,8 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton(_time);
         services.AddDeskData(config);
+        // The base UserManager: its IsLockedOutAsync and AccessFailedAsync read the wall clock, not _time. No command
+        // calls them; one that needs lockout uses DeskUser.IsLockedOutAt with _time (the API's rule, #313).
         services.AddIdentityCore<DeskUser>(IdentityPolicy.Apply)
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<AppDbContext>();
@@ -121,23 +128,29 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
                 u.Email,
                 u.ExpiresAt,
                 u.IsDisabled,
+                u.LockoutEnabled,
                 u.LockoutEnd,
                 Roles = db.UserRoles.Where(ur => ur.UserId == u.Id)
                     .Join(db.Roles, ur => ur.RoleId, r => r.Id, (_, r) => r.Name)
                     .OrderBy(n => n)
                     .ToList(),
+                Grants = db.PortfolioGrants.Where(g => g.UserId == u.Id).OrderBy(g => g.PortfolioId).Select(g => g.PortfolioId).ToList(),
             })
             .ToListAsync(ct);
-        await stdout.WriteLineAsync($"{"EMAIL",-40} {"ROLES",-14} {"EXPIRES (UTC)",-17} STATUS");
+        await stdout.WriteLineAsync($"{"EMAIL",-40} {"ROLES",-14} {"EXPIRES (UTC)",-17} {"STATUS",-9} GRANTS");
         foreach (var u in all)
         {
             var roleNames = string.Join(",", u.Roles);
             var status = u.IsDisabled ? "disabled"
                 : now >= u.ExpiresAt ? "expired"
-                : u.LockoutEnd > now ? "locked"
+                : DeskUser.IsLockedOutAt(u.LockoutEnabled, u.LockoutEnd, now) ? "locked"
                 : "active";
+            // ENTITLEMENTS_MODE=grants: an admin sees every portfolio whatever its grants (ADR-0021 E1); no grants is none (E2).
+            var grants = u.Roles.Contains(Roles.Admin) ? "all (admin)"
+                : u.Grants.Count == 0 ? "none"
+                : string.Join(",", u.Grants);
             await stdout.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
-                $"{u.Email,-40} {roleNames,-14} {u.ExpiresAt.AddDays(-1):yyyy-MM-dd}        {status}"));
+                $"{u.Email,-40} {roleNames,-14} {u.ExpiresAt.AddDays(-1):yyyy-MM-dd}        {status,-9} {grants}"));
         }
         await stdout.WriteLineAsync($"{all.Count} account(s).");
         return 0;
@@ -153,6 +166,42 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         // security-stamp check end any live session (README §7.1).
         Check(await users.UpdateSecurityStampAsync(user));
         await stdout.WriteLineAsync($"Disabled {email}. Live sessions end within a few minutes.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Adds portfolio grants (ADR-0021). Never touches the security stamp: rotating it would sign the user out, and the
+    /// grant applies at their next token refresh anyway (within 5 minutes, E5).
+    /// </summary>
+    private async Task<int> GrantAsync(UserManager<DeskUser> users, AppDbContext db, UserAdminOptions o, CancellationToken ct)
+    {
+        if (await users.FindByEmailAsync(o.Email!) is not { } user)
+            return await FailAsync($"No account for {o.Email}.");
+        var had = await db.PortfolioGrants.Where(g => g.UserId == user.Id && o.Portfolios!.Contains(g.PortfolioId))
+            .Select(g => g.PortfolioId).ToListAsync(ct);
+        var added = o.Portfolios!.Except(had).ToList();
+        var now = _time.GetUtcNow();
+        db.PortfolioGrants.AddRange(added.Select(id => new PortfolioGrant { UserId = user.Id, PortfolioId = id, GrantedAt = now, GrantedBy = GrantedBy }));
+        await db.SaveChangesAsync(ct);
+
+        var message = added.Count > 0 ? $"Granted portfolios {string.Join(", ", added)} to {o.Email}." : $"No new grants for {o.Email}.";
+        if (had.Count > 0)
+            message += $" It already had {string.Join(", ", had.Order())}.";
+        await stdout.WriteLineAsync(message + " Takes effect at the next token refresh (within 5 minutes).");
+        return 0;
+    }
+
+    /// <summary>Removes portfolio grants (ADR-0021). Like <see cref="GrantAsync"/>, never rotates the security stamp.</summary>
+    private async Task<int> RevokeAsync(UserManager<DeskUser> users, AppDbContext db, UserAdminOptions o, CancellationToken ct)
+    {
+        if (await users.FindByEmailAsync(o.Email!) is not { } user)
+            return await FailAsync($"No account for {o.Email}.");
+        var removed = await db.PortfolioGrants.Where(g => g.UserId == user.Id && o.Portfolios!.Contains(g.PortfolioId))
+            .Select(g => g.PortfolioId).OrderBy(id => id).ToListAsync(ct);
+        await db.PortfolioGrants.Where(g => g.UserId == user.Id && o.Portfolios!.Contains(g.PortfolioId)).ExecuteDeleteAsync(ct);
+
+        await stdout.WriteLineAsync((removed.Count > 0 ? $"Revoked portfolios {string.Join(", ", removed)} from {o.Email}." : $"{o.Email} had none of those grants.")
+            + " Takes effect at the next token refresh (within 5 minutes).");
         return 0;
     }
 
