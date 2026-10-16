@@ -765,7 +765,6 @@ ConnectionStrings__Surveillance=
 ConnectionStrings__Pricing=
 ConnectionStrings__Reference=
 ConnectionStrings__App=
-SEED_DEMO=false
 SEED=42
 SEED_SCALE=1.0
 MAINTENANCE_MODE=false
@@ -808,8 +807,6 @@ services:
         value: Production
       - key: ASPNETCORE_FORWARDEDHEADERS_ENABLED   # X-Forwarded-Proto + behind-proxy client address (below)
         value: "true"
-      - key: SEED_DEMO
-        value: "false"
       - key: MAINTENANCE_MODE
         value: "false"
       - key: CORS_ALLOWED_ORIGINS   # the GitHub Pages front end (ADR-0024); unset = no cross-origin access
