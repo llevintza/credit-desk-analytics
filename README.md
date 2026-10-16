@@ -827,6 +827,9 @@ services:
   - The instance spins down after about 15 min idle, and the next request takes about 30–60 s. The login page's "Waking the server…" state covers it.
   - Monthly free instance hours are limited, so **no keep-awake pinger.**
   - For a scheduled demo or review window, switch `plan` to `starter` temporarily.
+- **`/health` alerting threshold** (Helms, 2026-10-16, #303): an **incident is 3 consecutive `/health` timeouts**. A single 10 s timeout followed by a normal 200 is accepted on the free tier: note it, don't escalate. Two in a row: keep watching. Where it applies:
+  - **Deploy smoke** (§14.2): it already tolerates single misses. Each poll that times out or errors is just retried 15 s later, and the step fails only when `/health` hasn't reported the merged SHA within 15 minutes. A failed smoke is a deploy failure, not a timeout count.
+  - **Manual or ad-hoc checks** (runbook: [`docs/deployment-setup.md`](docs/deployment-setup.md#troubleshooting)): apply the 3-in-a-row rule to consecutive requests from one watcher. Watch `/health` only, never `/health/db` (§7.2), and don't leave a watcher running: a standing poller is a keep-awake pinger.
 - **`/health` returns the build's git SHA** (`{"status":"ok","version":"<sha>"}`, baked in with a Docker build arg), so the pipeline can confirm the new build is live.
 
 ### 13.3 One-time setup (done by hand by the repo owner)
