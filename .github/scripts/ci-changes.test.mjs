@@ -511,7 +511,7 @@ test("the pinned base makes the gate's diff match the classifier's when main mov
 // #278 (#447 nit): when the changes job fails before it pins a base (or leaves no output), the coverage gate
 // falls back to the event base, the pre-#213 range. That fallback must be visible (a ::warning::), and the
 // step summary must say which base the gate actually diffed from.
-test("ci.yml: the coverage gate warns on the event-base fallback and labels its diff base (#278)", () => {
+test("coverage gate step: warns on the event-base fallback and labels its diff base (#278)", () => {
   const coverage = jobBlock("coverage");
   const m = /^      - name: Coverage gates\n([\s\S]*?)(?=^      - |(?![\s\S]))/m.exec(coverage);
   assert.ok(m, "Coverage gates step not found");
