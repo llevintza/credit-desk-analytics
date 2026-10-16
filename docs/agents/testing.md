@@ -114,6 +114,7 @@ Build-work fixtures for the seventh nested node (`src/Desk.UserAdmin`). `arming.
 | D16 | root `AGENTS.md` area-index link to `src/Desk.UserAdmin/AGENTS.md` | resolves |
 | D4 / D14 | with `cursorAreaRules: true`: the regen includes the UserAdmin `.mdc` (`globs: src/Desk.UserAdmin/**`) and its lock entry | pass; a missing or edited `.mdc` fails |
 | governance-paths | a PR touching only `src/Desk.UserAdmin/AGENTS.md` without a `[workflows]` title / a PR touching only `src/Desk.UserAdmin/UserAdminApp.cs` | fail / pass (not a governance path, H19) |
+| governance-paths | a PR touching only `e2e/docker-compose.e2e.yml` / only the root `docker-compose.yml`, each without a `[workflows]` title (#157) | fail / fail (both match the recursive compose globs) |
 | review-restore-matrix | a PR edits `src/Desk.UserAdmin/AGENTS.md` | the working tree holds the base copy; the PR copy is in `.review-pr/` |
 
 App tests that belong in #122's issue, not the harness: `grant`/`revoke` leave `SecurityStamp` unchanged and print no password; `list` shows grants with no hashes or stamps; `disable` still rotates the stamp.

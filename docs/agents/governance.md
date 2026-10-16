@@ -111,7 +111,7 @@ jobs:
 - **Code:** main's `governance.mjs`. It reads the PR number from `$GITHUB_EVENT_PATH`, and the title from the same event JSON; the title is never printed. The file list comes from the shared `pr-data.mjs` functions (guard 10): the 3,000 cap, the count assertion and the status whitelist.
 - **Matching:** both `filename` and `previous_filename`, so a rename out of `.github/` still matches. Deletions are included. Case-insensitive.
 - **Path list:**
-  - `.github/**`, `**/Dockerfile*`, `**/*.Dockerfile`, `render.yaml`, `deploy/**`, `docker-compose*.y*ml`, `compose*.y*ml`
+  - `.github/**`, `**/Dockerfile*`, `**/*.Dockerfile`, `render.yaml`, `deploy/**`, `**/docker-compose*.y*ml`, `**/compose*.y*ml` (recursive, so a nested override such as `e2e/docker-compose.e2e.yml` matches as well as the root `docker-compose.yml`; #157)
   - `.claude/**`, `**/.claude/**`, `.cursor/**`, `.cursorignore`, `.grok/**`, `.mcp.json`
   - `**/AGENTS.md`, `**/AGENT.md`, `**/CLAUDE.md`, `**/CLAUDE.local.md`, `.claudeignore`
   - `docs/agents/**`, `scripts/agents/**`, `.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json`, `.gitmodules` (`.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json` as in main's AGENTS `[workflows]` bullet since #5)
@@ -227,8 +227,8 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 **/Dockerfile* @llevintza
 /deploy/ @llevintza
 /render.yaml @llevintza
-/docker-compose*.yml @llevintza
-/compose*.y*ml @llevintza
+**/docker-compose*.y*ml @llevintza
+**/compose*.y*ml @llevintza
 /src/Desk.UserAdmin/ @llevintza
 /src/Desk.Api/Auth/ @llevintza
 /src/Desk.Data/Auth/ @llevintza
