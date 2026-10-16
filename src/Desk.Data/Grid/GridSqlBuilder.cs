@@ -90,6 +90,47 @@ public static class GridSqlBuilder
     }
 
     /// <summary>
+    /// The intraday overlay's totals (README §6 P6): the <paramref name="marked"/> columns' |market value|-weighted
+    /// averages over every row the query's filter matches, with each marked bond's value replaced by its intraday mark.
+    /// The marks arrive as three parallel array parameters (bond id, price, spread), joined on <c>bond_id</c>; their
+    /// aliases start with <c>mk_</c>, so no catalog column in the shared filter can resolve to them. The filter itself
+    /// still runs on the overnight values, like the grid's (only the displayed values are overlaid). Weights stay the
+    /// overnight |market value|: the overlay moves quotes, not valuations.
+    /// </summary>
+    public static GridSql BuildMarkTotals(GridQuery q, IEnumerable<ColumnDef> catalog, IReadOnlyList<ColumnDef> marked,
+        int[] bondIds, double[] prices, double?[] spreads)
+    {
+        var p = new List<KeyValuePair<string, object>>
+        {
+            new("as_of", q.AsOf),
+            new("portfolios", q.PortfolioIds),
+            new("mk_bond", bondIds),
+            new("mk_price", prices),
+            new("mk_spread", spreads),
+        };
+        var where = Where(q, catalog, p);
+        var sql = new StringBuilder("SELECT COUNT(*)::int AS row_count");
+        foreach (var c in marked)
+        {
+            var value = $"COALESCE(m.{MarkAlias(c)}, {Quote(c.Name)})";
+            sql.Append(", SUM(").Append(value).Append(" * ").Append(WeightF8Column).Append(") / NULLIF(SUM(").Append(WeightF8Column)
+               .Append(") FILTER (WHERE ").Append(value).Append(" IS NOT NULL), 0) AS ").Append(Quote(c.Name));
+        }
+        sql.Append(" FROM ").Append(Table)
+           .Append(" LEFT JOIN unnest(@mk_bond::int[], @mk_price::float8[], @mk_spread::float8[]) AS m(mk_bond, mk_price, mk_spread) ON m.mk_bond = bond_id")
+           .Append(" WHERE ").Append(where).Append(';');
+        return new GridSql(sql.ToString(), p);
+    }
+
+    /// <summary>The overlay columns: a fixed pair, so the aliases never come from a request.</summary>
+    private static string MarkAlias(ColumnDef c) => c.Name switch
+    {
+        "price" => "mk_price",
+        "spread_bp" => "mk_spread",
+        _ => throw new ArgumentException($"'{c.Name}' is not a marked column.", nameof(c)),
+    };
+
+    /// <summary>
     /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightF8Column"/>). Rows where the measure is NULL don't
     /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
