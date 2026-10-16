@@ -3,14 +3,18 @@ using Desk.Data.App;
 using Desk.Data.Catalog;
 using Desk.Data.Sources;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Desk.Data.Grid;
 
 public sealed record PortfolioInfo(int PortfolioId, string Name, int FundId, string FundName);
 
 /// <summary>Reference data that changes only with a reseed: the column catalog, as-of dates, portfolios, data version.</summary>
-public sealed class MetaRepository(IDbContextFactory<AppDbContext> contexts, IDataSourceRegistry sources)
+public sealed class MetaRepository(IDbContextFactory<AppDbContext> contexts, IDataSourceRegistry sources, ILogger<MetaRepository>? logger = null)
 {
+    private readonly ILogger _logger = logger ?? NullLogger<MetaRepository>.Instance;
+
     /// <summary>The column catalog from <c>app.column_catalog</c> (README §5.3: the catalog is data), in display order.</summary>
     public async Task<IReadOnlyList<ColumnDef>> CatalogAsync(CancellationToken ct)
     {
@@ -19,8 +23,21 @@ public sealed class MetaRepository(IDbContextFactory<AppDbContext> contexts, IDa
             .OrderBy(c => c.Ordinal)
             .Select(c => new { c.Name, c.Group, c.Kind, c.Aggregation, c.Header })
             .ToListAsync(ct);
-        return rows.Select(r => new ColumnDef(r.Name, r.Group, Enum.Parse<ColumnKind>(r.Kind), Enum.Parse<Aggregation>(r.Aggregation), r.Header)).ToArray();
+        var unknown = rows.Count(r => !Known(r.Aggregation));
+        if (unknown > 0)
+            _logger.LogWarning("Column catalog has {Count} aggregations this build doesn't know; their totals are |MV|-weighted until it's updated", unknown);
+        return rows.Select(r => new ColumnDef(r.Name, r.Group, Enum.Parse<ColumnKind>(r.Kind), ParseAggregation(r.Aggregation), r.Header)).ToArray();
     }
+
+    /// <summary>
+    /// A catalog row's aggregation. A name this build doesn't know (a newer seed or data migration that ran before this
+    /// app version was replaced, README §14.4) falls back to the |MV|-weighted average instead of failing every meta
+    /// load (#459). Only exact enum names count: numbers and other casings are unknown too.
+    /// </summary>
+    internal static Aggregation ParseAggregation(string value) =>
+        Known(value) ? Enum.Parse<Aggregation>(value) : Aggregation.WeightedByMarketValue;
+
+    private static bool Known(string value) => Enum.GetNames<Aggregation>().Contains(value, StringComparer.Ordinal);
 
     /// <summary>Identifies the loaded data: changes on every reseed, so ETags from an older load never match.</summary>
     public async Task<string> DataVersionAsync(CancellationToken ct)
