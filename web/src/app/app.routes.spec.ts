@@ -14,6 +14,7 @@ describe('app routes and config', () => {
     expect(shell.children?.find((c) => c.path === 'funds')?.loadComponent).toBeTypeOf('function');
     expect(shell.children?.find((c) => c.path === 'insights')?.loadComponent).toBeTypeOf('function');
     expect(shell.children?.find((c) => c.path === 'deals')?.loadComponent).toBeTypeOf('function');
+    expect(shell.children?.find((c) => c.path === 'lab')?.loadComponent).toBeTypeOf('function');
     expect(shell.children?.find((c) => c.path === 'usage')?.canActivate?.length).toBe(1);
   });
 
@@ -24,7 +25,7 @@ describe('app routes and config', () => {
   });
 
   it('lazy routes resolve their components', async () => {
-    for (const path of ['positions', 'funds', 'insights', 'deals']) {
+    for (const path of ['positions', 'funds', 'insights', 'deals', 'lab']) {
       const load = routes[1].children!.find((c) => c.path === path)!.loadComponent!;
       expect(await (load as () => Promise<unknown>)()).toBeTruthy();
     }
