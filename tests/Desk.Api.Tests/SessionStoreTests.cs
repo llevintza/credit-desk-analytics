@@ -142,8 +142,8 @@ public sealed class SessionStoreTests(PostgresApiFactory api)
         var (second, secondRevoked) = NewInstance();
         var (now, sid) = (Now, Sid());
         var end = now.AddHours(24);
-        await first.RevokeAsync(sid, end, now, Ct);
-        await first.RevokeAsync(sid, end, now.AddMinutes(1), Ct); // again: keeps the first time
+        await first.RevokeAsync(sid, end, now);
+        await first.RevokeAsync(sid, end, now.AddMinutes(1)); // again: keeps the first time
 
         var row = (await RowAsync(sid))!;
         Assert.Equal(now, row.RevokedAt);
@@ -160,7 +160,7 @@ public sealed class SessionStoreTests(PostgresApiFactory api)
         var (store, _) = NewInstance();
         var (now, old, past) = (Now, Sid(), Sid());
         await store.IssueAsync(old, "r0", now.AddHours(1), now, Ct);
-        await store.RevokeAsync(past, now, now, Ct); // already at its limit: nothing to remember
+        await store.RevokeAsync(past, now, now); // already at its limit: nothing to remember
         Assert.Null(await RowAsync(past));
 
         var fresh = Sid();

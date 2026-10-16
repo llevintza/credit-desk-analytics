@@ -149,7 +149,7 @@ public sealed class SessionStore(TimeSpan grace, IDbContextFactory<AppDbContext>
             if (presented is not null && string.Equals(row.PreviousRid, presented, StringComparison.Ordinal) && now - row.RotatedAt < grace)
                 return new Rotation(row.Rid, Replayed: false);
 
-            await RevokeAsync(sid, until, now, ct);
+            await RevokeAsync(sid, until, now);
             return new Rotation(null, Replayed: true);
         }
     }
@@ -157,18 +157,23 @@ public sealed class SessionStore(TimeSpan grace, IDbContextFactory<AppDbContext>
     /// <summary>
     /// Ends the session until <paramref name="until"/> (its 24 h limit): logout, or a replay. This instance refuses its
     /// tokens at once; every instance refuses its refresh token, and so ends it within one access-token life (5 min).
+    /// <para>
+    /// Takes no request token on purpose: a client that drops the connection (a replaying thief, or the reload of
+    /// #366) must not cancel the write and leave the session ended only in this process's memory, to come back on
+    /// another instance or after a restart. The write is bounded by the command timeout instead.
+    /// </para>
     /// </summary>
-    public async Task RevokeAsync(string sid, DateTimeOffset until, DateTimeOffset now, CancellationToken ct)
+    public async Task RevokeAsync(string sid, DateTimeOffset until, DateTimeOffset now)
     {
         revoked.Revoke(sid, until, now);
         if (until <= now)
             return;
-        await using var db = await contexts.CreateDbContextAsync(ct);
+        await using var db = await contexts.CreateDbContextAsync(CancellationToken.None);
         await db.Database.ExecuteSqlAsync($"""
             INSERT INTO auth.sessions (sid, rotated_at, expires_at, revoked_at)
             VALUES ({sid}, {now}, {until}, {now})
             ON CONFLICT (sid) DO UPDATE SET revoked_at = COALESCE(sessions.revoked_at, EXCLUDED.revoked_at)
-            """, ct);
+            """, CancellationToken.None);
     }
 }
 

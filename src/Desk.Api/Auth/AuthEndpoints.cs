@@ -171,13 +171,13 @@ public static class AuthEndpoints
 
     private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
 
-    internal static async Task<IResult> LogoutAsync(HttpContext http, SessionStore sessions, TimeProvider time, CancellationToken ct)
+    internal static async Task<IResult> LogoutAsync(HttpContext http, SessionStore sessions, TimeProvider time)
     {
         // Signed in here means SessionLimits found both claims valid.
         var sid = http.User.FindFirstValue(AuthSetup.SessionIdClaim)!;
         var authTime = SessionLimits.ReadAuthTime(http.User)!.Value;
         // Stored, so the refresh token is refused on every instance and after a restart (#354).
-        await sessions.RevokeAsync(sid, authTime + AuthSetup.AbsoluteExpiry, time.GetUtcNow(), ct);
+        await sessions.RevokeAsync(sid, authTime + AuthSetup.AbsoluteExpiry, time.GetUtcNow());
         return Results.NoContent();
     }
 
