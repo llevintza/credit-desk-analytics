@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
+using IPNetwork = System.Net.IPNetwork;
 
 namespace Desk.Api.Tests;
 
@@ -116,8 +117,8 @@ public sealed class ClientAddressTests
     [Fact]
     public void A_listed_trusted_hop_is_believed_as_a_peer_and_skipped_as_a_hop()
     {
-        var trusted = ClientAddress.ParseNetworks("198.51.100.0/24, garbage 2001:db8:ffff::/48");
-        Assert.Equal(2, trusted.Length); // unparsable entries are dropped
+        var trusted = ClientAddress.ParseNetworks("198.51.100.0/24, 2001:db8:ffff::/48");
+        Assert.Equal(2, trusted.Length);
         var h = new HeaderDictionary { ["X-Forwarded-For"] = $"{Client}, {CfEdge}, 198.51.100.10", ["CF-Connecting-IP"] = Client };
         Assert.Equal(Client, ClientAddress.Resolve(IPAddress.Parse(RenderLb), h, true, trusted)?.ToString());
         Assert.Equal(Client, ClientAddress.Resolve(IPAddress.Parse("198.51.100.20"), h, true, trusted)?.ToString());
@@ -127,12 +128,12 @@ public sealed class ClientAddressTests
 
     [Theory]
     [InlineData("162.158.0.0/15")] // a Cloudflare range listed by mistake
-    [InlineData("0.0.0.0/0")]      // or a range wide enough to cover Cloudflare
+    [InlineData("0.0.0.0/0")]      // or a range wide enough to cover Cloudflare (start-up rejects it; the resolver holds anyway)
     public void A_trusted_list_never_skips_a_cloudflare_hop(string listed)
     {
         // A Worker reaching Render directly arrives from a Cloudflare address with a forged prefix. Skipping that hop
         // as trusted would key on the forged entry; it must resolve exactly as with no list (the edge, R160-01).
-        var trusted = ClientAddress.ParseNetworks(listed);
+        IPNetwork[] trusted = [IPNetwork.Parse(listed)];
         var h = new HeaderDictionary { ["X-Forwarded-For"] = $"{Spoof}, {CfEdge}" };
         Assert.Equal(CfEdge, ClientAddress.Resolve(IPAddress.Parse(RenderLb), h, true, out var source, trusted)?.ToString());
         Assert.Equal(ClientAddress.Source.Edge, source);
@@ -147,6 +148,60 @@ public sealed class ClientAddressTests
         Assert.Equal("192.0.2.50", Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, {CfEdge}, 10.0.0.1, 192.0.2.50"), ("CF-Connecting-IP", Spoof)));
         // Through Cloudflare, a forged private hop in the client's prefix is left of the edge: CF-Connecting-IP wins.
         Assert.Equal(Client, Resolve(RenderLb, true, ("X-Forwarded-For", $"{Spoof}, 10.0.0.1, {Client}, {CfEdge}"), ("CF-Connecting-IP", Client)));
+    }
+
+    [Theory]
+    [InlineData("1.0.0.0/8")]                         // IPv4 at the cap
+    [InlineData("10.0.0.0/8, 203.0.113.0/24")]        // several entries, comma
+    [InlineData("198.51.100.0/24 2001:db8:ffff::/48")] // space separated, mixed families
+    [InlineData("2001:db8::/32")]                     // IPv6 at the cap
+    [InlineData("198.51.100.7/32, 2001:db8::1/128")]  // single hosts
+    public void Trusted_hops_at_or_narrower_than_the_cap_are_accepted(string value)
+    {
+        var parsed = ClientAddress.ParseNetworks(value);
+        Assert.Equal(value.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries).Length, parsed.Length);
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0/7", "0.0.0.0/7")]                   // one bit wider than the IPv4 cap
+    [InlineData("0.0.0.0/0", "0.0.0.0/0")]                   // every IPv4 address
+    [InlineData("198.51.100.0/24, 2001:db8::/31", "2001:db8::/31")] // one bit wider than the IPv6 cap, after a good entry
+    [InlineData("::/0", "::/0")]                             // every IPv6 address
+    [InlineData("2001::/16", "2001::/16")]                   // a whole IPv6 block
+    public void Start_up_rejects_a_trusted_hop_wider_than_the_cap(string value, string offending)
+    {
+        var e = Assert.Throws<InvalidOperationException>(() => ClientAddress.ParseNetworks(value));
+        Assert.Contains($"'{offending}'", e.Message);
+        Assert.Contains(ClientAddress.TrustedHopsKey, e.Message);
+        Assert.Contains(offending.Contains(':') ? "/32" : "/8", e.Message);
+    }
+
+    [Theory]
+    [InlineData("garbage")]
+    [InlineData("198.51.100.0/33")]  // prefix past the address length
+    [InlineData("198.51.100.1/24")]  // host bits set: probably a typo for a different range
+    [InlineData("198.51.100.0/")]
+    [InlineData("198.51.100.7")]     // a bare address: write 198.51.100.7/32
+    [InlineData("2001:db8::/129")]
+    public void Start_up_rejects_a_trusted_hop_that_is_not_a_cidr(string entry)
+    {
+        // Dropping a typo would quietly trust less than the operator meant, and the line that says so is easy to miss.
+        var e = Assert.Throws<InvalidOperationException>(() => ClientAddress.ParseNetworks($"203.0.113.0/24, {entry}"));
+        Assert.Contains($"'{entry}'", e.Message);
+        Assert.DoesNotContain("203.0.113.0/24", e.Message); // names only the offending entry
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" , ,  ")]
+    public void An_empty_trusted_hops_list_trusts_nothing_extra(string? value) => Assert.Empty(ClientAddress.ParseNetworks(value));
+
+    [Fact]
+    public void From_fails_on_an_over_wide_trusted_hop()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection([new(ClientAddress.TrustedHopsKey, "0.0.0.0/0")]).Build();
+        Assert.Contains("'0.0.0.0/0'", Assert.Throws<InvalidOperationException>(() => ClientAddress.From(config)).Message);
     }
 
     [Fact]

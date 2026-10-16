@@ -70,16 +70,41 @@ public sealed class ClientAddress(bool behindProxy, IPNetwork[]? trustedHops = n
 
     /// <summary>
     /// Public proxy ranges between Cloudflare and the app that the lists here don't know, from
-    /// <c>CLIENT_ADDRESS_TRUSTED_HOPS</c> (CIDRs, comma or space separated; unparsable entries are dropped). A peer in
-    /// them is believed, and a trailing hop in them is skipped like an internal one, so a hop the diagnostics show as
-    /// shared can be trusted from the dashboard without a release (#165). Never list a range clients connect from.
+    /// <c>CLIENT_ADDRESS_TRUSTED_HOPS</c> (CIDRs, comma or space separated). A peer in them is believed, and a trailing
+    /// hop in them is skipped like an internal one, so a hop the diagnostics show as shared can be trusted from the
+    /// dashboard without a release (#165). Never list a range clients connect from.
     /// </summary>
     public IPNetwork[] TrustedHops { get; } = trustedHops ?? [];
 
+    /// <summary>
+    /// The widest trusted hop allowed (#418). An IPv4 /8 is the widest private block (10.0.0.0/8, already trusted) and
+    /// far wider than any proxy range (Cloudflare's widest is a /13); an IPv6 /32 is a whole RIR allocation to one
+    /// network. Anything wider spans networks that clients connect from, whose forged <c>X-Forwarded-For</c> prefixes
+    /// would then pick their login key; <c>0.0.0.0/0</c> and <c>::/0</c> are the extreme case.
+    /// </summary>
+    public const int MinIPv4Prefix = 8, MinIPv6Prefix = 32;
+
+    /// <summary>
+    /// Parses <c>CLIENT_ADDRESS_TRUSTED_HOPS</c>, and stops start-up on an entry that isn't a CIDR (a typo would trust
+    /// less than meant, silently) or is wider than <see cref="MinIPv4Prefix"/> / <see cref="MinIPv6Prefix"/>. The
+    /// message names only the offending entry: the value isn't secret, and nothing else from configuration is shown.
+    /// </summary>
     internal static IPNetwork[] ParseNetworks(string? value) =>
         [.. (value ?? "").Split([',', ' '], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Select(v => IPNetwork.TryParse(v, out var n) ? n : (IPNetwork?)null)
-            .OfType<IPNetwork>()];
+            .Select(ParseTrustedHop)];
+
+    private static IPNetwork ParseTrustedHop(string entry)
+    {
+        // IPNetwork masks off bits set past the prefix; such an entry is a typo for some other range, so it's refused.
+        if (!IPNetwork.TryParse(entry, out var network) || !IPAddress.Parse(entry[..entry.IndexOf('/')]).Equals(network.BaseAddress))
+            throw new InvalidOperationException(
+                $"{TrustedHopsKey}: '{entry}' is not a CIDR range (address/prefix, with no bits set past the prefix).");
+        var min = network.BaseAddress.AddressFamily == AddressFamily.InterNetworkV6 ? MinIPv6Prefix : MinIPv4Prefix;
+        if (network.PrefixLength < min)
+            throw new InvalidOperationException(
+                $"{TrustedHopsKey}: '{entry}' is wider than /{min}, the widest trusted hop allowed; list only the proxy's own range.");
+        return network;
+    }
 
     public string For(HttpContext http)
     {
