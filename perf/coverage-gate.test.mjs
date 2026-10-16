@@ -11,6 +11,7 @@ import {
   MAX_MATCH_TOLERANCE_PERCENT,
   canonicalCobertura,
   canonicalLcov,
+  coverageSlack,
   describeCoverageScope,
   expectedPercent,
   finitePercent,
@@ -2086,7 +2087,7 @@ test("web-only run skips the dotnet gates instead of failing on missing data", (
     assert.equal(r.failed, false, r.output);
     assert.match(r.output, /\| dotnet \| skipped \| skipped \| skipped \| skipped \| 100\.0% \| 100\.0% \|/);
     assert.match(r.output, /\*\*Skipped:\*\* the dotnet suite did not run/);
-    assert.match(r.output, /\| web \| 100\.0% \| 100\.0% \|/);
+    assert.match(r.output, /\| web \| 100\.0% \(\d+\/\d+\) \| 100\.0% \(\d+\/\d+\) \|/);
     assert.deepEqual(r.expected.dotnet, { line: 100, branch: 100 });
     assert.match(r.stdout, /Measured baseline JSON/);
   } finally {
@@ -2286,4 +2287,42 @@ test("#318: a real improvement past the tolerance still asks for a baseline bump
   assert.equal(r.failed, true);
   assert.match(r.output, /committed baseline dotnet line\/branch 100\.0\/98\.8 is behind measured 100\.0\/99\.0 by more than 0\.1pp/);
   assert.deepEqual(r.expected.dotnet, { line: 100, branch: 99 });
+});
+
+// #227: covered/total counts in the table and the slack each way, at today's totals.
+test("#227: coverageSlack counts what can be lost before the floor fails and gained before a bump is due", () => {
+  // 98.74% vs a 98.8 floor, 0.1pp tolerance: 9870/10000 (98.70) still passes, 9869 fails.
+  assert.deepEqual(coverageSlack(9874, 10000, 98.8, 98.8, 0.1), { lose: 4, gain: 17 });
+  // At exactly the tolerance there is nothing left to lose.
+  assert.deepEqual(coverageSlack(987, 1000, 98.8, 98.8, 0.1), { lose: 0, gain: 3 });
+  // Already below the floor: negative lose is how many must be won back.
+  assert.deepEqual(coverageSlack(9860, 10000, 98.8, 98.8, 0.1), { lose: -10, gain: 31 });
+  // Already behind measured by more than the tolerance: the bump is due now.
+  assert.deepEqual(coverageSlack(990, 1000, 98.8, 98.8, 0.1), { lose: 3, gain: 0 });
+  // 100% with a 100 baseline: no bump can ever be due.
+  assert.deepEqual(coverageSlack(2, 2, 100, 100, 0.1), { lose: 0, gain: null });
+  // The #216 case: 1342/1365 at a 98.3 floor.
+  assert.deepEqual(coverageSlack(1342, 1365, 98.3, 98.3, 0.1), { lose: 1, gain: 2 });
+  // No measured lines: nothing to lose or gain.
+  assert.deepEqual(coverageSlack(0, 0, 0, 0, 0.1), { lose: 0, gain: null });
+  // Each answer agrees with the gate's own predicates at the boundary.
+  for (const [hit, total, floor, committed] of [[9874, 10000, 98.8, 98.8], [1342, 1365, 98.3, 98.3], [455, 520, 87.4, 87.5]]) {
+    const { lose, gain } = coverageSlack(hit, total, floor, committed, 0.1);
+    const pctOf = (h) => (100 * h) / total;
+    assert.ok(meetsFloorWithin(pctOf(hit - lose), floor, 0.1), `${hit}/${total} lose ${lose} still passes`);
+    assert.ok(!meetsFloorWithin(pctOf(hit - lose - 1), floor, 0.1), `${hit}/${total} lose ${lose + 1} fails`);
+    assert.ok(!meetsFloor(committed + 0.1, pctOf(hit + gain)), `${hit}/${total} gain ${gain} makes the bump due`);
+    assert.ok(gain === 0 || meetsFloor(committed + 0.1, pctOf(hit + gain - 1)), `${hit}/${total} gain ${gain - 1} does not`);
+  }
+});
+
+test("#227: the summary shows hit/total in the table and a slack line per measured suite", () => {
+  const r = runBranchJitter(9874, 10000);
+  assert.equal(r.failed, false, r.output);
+  assert.match(r.output, /\| dotnet \| 100\.0% \(2\/2\) \| 98\.7% \(9874\/10000\) \|/);
+  assert.match(
+    r.output,
+    /- dotnet slack \(at these totals, 0\.1pp tolerance\): line can lose 0 of 2 covered before it fails the 100\.0% floor; no gain can make a baseline bump due\. Branch can lose 4 of 9874 covered before it fails the 98\.8% floor; 17 more covered make a baseline bump due \(over 98\.9%\)\./,
+  );
+  assert.match(r.output, /- web slack \(at these totals, 0\.1pp tolerance\): line /);
 });

@@ -102,7 +102,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - `POST /api/auth/login` returns Identity's `AccessTokenResponse`: `tokenType` `Bearer`, `accessToken`, `expiresIn` 300, `refreshToken`. No cookie is set. Lockout, `ExpiresAt`, the timing guard and the login floor are unchanged.
 - The access token lasts **5 minutes**, the old stamp interval. It is checked without the database. On every authenticated request, `SessionLimits` also drops a token whose account expiry has passed (from the claim), whose sign-in is 24 h old, or whose session was logged out.
 - The refresh token lasts **8 hours**, and each refresh issues a new one. That is the old sliding limit.
-  - Refresh tokens are **single-use** (#353). Each token pair carries a refresh id (`desk:rid`), and `RefreshRotations` keeps, in memory per session, the one id that may still be swapped. A refresh that presents a token already swapped is a replay: a stolen copy, or the owner's own after a thief swapped it first. The session is then revoked (as by a logout), so every token of that sign-in stops working for both holders.
+  - Refresh tokens are **single-use** (#353). Each token pair carries a refresh id (`desk:rid`), and `RefreshRotations` kept, in memory per session, the one id that may still be swapped (since #354 the `auth.sessions` table holds it; see the 2026-10-16 amendment). A refresh that presents a token already swapped is a replay: a stolen copy, or the owner's own after a thief swapped it first. The session is then revoked (as by a logout), so every token of that sign-in stops working for both holders.
   - **Grace window** (amendment below, 2026-10-15): for `AUTH_REFRESH_REUSE_GRACE_SECONDS` (default 30 s, at most 120 s) after a swap, the token swapped last gets a pair for the session's *current* refresh id, and nothing is swapped. Of two concurrent refreshes with one token, exactly one swaps and both get a pair for the same id (tested).
   - The refresh endpoint is anonymous and has no policy of its own: it draws on the global limiter's per-client-IP token bucket (`ClientAddress`, 60/min, burst 20) and the shared concurrency limit, like any anonymous `/api` call (tested).
 - `POST /api/auth/refresh` (anonymous, keyed on the client IP by the rate limiter) renews both tokens only if all of these hold:
@@ -114,7 +114,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - The new tokens keep the original sign-in time (`desk:auth_time`) and session id (`desk:sid`) claims, so refreshing can't stretch the 24 h absolute limit.
 - Roles, account expiry and (once ADR-0021's grants exist) entitlement claims are re-read at every refresh: a change applies within 5 minutes, as with the cookie's stamp refresh.
 - Lockout doesn't end a live session. Failed passwords are something anyone can send, so it must not let a stranger sign a user out. That matches the cookie behaviour.
-- `POST /api/auth/logout` adds the session id to an in-memory revocation list until that session's 24 h limit. Both the access token and the refresh token stop working at once.
+- `POST /api/auth/logout` adds the session id to an in-memory revocation list until that session's 24 h limit. Both the access token and the refresh token stop working at once. (Since #354 the revocation is also stored in `auth.sessions`; see the 2026-10-16 amendment.)
 
 **CSRF**
 - Antiforgery is removed: `AntiforgeryFilter`, the XSRF cookie, `GET /api/auth/antiforgery` and the SPA's `xsrfRefreshInterceptor`.
@@ -164,12 +164,12 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - **A stolen refresh token:**
   - Each refresh token works once (#353). If the thief refreshes first, the owner's next refresh presents a swapped token, and the whole session ends for both. If the owner refreshes first, the thief's copy is the replay and ends it. Either way a stolen token buys at most the time until the owner's next refresh (5 min of activity), not the rest of the 24 h.
   - What else ends it: a logout from the session it belongs to (on the running instance only; see below), or `Desk.UserAdmin disable` or `reset`, which rotate the security stamp and end every session of that account at its next refresh.
-  - Limits of the detection: `RefreshRotations` is per process, like the revocation list. After a restart, a redeploy or a free-tier spin-down, a session's first refresh is believed and becomes the current one, so a thief who refreshes first after a restart is caught only when the owner refreshes. A second instance would need the state in the database (see Revisit).
+  - Limits of the detection (lifted by the 2026-10-16 amendment, #354): `RefreshRotations` is per process, like the revocation list. After a restart, a redeploy or a free-tier spin-down, a session's first refresh is believed and becomes the current one, so a thief who refreshes first after a restart is caught only when the owner refreshes. A second instance would need the state in the database (see Revisit).
   - The grace window (amendment below) is not detected: a thief who presents the token swapped last within 30 s of the owner's refresh gets a working pair. The replay is still caught at the session's next swap, when one of the two holders presents a swapped token after the window.
   - The cost to a real user: a refresh whose response is lost (a reload aborts it, or the network drops after the server swapped the token) is covered by the grace window if the tab refreshes again within 30 s, which a reload does at once. Later than that, the tab holds a dead token, its next refresh ends the session and the user signs in again. The same happens to a duplicated browser tab, which copies `sessionStorage` and so shares one refresh token with the original, once the two tabs refresh more than 30 s apart. The SPA's own concurrent 401s already share one refresh call.
   - The e2e run restores one saved session in every test, so it writes each renewed refresh token back to `.auth/session.json` (`e2e/tests/session.ts`).
 - **Logout limits:**
-  - The revocation list is per process. A restart, a redeploy, or a free-tier spin-down after about 15 min idle forgets it. A logged-out token copied elsewhere then works again until it expires: up to 5 min for an access token, up to 8 h (and never past 24 h from sign-in) for a refresh token.
+  - (Lifted by the 2026-10-16 amendment, #354, for refresh tokens.) The revocation list is per process. A restart, a redeploy, or a free-tier spin-down after about 15 min idle forgets it. A logged-out token copied elsewhere then works again until it expires: up to 5 min for an access token, up to 8 h (and never past 24 h from sign-in) for a refresh token.
   - The SPA always forgets the tokens locally, so the browser that signed out is signed out.
   - To end every session of an account for good, `Desk.UserAdmin disable` or `reset` rotates the security stamp.
   - A database-backed revocation table would close the gap. It is left out because logout already ends the browser's session, and the extra table and write aren't worth it for an invite-only demo.
@@ -204,3 +204,42 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - Why that is acceptable here: the thief has to have the token *and* hit a 30 s window that opens only when the owner refreshes (every 5 minutes of activity), so a stolen token alone still dies at the owner's next refresh. And the race isn't forgiven, only deferred: at the next swap, whichever holder comes second presents a swapped token, almost always outside the window, and the session ends for both. The theft can last one more access-token period (5 minutes) than under strict detection, and never past 24 h from sign-in. A script injected into the page (the main threat in this ADR) reads the current token anyway, so the window adds nothing for it.
   - Against that, strict detection signs real users out on every reload that lands during a refresh: a bug users would hit, for an attack the window delays by minutes.
 - **Consequences:** the e2e specs need no waits around reloads. The per-process limits above still apply: the window, like the rotation state, is forgotten on a restart. Tests: the previous token within the window gets the current generation and the session goes on; at the window's end it revokes; a token two swaps old revokes inside the window; concurrent refreshes converge; the setting falls back and clamps.
+
+## Amendment 2026-10-16: logout and the refresh rotation in Postgres (#354)
+
+- **Status:** Proposed (PR for #354; Helms ranked it P2 security on 2026-10-13: every deploy restarts the process and forgot logouts).
+- **Context:** the revocation list and `RefreshRotations` were per process. Every Render deploy, restart or free-tier spin-down forgot them: a logged-out refresh token worked again for up to 8 h, and a session's first refresh after a restart was believed, so a thief who refreshed first was caught only at the owner's next refresh. A second instance would have had the same gaps all the time.
+- **Options:**
+  1. Keep the state in memory and add a guard test for the single-instance assumption. Doesn't fix the restart gap, which happens on every deploy.
+  2. Check the database on every authenticated request. Closes every gap, but costs a query per request and wakes Neon for calls that don't otherwise touch it (`/api/me`, cached grid blocks), against README §7.2.
+  3. **Store the session state in Postgres, read it only at login, refresh and logout (chosen).** Those three already make database calls. The per-request check stays in memory.
+- **Decision:**
+  - A new table `auth.sessions` (migration `AuthSessions`; expand-only, so the running version ignores it during a deploy): `sid` (primary key), `rid`, `previous_rid`, `rotated_at`, `expires_at` (the session's 24 h limit, indexed) and `revoked_at`. Ids and times only, never token values. It isn't seeded, so `SeedVersion` is unchanged.
+  - `SessionStore` replaces `RefreshRotations` with the same rules (#353 and the grace window above):
+    - Login inserts the session's row, and first deletes rows past their 24 h limit, so the table holds at most the last 24 h of sign-ins.
+    - Refresh swaps with one conditional `UPDATE … WHERE sid = @sid AND revoked_at IS NULL AND rid = @presented`. Postgres's row lock makes it the compare-and-swap across instances: of concurrent refreshes with one token, on any instance, exactly one swaps and the rest see the id they hold as the previous one (tested: 4 racers over two store instances, 25 rounds, for a known session and for one without a row).
+    - If the swap misses, one `SELECT` reads the row. No row (a token from before this change, or a pruned one) is believed once and starts the chain (`INSERT … ON CONFLICT DO NOTHING`). A revoked row is refused without counting as a replay. The previous id within the window gets the current id. Anything else is a replay: the row is revoked.
+    - Logout and a replay upsert `revoked_at` (the first time is kept).
+  - `SessionRevocations` stays the in-memory per-request check, now a cache. A logout or replay on this instance fills it at once, and so does a refresh that finds its session revoked in the table (another instance's logout, or one from before a restart).
+  - The cache-first order at refresh: the in-memory check refuses a session it knows is over without a database read; otherwise the store decides in the table.
+- **Measured (local; same script, method and machine class as above):** `perf/auth-overhead.mjs` against a throwaway Postgres 17 in Docker (trust auth, migrated, one viewer from `Desk.UserAdmin`), the API from `dotnet run -c Release --no-launch-profile` in Production, before (`main` at `46f69be`) and after (this branch), one after the other on the same database:
+
+  ```
+  BASE_URL=http://localhost:55481 node --env-file=<scratch creds> perf/auth-overhead.mjs 500   # before
+  login ms (3 runs): 698.5, 48.1, 44.2
+  refresh ms (20 runs): p50 6.6, p95 14.8
+
+  BASE_URL=http://localhost:55482 node --env-file=<scratch creds> perf/auth-overhead.mjs 500   # after
+  login ms (3 runs): 671.6, 49.9, 49.0
+  refresh ms (20 runs): p50 6.1, p95 11.4
+  BASE_URL=http://localhost:55482 node --env-file=<scratch creds> perf/auth-overhead.mjs 200   # after, again
+  login ms (3 runs): 71.8, 40.1, 39.3
+  refresh ms (20 runs): p50 6.5, p95 8.2
+  ```
+
+  The refresh chain takes the swap path (one `UPDATE` on the primary key), and the difference is inside run-to-run noise. Login adds a `DELETE` on the indexed `expires_at` and an `INSERT`, small next to its PBKDF2 hash. The per-request rows were unchanged (authenticated `GET /api/me` p50 1.43 → 1.41 ms), because nothing on that path changed.
+- **Consequences:**
+  - A restart or a second instance no longer forgets a logout or a swap: a logged-out or replayed refresh token is refused everywhere (tested with two hosts on one database, and with a third built afterwards as the restarted instance).
+  - **Remaining limit:** an access token logged out on another instance, or before a restart, still works on an instance that hasn't seen the revocation, until it expires (at most 5 min) or that instance refuses the session's refresh, whichever is first. Closing it would need a database read per request (option 2). The test pins this bound.
+  - Database load: one more statement at login and at logout; refresh's statement count is unchanged on the swap path (one `UPDATE` instead of nothing, next to the existing security-stamp read), plus one `SELECT` when the swap misses. Nothing per request, and nothing at start-up.
+  - **Revisit** (replaces the second-instance clause above): if access tokens must end everywhere at once, either shorten their life or add a per-request check with a short-lived cache.

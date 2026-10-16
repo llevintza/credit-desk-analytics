@@ -33,6 +33,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 | Change-classifier tests (#169) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/ci-changes.mjs .github/scripts/ci-changes.test.mjs` |
 | CI/Deploy concurrency wiring tests (#207) | `node --test .github/scripts/concurrency-wiring.test.mjs` |
 | Workflow hardening tests (#137, #139, #155, #256, #257) | `node --test .github/scripts/workflow-hardening.test.mjs` |
+| Seeder cap wiring tests (#224) | `node --test .github/scripts/seed-cap-wiring.test.mjs` |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 
 A new top-level path, project or test project matches no area, so it runs every job until you add it to `AREA_PREFIXES` in `.github/scripts/ci-changes.mjs` (with a fixture in its test).
