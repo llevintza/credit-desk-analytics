@@ -10,7 +10,7 @@
 // summary is cached: the first block of a brand-new view over every row, the worst case for the Risk preset (#129).
 // setup() counts the book once (unfiltered, which also warms the HIT key); every MISS must return exactly that many
 // rows, and the 'book >= MIN_BOOK' check needs at least MIN_BOOK (a whole number, default 19000) of them. HIT repeats
-// that one request.
+// that one request, after warming it again (the MISS phase can evict it).
 // Cached blocks and summaries live until the next batch, so MISS filter values carry a per-run offset from setup():
 // back-to-back runs against the same API stay MISS without a restart or a cache clear. Local stack only.
 import http from 'k6/http';
@@ -64,9 +64,10 @@ export function setup() {
   return data;
 }
 
-function post(data, body) {
+function post(data, body, tags) {
   const res = http.post(`${base}/api/positions/query`, JSON.stringify(body), {
     headers: { 'Content-Type': 'application/json', 'Accept-Encoding': 'br, gzip', Authorization: data.authorization },
+    tags,
   });
   if (!check(res, { '200': (r) => r.status === 200 })) throw new Error(`HTTP ${res.status}: ${res.body}`);
   return res;
@@ -89,8 +90,16 @@ export function miss(data) {
   });
 }
 
+let hitWarmed = false;
 export function hit(data) {
-  // The exact request setup() warmed, so every one is a HIT; a request that misses fails checks: rate==1.0.
+  // setup() warmed this key, but a MISS phase that stores more than the response cache holds (POSITIONS_CACHE_MB,
+  // 64 MB by default) evicts it, oldest first (#241: ~1,500 whole-book blocks in 30 s). So each VU warms it once more
+  // here, tagged out of the HIT trend and unchecked. Then the exact request, so every one is a HIT; a request that
+  // misses fails checks: rate==1.0.
+  if (!hitWarmed) {
+    post(data, wholeBook, { scenario: 'hit_warm' });
+    hitWarmed = true;
+  }
   const res = post(data, wholeBook);
   check(res, { 'HIT': (r) => r.headers['X-Cache'] === 'HIT' });
 }
