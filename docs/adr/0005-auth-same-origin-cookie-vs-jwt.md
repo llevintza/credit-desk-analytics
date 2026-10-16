@@ -269,3 +269,17 @@ cap 1  round 3  fundFirstPaintColdMs p50  91  p95 158  max 193
 - Disabling an account takes effect within 5 minutes (the stamp interval), not instantly. This is accepted for an invite-only demo.
 - The per-IP login limit and the anonymous token bucket key on the client IP that `ClientAddress` resolves. Off the proxy (`ASPNETCORE_FORWARDEDHEADERS_ENABLED` unset, as in local, compose and CI), that is the socket peer. On Render, it is Cloudflare's view of the client, believed only through the Render → Cloudflare hops. An IPv6 client is keyed on its /64, the normal end-user allocation, and an IPv4-mapped IPv6 address on its IPv4 address (#164).
 - Revisit if the API ever serves a second origin or a non-browser client (then bearer tokens for that client), or for SSO (README §16).
+
+## Addendum (2026-10-07, #115): the `viewer` and `admin` roles are seeded by a migration
+
+**Ruling (Helms, 2026-10-07, on #105).** README §14.4 says seed data is never written by migrations, with the column catalog as the one exception. The two Identity roles are a second, narrow exception: they're reference data the schema needs in order to work (every account gets one through `auth.user_roles`), so the AuthAndAudit migration creates them and nothing at runtime has to. The exception holds only while the seed stays additive and idempotent. This addendum stays in force under ADR-0024, which changed how the session travels but left the role model alone.
+
+**Conditions, and where main meets them** (all from #105, `5ce7f0e`):
+
+1. **Fixed ids.** `Roles.ViewerId` and `Roles.AdminId` are constant GUIDs (`src/Desk.Data/Auth/Roles.cs:11-14`). The model seeds them through EF `HasData` with fixed `ConcurrencyStamp` values too (`src/Desk.Data/App/AppDbContext.cs:107-113`), so a model diff never sees a changed row.
+2. **Insert only if missing.** `HasData` becomes a single `InsertData` into `auth.roles` in the AuthAndAudit migration (`src/Desk.Data/App/Migrations/20261008014846_AuthAndAudit.cs:216-224`). EF's migration history runs it once per database, and a database that already has the migration applied never runs it again.
+3. **Never update or delete.** No migration touches the role rows after that: there is no `UpdateData` or `DeleteData` anywhere under `src/Desk.Data/App/Migrations/`. Renaming, re-keying or removing a role needs a new ADR, not an edited `HasData` call.
+
+**Future seeded reference rows.** Any other reference rows a migration seeds must meet the same three conditions (fixed keys, one insert that runs once, never updated or deleted by a later migration) and be recorded in an ADR like this one. Everything else is seed data and belongs to the seeder (README §14.4, `src/Desk.Seeder/AGENTS.md`).
+
+README §14.4 (`README.md:995`) still names only the column catalog; adding the roles there is a governed change and goes in its own `[workflows]` PR.

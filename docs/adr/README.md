@@ -8,7 +8,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0002](0002-hosting.md) | Hosting: single Render service + Neon (vs static site + API, vs GitHub Pages) | 0 Scaffold | Accepted; partially superseded by 0024 |
 | [0003](0003-wide-snapshot-narrow-history.md) | Wide position snapshot + narrow history | 1 Data | Accepted |
 | [0004](0004-bulk-load-copy-vs-ef.md) | Bulk load: Npgsql binary COPY vs EF `AddRange` (measured) | 1 Data | Accepted |
-| [0005](0005-auth-same-origin-cookie-vs-jwt.md) | Auth: same-origin cookie session vs JWT | 2 Auth and limits | Superseded by 0024 |
+| [0005](0005-auth-same-origin-cookie-vs-jwt.md) | Auth: same-origin cookie session vs JWT | 2 Auth and limits | Superseded by 0024; addendum 2026-10-07 (#115, `viewer`/`admin` roles seeded by the AuthAndAudit migration, and the conditions for any seeded reference rows) |
 | [0006](0006-dapper-vs-ef-for-the-dynamic-grid.md) | Dynamic grid reads: Dapper + columnar reader vs EF Core (measured) | 3 Positions API | Accepted |
 | [0007](0007-row-json-vs-columnar-vs-messagepack.md) | Payload: columnar JSON by default, MessagePack on request (measured) | 3 Positions API | Accepted |
 | [0008](0008-offset-vs-keyset-paging.md) | Paging: OFFSET + tie-breaker, sort indexes (measured) | 3 Positions API | Accepted; addendum 2026-10-16 (#326, `random_page_cost` 1.1 for the app role) |
