@@ -31,6 +31,7 @@ const catalog: CatalogColumn[] = [
   { name: 'position_id', group: 'Keys', kind: 'Key', aggregation: 'None', header: 'Position' },
   { name: 'deal_name', group: 'Keys', kind: 'Text', aggregation: 'None', header: 'Deal' },
   { name: 'dv01', group: 'Rates', kind: 'Money', aggregation: 'Sum', header: 'DV01' },
+  { name: 'price', group: 'Pricing', kind: 'Price', aggregation: 'WeightedByCurrentFace', header: 'Price' },
 ];
 const presets: Preset[] = [
   { name: 'Risk', builtIn: true, state: { columns: ['deal_name', 'dv01'] }, updatedAt: null },
@@ -219,7 +220,7 @@ describe('Positions page', () => {
     query.lastBlock.set({ columns: [], data: [], rowCount: 42, summary: { dv01: 9 }, asOf: 'x', generatedAt: 'x' });
     query.lastInfo.set({ ms: 5, cache: 'HIT', bytes: 10, serverMs: 1 });
     await fixture.whenStable();
-    expect(grid.setGridOption).toHaveBeenCalledWith('pinnedBottomRowData', [{ position_id: -1, deal_name: 'Total · avgs |MV|-wtd', dv01: 9 }]);
+    expect(grid.setGridOption).toHaveBeenCalledWith('pinnedBottomRowData', [{ position_id: -1, deal_name: 'Total · face/|MV|-wtd', dv01: 9 }]);
     expect(TestBed.inject(StatusService).totalRows()).toBe(42);
     expect(TestBed.inject(StatusService).lastRequest()?.cache).toBe('HIT');
 

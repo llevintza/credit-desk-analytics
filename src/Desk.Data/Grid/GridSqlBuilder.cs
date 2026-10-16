@@ -35,6 +35,22 @@ public static class GridSqlBuilder
     /// </summary>
     internal const string WeightF8Column = "weight_f8";
 
+    /// <summary>
+    /// Prices (<see cref="Aggregation.WeightedByCurrentFace"/>) weigh by the size of the holding in par, <c>ABS(current_face)</c>
+    /// (#459): an |MV|-weighted price is Σp²f / Σpf, not the par-weighted price a desk quotes. The same NULL, zero and
+    /// sign rules as <see cref="WeightExpression"/>.
+    /// </summary>
+    public const string FaceWeightColumn = "current_face";
+
+    internal const string FaceWeightExpression = "abs(" + FaceWeightColumn + ")::float8";
+
+    /// <summary>
+    /// <see cref="FaceWeightExpression"/> stored once per row, like <see cref="WeightF8Column"/> (migration
+    /// SnapshotFaceWeightColumn), so the summary stays a plain aggregate that runs in parallel workers (#241).
+    /// Never a catalog column, so no request can name it.
+    /// </summary>
+    internal const string FaceWeightF8Column = "face_weight_f8";
+
     /// <param name="includeSummary">
     /// False when the caller already holds this filter's totals (they don't depend on paging or sort): the batch is
     /// then the indexed page read alone, without the full-filter aggregate scan.
@@ -149,14 +165,19 @@ public static class GridSqlBuilder
     };
 
     /// <summary>
-    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightF8Column"/>). Rows where the measure is NULL don't
-    /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
+    /// SUM for additive measures; a |current face|-weighted average for prices (<see cref="FaceWeightF8Column"/>);
+    /// |market value|-weighted otherwise (<see cref="WeightF8Column"/>). Rows where the measure is NULL don't count
+    /// toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
     internal static string Aggregate(ColumnDef c) => c.Aggregation switch
     {
         Aggregation.Sum => $"SUM({Quote(c.Name)})",
-        _ => $"SUM({Quote(c.Name)} * {WeightF8Column}) / NULLIF(SUM({WeightF8Column}) FILTER (WHERE {Quote(c.Name)} IS NOT NULL), 0)",
+        Aggregation.WeightedByCurrentFace => Weighted(c, FaceWeightF8Column),
+        _ => Weighted(c, WeightF8Column),
     };
+
+    private static string Weighted(ColumnDef c, string weight) =>
+        $"SUM({Quote(c.Name)} * {weight}) / NULLIF(SUM({weight}) FILTER (WHERE {Quote(c.Name)} IS NOT NULL), 0)";
 
     private static string Where(GridQuery q, IEnumerable<ColumnDef> catalog, List<KeyValuePair<string, object>> p)
     {
