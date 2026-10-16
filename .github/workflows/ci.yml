@@ -363,6 +363,8 @@ jobs:
         run: node --test .github/scripts/concurrency-wiring.test.mjs
       - name: Perf jobs wiring and the wire-bytes check (#198, #348)
         run: node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs
+      - name: CI image pins agree with their tracked Dockerfiles (#255)
+        run: node --test .github/scripts/ci-image-pins.test.mjs
       - name: Payload-size check tests (#136, ≥80% line/branch)
         run: |
           node --test --experimental-test-coverage \
