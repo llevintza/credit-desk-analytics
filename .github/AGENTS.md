@@ -49,6 +49,7 @@ Any unchecked item means request changes.
 | Perf jobs wiring and wire-bytes check (#198, #348) | `node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs` |
 | CI image pin agreement (#255) | `node --test .github/scripts/ci-image-pins.test.mjs` |
 | Seeder cap wiring tests (#224) | `node --test .github/scripts/seed-cap-wiring.test.mjs` |
+| Deploy Swagger/OpenAPI exposure smoke (#110) | `node --test .github/scripts/swagger-exposure-smoke.test.mjs` |
 | Cloudflare IP range comparison, fixture only (#161) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/cloudflare-ips.mjs .github/scripts/cloudflare-ips.test.mjs` (never run `cloudflare-ips.mjs` itself in a session: its fetch belongs to the weekly `cloudflare-ips.yml`) |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 

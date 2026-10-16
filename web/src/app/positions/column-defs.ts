@@ -1,5 +1,5 @@
-import type { CellClassParams, ColDef, ColGroupDef, ValueFormatterParams } from 'ag-grid-community';
-import { CatalogColumn } from '../data-access/api.types';
+import type { CellClassParams, ColDef, ColGroupDef, ITooltipParams, ValueFormatterParams } from 'ag-grid-community';
+import { Aggregation, CatalogColumn } from '../data-access/api.types';
 import { NegativeStyle, formatCell, fullPrecision, isNumeric } from '../core/format';
 
 /** Identity columns pinned to the left (README §6 P1). */
@@ -22,6 +22,22 @@ export function heat(value: unknown, base: unknown): Record<string, string> | nu
   return { backgroundColor: `color-mix(in srgb, var(${diff > 0 ? '--up' : '--down'}) ${pct}%, transparent)` };
 }
 
+/**
+ * The pinned Total row mixes net sums with gross averages (#191, Helms 2026-10-16): SUM columns are signed, so
+ * shorts net against longs, while every weighted average weighs rows by ABS(market_value) (README §8). The row label
+ * says so, and each Total cell and column header tooltip names its aggregation. Per-leg and face-weighted totals are
+ * a later P3.
+ */
+export const totalLabel = 'Total · avgs |MV|-wtd';
+
+export function totalNote(aggregation: Aggregation): string | null {
+  if (aggregation === 'WeightedByMarketValue') return 'Total: gross |MV|-weighted average';
+  if (aggregation === 'Sum') return 'Total: net (signed) sum';
+  return null;
+}
+
+const inTotal = (p: { node?: { rowPinned?: string | null } | null }): boolean => p.node?.rowPinned === 'bottom';
+
 function filterFor(c: CatalogColumn): string | false {
   if (c.kind === 'Text') return 'agTextColumnFilter';
   if (c.kind === 'Date') return 'agDateColumnFilter';
@@ -39,11 +55,13 @@ export function columnDefs(catalog: CatalogColumn[], negatives: () => NegativeSt
   for (const c of catalog) {
     if (internal.has(c.name)) continue;
     const numeric = isNumeric(c.kind);
+    const note = totalNote(c.aggregation);
+    const weighted = c.aggregation === 'WeightedByMarketValue';
     const def: ColDef = {
       colId: c.name,
       field: c.name,
       headerName: c.header,
-      headerTooltip: `${c.header} (${c.name})`,
+      headerTooltip: note ? `${c.header} (${c.name}). ${note}` : `${c.header} (${c.name})`,
       hide: true,
       sortable: true,
       filter: filterFor(c),
@@ -52,9 +70,18 @@ export function columnDefs(catalog: CatalogColumn[], negatives: () => NegativeSt
       type: numeric ? 'rightAligned' : undefined,
       width: numeric ? 104 : c.kind === 'Text' ? 150 : 110,
       valueFormatter: (p: ValueFormatterParams) => formatCell(c.kind, p.value, negatives()),
-      tooltip: (p) => fullPrecision(c.kind, p.value),
+      tooltip: (p: ITooltipParams) => {
+        const full = fullPrecision(c.kind, p.value);
+        if (!note || !inTotal(p)) return full;
+        return full ? `${full} (${note})` : note;
+      },
       cellClass: numeric ? 'num' : c.kind === 'Flag' ? 'flag' : undefined,
-      cellClassRules: numeric ? { neg: (p: CellClassParams) => typeof p.value === 'number' && p.value < 0 } : undefined,
+      cellClassRules: numeric
+        ? {
+            neg: (p: CellClassParams) => typeof p.value === 'number' && p.value < 0,
+            ...(weighted ? { wavg: (p: CellClassParams) => inTotal(p) } : {}),
+          }
+        : undefined,
       cellStyle: isScenario(c.name) ? (p: CellClassParams) => heat(p.value, p.data?.price) : undefined,
     };
     const list = groups.get(c.group) ?? [];

@@ -126,3 +126,9 @@ The cross-area dependencies TC raised are all applied:
 - **Revisit:**
   - If most PRs still run everything because of `perf/coverage-baseline.json` raises, narrow that trigger to `api + web + coverage`; the replay shows `f776902` ran all jobs for that reason.
   - Revisit as well if the `changes` job's overhead grows past ~30 s.
+
+## Amendment: one pinned diff base (#213)
+
+A PR run tests `GITHUB_SHA`, the merge commit GitHub built on the base branch. Its first parent can be newer than `pull_request.base.sha` when `main` moves. On #195 the classifier diffed `base.sha...head` (only the PR's paths) while the coverage gate diffed `merge-base(base.sha, HEAD)..HEAD`, which also held #180's `GridSqlBuilder.cs`, so the gate failed a web-only PR.
+
+The `changes` job now pins the diff base once (`base` step, `base_sha` output): the merge commit's first parent when `HEAD^2` is the PR head and `base.sha` is its ancestor, else the event base (`base.sha`, or `before` on push) with a warning. The classifier's `--base` and the gate's `--base` both use it. The rules, thresholds and floor still come from `_base` at `base.sha`; only the diff range moved. If the `changes` job leaves no output, the gate falls back to the event base, which is the old behaviour. `ci-changes.test.mjs` replays the #195 shape in a temporary repo.

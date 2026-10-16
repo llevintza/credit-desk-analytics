@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  BOOTSTRAP_THRESHOLDS,
   GateFailure,
   MAX_MATCH_TOLERANCE_PERCENT,
   canonicalCobertura,
@@ -239,7 +238,7 @@ test("schema: NaN-like null baseline line fails", () => {
 test("schema: valid objects pass", () => {
   validateThresholds(VALID_THRESHOLDS);
   validateBaseline(VALID_BASELINE);
-  validateThresholds(BOOTSTRAP_THRESHOLDS);
+  validateThresholds(JSON.parse(readFileSync(join(repoRoot, "perf/coverage-thresholds.json"), "utf8")));
   validateOverride({
     from: VALID_BASELINE,
     to: VALID_BASELINE,
@@ -592,7 +591,7 @@ test("PR that turns off overallMustNotDrop or lowers a min fails", () => {
   }
 });
 
-test("PR that lowers diffLineMinPercent vs bootstrap defaults fails", () => {
+test("PR that lowers diffLineMinPercent vs the BASE_SHA thresholds fails", () => {
   const { dir, base } = setupPassRepo();
   try {
     write(dir, "perf/coverage-thresholds.json", JSON.stringify({ ...VALID_THRESHOLDS, diffLineMinPercent: 50 }));
@@ -610,7 +609,7 @@ test("PR that lowers diffLineMinPercent vs bootstrap defaults fails", () => {
   }
 });
 
-test("PR that lowers diffBranchMinPercent vs bootstrap defaults fails", () => {
+test("PR that lowers diffBranchMinPercent vs the BASE_SHA thresholds fails", () => {
   const { dir, base } = setupPassRepo();
   try {
     write(dir, "perf/coverage-thresholds.json", JSON.stringify({ ...VALID_THRESHOLDS, diffBranchMinPercent: 50 }));
@@ -810,7 +809,7 @@ test("poisoned --base-dir JSON cannot replace the BASE_SHA floor", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
+    assert.match(r.output, /lowers the committed baseline below the BASE_SHA floor\./);
   } finally {
     removeRepo(dir);
   }
@@ -854,7 +853,7 @@ test("empty --base-dir cannot force bootstrap once BASE_SHA has the script", () 
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the BASE_SHA floor|below BASE_SHA \(50\.0\/0\.0 < 99\.0\/99\.0\)/);
+    assert.match(r.output, /lowers the committed baseline below the BASE_SHA floor\./);
   } finally {
     removeRepo(dir);
   }
@@ -1477,7 +1476,7 @@ test("docs-only push after merge uses the BASE_SHA floor and ignores leftover ov
       stderrWrite: () => {},
     });
     assert.equal(r.failed, false, r.output);
-    assert.equal(r.bootstrapped, false);
+    assert.equal(r.exitCode, 0);
     assert.doesNotMatch(r.output, /`from` must equal the BASE_SHA floor/);
     assertGatePath(r.output, "push/base");
     assertBaseSourceLabels(r.output, merged);
@@ -1582,7 +1581,7 @@ test("R5-M1 (a): override PR push passes when from equals the BASE_SHA floor", (
       stderrWrite: () => {},
     });
     assert.equal(r.failed, false, r.output);
-    assert.equal(r.bootstrapped, false);
+    assert.equal(r.exitCode, 0);
     assert.match(r.output, /Re-baseline override/);
     assert.doesNotMatch(r.output, /`from` must equal the BASE_SHA floor/);
     assertGatePath(r.output, "push/base");
@@ -1856,7 +1855,7 @@ test("push with empty --base-ref does not treat PR base as true", () => {
   }
 });
 
-test("F2: committed baseline below the BASE_SHA floor is reported", () => {
+test("F2: a committed baseline below the BASE_SHA floor with no override fails hard", () => {
   const { dir, base } = setupPassRepo();
   try {
     write(
@@ -1874,7 +1873,10 @@ test("F2: committed baseline below the BASE_SHA floor is reported", () => {
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /below the BASE_SHA floor/);
+    assert.equal(r.exitCode, 1);
+    // The lowered-baseline failHard, not a per-suite say(): it stops before coverage is read.
+    assert.match(r.output, /^gate-path: [\w/]+\n- \*\*FAIL\*\* .* lowers the committed baseline below the BASE_SHA floor\. A baseline may be lowered ONLY/m);
+    assert.doesNotMatch(r.output, /committed baseline (dotnet|web) is below/);
   } finally {
     removeRepo(dir);
   }
@@ -2177,7 +2179,7 @@ test("ci.yml passes --suites from the change flags", () => {
 
 test("meetsFloorWithin and expectedPercent at the 0.1pp boundary", () => {
   assert.equal(MAX_MATCH_TOLERANCE_PERCENT, 0.1);
-  assert.equal(BOOTSTRAP_THRESHOLDS.baselineMatchTolerancePercent, 0.1);
+  assert.equal(VALID_THRESHOLDS.baselineMatchTolerancePercent, MAX_MATCH_TOLERANCE_PERCENT);
   assert.equal(meetsFloorWithin(98.74, 98.8, 0.1), true);
   assert.equal(meetsFloorWithin(98.7, 98.8, 0.1), true);
   assert.equal(meetsFloorWithin(98.69, 98.8, 0.1), false);
