@@ -24,13 +24,17 @@ export function heat(value: unknown, base: unknown): Record<string, string> | nu
 
 /**
  * The pinned Total row mixes net sums with gross averages (#191, Helms 2026-10-16): SUM columns are signed, so
- * shorts net against longs, while every weighted average weighs rows by ABS(market_value) (README §8). The row label
- * says so, and each Total cell and column header tooltip names its aggregation. Per-leg and face-weighted totals are
- * a later P3.
+ * shorts net against longs, while weighted averages weigh rows by size: prices by ABS(current_face), the par-weighted
+ * price (#459), and everything else by ABS(market_value) (README §8). The row label says so, and each Total cell and
+ * column header tooltip names its aggregation. Both follow the catalog the API serves, so a catalog that still
+ * weighs prices by |MV| is labelled that way. Per-leg (long/short) totals are out of scope (#459).
  */
-export const totalLabel = 'Total · avgs |MV|-wtd';
+export function totalLabel(catalog: readonly CatalogColumn[]): string {
+  return catalog.some((c) => c.aggregation === 'WeightedByCurrentFace') ? 'Total · px face-wtd · avgs |MV|-wtd' : 'Total · avgs |MV|-wtd';
+}
 
 export function totalNote(aggregation: Aggregation): string | null {
+  if (aggregation === 'WeightedByCurrentFace') return 'Total: gross |current face|-weighted average';
   if (aggregation === 'WeightedByMarketValue') return 'Total: gross |MV|-weighted average';
   if (aggregation === 'Sum') return 'Total: net (signed) sum';
   return null;
@@ -56,7 +60,7 @@ export function columnDefs(catalog: CatalogColumn[], negatives: () => NegativeSt
     if (internal.has(c.name)) continue;
     const numeric = isNumeric(c.kind);
     const note = totalNote(c.aggregation);
-    const weighted = c.aggregation === 'WeightedByMarketValue';
+    const weighted = c.aggregation === 'WeightedByMarketValue' || c.aggregation === 'WeightedByCurrentFace';
     const def: ColDef = {
       colId: c.name,
       field: c.name,

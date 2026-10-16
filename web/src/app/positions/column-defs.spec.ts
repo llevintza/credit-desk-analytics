@@ -6,9 +6,10 @@ const catalog: CatalogColumn[] = [
   { name: 'position_id', group: 'Keys', kind: 'Key', aggregation: 'None', header: 'Position' },
   { name: 'deal_name', group: 'Keys', kind: 'Text', aggregation: 'None', header: 'Deal' },
   { name: 'market_value', group: 'Holding', kind: 'Money', aggregation: 'Sum', header: 'Market value' },
+  { name: 'spread_bp', group: 'Holding', kind: 'Bp', aggregation: 'WeightedByMarketValue', header: 'Spread' },
   { name: 'next_pay_date', group: 'Cash flow', kind: 'Date', aggregation: 'None', header: 'Next pay' },
   { name: 'watchlist_flag', group: 'Flags', kind: 'Flag', aggregation: 'None', header: 'Watchlist' },
-  { name: 'scn_rp100_sp50', group: 'Scenarios', kind: 'Price', aggregation: 'WeightedByMarketValue', header: '+100/+50' },
+  { name: 'scn_rp100_sp50', group: 'Scenarios', kind: 'Price', aggregation: 'WeightedByCurrentFace', header: '+100/+50' },
 ];
 
 const leaf = (name: string): ColDef =>
@@ -63,29 +64,38 @@ describe('columnDefs', () => {
     expect(leaf('market_value').cellStyle).toBeUndefined();
   });
 
-  it('labels the Total row: SUM columns are net, weighted averages are gross |MV|-weighted (#191)', () => {
-    expect(totalLabel).toBe('Total · avgs |MV|-wtd');
+  it('labels the Total row: SUM columns are net, prices are face-weighted, other averages are |MV|-weighted (#191, #459)', () => {
+    expect(totalLabel(catalog)).toBe('Total · px face-wtd · avgs |MV|-wtd');
+    // A catalog that still weighs prices by |MV| (before the catalog update) is labelled that way.
+    expect(totalLabel(catalog.map((c) => (c.aggregation === 'WeightedByCurrentFace' ? { ...c, aggregation: 'WeightedByMarketValue' } : c)))).toBe('Total · avgs |MV|-wtd');
+    expect(totalLabel([])).toBe('Total · avgs |MV|-wtd');
+    expect(totalNote('WeightedByCurrentFace')).toBe('Total: gross |current face|-weighted average');
     expect(totalNote('WeightedByMarketValue')).toBe('Total: gross |MV|-weighted average');
     expect(totalNote('Sum')).toBe('Total: net (signed) sum');
     expect(totalNote('None')).toBeNull();
-    expect(leaf('scn_rp100_sp50').headerTooltip).toBe('+100/+50 (scn_rp100_sp50). Total: gross |MV|-weighted average');
+    expect(leaf('scn_rp100_sp50').headerTooltip).toBe('+100/+50 (scn_rp100_sp50). Total: gross |current face|-weighted average');
+    expect(leaf('spread_bp').headerTooltip).toBe('Spread (spread_bp). Total: gross |MV|-weighted average');
     expect(leaf('market_value').headerTooltip).toBe('Market value (market_value). Total: net (signed) sum');
     expect(leaf('deal_name').headerTooltip).toBe('Deal (deal_name)');
 
     type Tip = (p: { value: unknown; node?: { rowPinned?: string | null } }) => string;
-    const avg = leaf('scn_rp100_sp50').tooltip as Tip;
+    const px = leaf('scn_rp100_sp50').tooltip as Tip;
+    const avg = leaf('spread_bp').tooltip as Tip;
     const sum = leaf('market_value').tooltip as Tip;
     const text = leaf('deal_name').tooltip as Tip;
-    expect(avg({ value: 97.25, node: { rowPinned: 'bottom' } })).toBe('97.25 (Total: gross |MV|-weighted average)');
+    expect(px({ value: 97.25, node: { rowPinned: 'bottom' } })).toBe('97.25 (Total: gross |current face|-weighted average)');
+    expect(avg({ value: 212, node: { rowPinned: 'bottom' } })).toBe('212 (Total: gross |MV|-weighted average)');
     expect(sum({ value: -12, node: { rowPinned: 'bottom' } })).toBe('-12 (Total: net (signed) sum)');
-    expect(avg({ value: null, node: { rowPinned: 'bottom' } })).toBe('Total: gross |MV|-weighted average');
-    expect(avg({ value: 97.25, node: { rowPinned: null } })).toBe('97.25');
-    expect(avg({ value: 97.25 })).toBe('97.25');
-    expect(text({ value: totalLabel, node: { rowPinned: 'bottom' } })).toBe(totalLabel);
+    expect(px({ value: null, node: { rowPinned: 'bottom' } })).toBe('Total: gross |current face|-weighted average');
+    expect(px({ value: 97.25, node: { rowPinned: null } })).toBe('97.25');
+    expect(px({ value: 97.25 })).toBe('97.25');
+    expect(text({ value: totalLabel(catalog), node: { rowPinned: 'bottom' } })).toBe(totalLabel(catalog));
 
-    const marked = leaf('scn_rp100_sp50').cellClassRules as Record<string, (p: { value: unknown; node?: { rowPinned?: string | null } }) => boolean>;
+    type Rules = Record<string, (p: { value: unknown; node?: { rowPinned?: string | null } }) => boolean>;
+    const marked = leaf('scn_rp100_sp50').cellClassRules as Rules;
     expect(marked['wavg']({ value: 1, node: { rowPinned: 'bottom' } })).toBe(true);
     expect(marked['wavg']({ value: 1, node: { rowPinned: null } })).toBe(false);
+    expect((leaf('spread_bp').cellClassRules as Rules)['wavg']({ value: 1, node: { rowPinned: 'bottom' } })).toBe(true);
     expect((leaf('market_value').cellClassRules as Record<string, unknown>)['wavg']).toBeUndefined();
   });
 });
