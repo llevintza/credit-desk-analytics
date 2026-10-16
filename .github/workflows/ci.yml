@@ -377,6 +377,8 @@ jobs:
             perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
+      - name: Deploy Swagger/OpenAPI exposure smoke tests (#110)
+        run: node --test .github/scripts/swagger-exposure-smoke.test.mjs
 
   perf-deps:
     # Dependabot /perf bumps (#190, #198): install perf/ from its lockfile and round-trip the
