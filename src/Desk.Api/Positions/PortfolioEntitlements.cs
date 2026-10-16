@@ -50,11 +50,14 @@ public static class EntitlementsMode
 {
     public const string ConfigKey = "ENTITLEMENTS_MODE";
 
-    public static IPortfolioEntitlements Create(IConfiguration config) => config[ConfigKey]?.Trim().ToLowerInvariant() switch
+    public static IPortfolioEntitlements Create(IConfiguration config)
     {
-        null or "" or "all" => new AllPortfolios(),
-        "grants" => new GrantedPortfolios(),
+        var mode = (config[ConfigKey] ?? "").Trim().ToLowerInvariant();
+        if (mode.Length == 0 || mode == "all")
+            return new AllPortfolios();
+        if (mode == "grants")
+            return new GrantedPortfolios();
         // Fail loudly: a typo must never fall back to "all" (everyone sees everything) or to "grants" (everyone sees nothing).
-        var other => throw new InvalidOperationException($"{ConfigKey} must be 'all' or 'grants' (ADR-0021); got '{other}'."),
-    };
+        throw new InvalidOperationException($"{ConfigKey} must be 'all' or 'grants' (ADR-0021); got '{mode}'.");
+    }
 }

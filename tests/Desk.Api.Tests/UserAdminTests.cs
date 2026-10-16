@@ -152,12 +152,21 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         Assert.Contains("already had 1", again.Out);
         Assert.Equal(new[] { 1, 2, 3 }, (await GrantStateAsync(email)).Grants);
 
+        var nothingNew = await RunAsync("grant", "--email", email, "--portfolio", "2");
+        Assert.Equal(0, nothingNew.Exit);
+        Assert.Contains("No new grants", nothingNew.Out);
+
         var revoked = await RunAsync("revoke", "--email", email, "--portfolio", "1,3,9");
         Assert.Equal(0, revoked.Exit);
         Assert.Contains("Revoked portfolios 1, 3", revoked.Out);
         var afterRevoke = await GrantStateAsync(email);
         Assert.Equal(stamp, afterRevoke.Stamp);
         Assert.Equal([2], afterRevoke.Grants);
+
+        var nothingToRevoke = await RunAsync("revoke", "--email", email, "--portfolio", "7");
+        Assert.Equal(0, nothingToRevoke.Exit);
+        Assert.Contains("had none of those grants", nothingToRevoke.Out);
+        Assert.Equal(new[] { 2 }, (await GrantStateAsync(email)).Grants);
     }
 
     [Fact]
