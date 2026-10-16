@@ -13,7 +13,7 @@ import { DeskApi } from '../data-access/desk-api';
 import { Row } from '../data-access/to-rows';
 import { columnDefs, totalLabel } from './column-defs';
 import { deskGridTheme, registerGridModules } from './grid-setup';
-import { Mark, markedColumnIds } from './marks';
+import { Mark, MarkTotals, markedColumnIds } from './marks';
 import { MarksOverlay, OverlayStatus } from './marks-overlay';
 import { PositionsQuery } from './positions-query';
 import { initialPreset, nextPreset, page, presetColumnState } from './presets';
@@ -69,6 +69,7 @@ export class Positions {
   private painted = false;
   /** Row ids per bond in the blocks loaded since the last view change: where a mark lands. */
   private readonly rowsByBond = new Map<number, Set<string>>();
+  private flashedTotals: MarkTotals | null = null;
   protected readonly liveLabel = computed(() => liveLabels[this.overlay.status()](this.overlay.bonds()));
 
   protected readonly gridOptions: GridOptions = {
@@ -134,7 +135,9 @@ export class Positions {
       if (!block || !this.grid) return;
       this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: totalLabel, ...block.summary, ...live?.summary }]);
       this.status.totalRows.set(block.rowCount);
-      const total = live ? this.grid.getPinnedBottomRow(0) : undefined;
+      // New totals flash once; a block load re-pins the same totals without flashing them again.
+      const total = live && live !== this.flashedTotals ? this.grid.getPinnedBottomRow(0) : undefined;
+      this.flashedTotals = live;
       if (total) this.flash([total]);
     });
     effect(() => this.status.lastRequest.set(this.query.lastInfo()));

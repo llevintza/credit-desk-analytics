@@ -275,6 +275,10 @@ describe('Positions page', () => {
     await fixture.whenStable();
     expect(grid.setGridOption).toHaveBeenLastCalledWith('pinnedBottomRowData', [expect.objectContaining({ price: 99.9 })]);
     expect(grid.flashCells).toHaveBeenCalledWith({ rowNodes: [{ id: 'total' }], columns: ['price'] });
+    grid.flashCells.mockClear();
+    query.lastBlock.set({ columns: [], data: [], rowCount: 2, summary: { price: 98.4 }, asOf: 'x', generatedAt: 'x' });
+    await fixture.whenStable();
+    expect(grid.flashCells).not.toHaveBeenCalled(); // a block load re-pins the same totals without a second flash
 
     // Without a marked column on screen there is nothing to flash, nor any totals to ask for.
     grid.flashCells.mockClear();
