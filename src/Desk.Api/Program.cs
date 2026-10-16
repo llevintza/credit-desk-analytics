@@ -48,7 +48,8 @@ builder.Services.AddSingleton<MetaRepository>();
 builder.Services.AddSingleton<PresetRepository>();
 builder.Services.AddSingleton<MetaCache>();
 builder.Services.AddSingleton<PositionsCache>();
-builder.Services.AddSingleton<IPortfolioEntitlements, AllPortfolios>();
+// ADR-0021: ENTITLEMENTS_MODE=all (default) | grants. An unknown value throws here, so the app never starts with it.
+builder.Services.AddSingleton(EntitlementsMode.Create(builder.Configuration));
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.TypeInfoResolverChain.Insert(0, DeskJsonContext.Default));
 builder.Services.AddProblemDetails();
 // OpenAPI document (README §8) at /openapi/v1.json, browsable at /swagger (admin only).
