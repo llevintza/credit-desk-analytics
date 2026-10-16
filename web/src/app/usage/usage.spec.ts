@@ -69,6 +69,15 @@ describe('Usage page (README §7.2, #70)', () => {
     expect((q('slow-day') as HTMLSelectElement).value).toBe('2026-10-16');
   });
 
+  it('has no slow days or rows before a report arrives', async () => {
+    const { fixture, usageReq } = await render();
+    const page = fixture.componentInstance as unknown as { slowDays: () => string[]; slowest: () => SlowRequest[]; shownSlowDay: () => string | null };
+    expect(page.slowDays()).toEqual([]);
+    expect(page.slowest()).toEqual([]);
+    expect(page.shownSlowDay()).toBeNull();
+    usageReq().flush(report());
+  });
+
   it('switches the slowest table to another day', async () => {
     const { q, usageReq, settle } = await render();
     usageReq().flush(report());
