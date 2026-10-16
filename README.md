@@ -680,7 +680,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
 |---|---|---|---|
 | P1 first block, "Risk" preset | ≤ 60 KB compressed | `perf/payload-size.mjs` against a running API | **CI fails** above budget |
 | P1 first block, "All" (200 cols) | ≤ 250 KB compressed | same | CI warns |
-| P1 API p95, cache MISS / HIT | ≤ 150 ms / ≤ 15 ms (local, warm); MISS for both the Risk and All presets | k6 `perf/positions.js`: the whole book's uncached first view (#129), HIT with `X-Cache: HIT` asserted | CI reports (`budgets` job step summary, scale 1.0); non-blocking until #87. **All is within budget since #241** (local p95 61–83 ms, was 112–154 ms in the same interleaved runs; ADR-0006 addendum) |
+| P1 API p95, cache MISS / HIT | ≤ 150 ms / ≤ 15 ms (local, warm); MISS for both the Risk and All presets | k6 `perf/positions.js`: the whole book's uncached first view (#129), HIT with `X-Cache: HIT` asserted | CI reports (`budgets` job step summary, scale 1.0); non-blocking until #87. **All preset (#241):** locally within budget (p95 61–83 ms, was 112–154 ms in the same interleaved runs); on the hosted CI runner p95 155.5 ms (was ≈ 249 ms), still just over. Whether the local budget also applies on hosted runners is open in #241, and #87 can't make this step required until it is decided (ADR-0006 addendum) |
 | P1 first rows painted | < 1.0 s warm | Playwright trace + `performance.mark` | Reported in the PR |
 | P2 response | < 300 ms, < 5 KB | k6 + payload script | Reported |
 | P3 first tile / all tiles | < 500 ms / < 1.5 s | Playwright | Reported |
@@ -1079,5 +1079,5 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 6 Insights Board | #339 | Merged; follow-up #227: the coverage summary shows covered/total counts and slack (`[workflows]`, merged as #429, `1033bc1`); follow-up #357: insights source reads get their own per-user limiter partition (5 in flight, queue 15) so the P3 e2e is green under #174's cap (merged as #382, `929dcea`; supersedes #364) |
 | 7 Deal Explorer | #363 | Merged (`09b8344`): `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
-| 9 Hardening | n/a | In progress: #241, the All-preset whole-book MISS under the 150 ms p95 budget (stored weight column, parallel summary; ADR-0006 addendum), in review |
+| 9 Hardening | n/a | In progress: #241, the All-preset whole-book MISS p95 (stored weight column, parallel summary; ADR-0006 addendum): local 61–83 ms, hosted CI 155.5 ms (was ≈ 249), in review |
 | 10 Intraday overlay (stretch) | n/a | Not started |
