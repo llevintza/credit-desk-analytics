@@ -60,3 +60,14 @@ public sealed class InsightsSourceEndpoint
 
     private InsightsSourceEndpoint() { }
 }
+
+/// <summary>
+/// Marks the intraday mark stream (README §6 P6, ADR-0015): its own per-user partition and a global cap on open streams
+/// instead of a database permit (<see cref="RateLimiting"/>). Matched on the routed endpoint, like <see cref="ExportEndpoint"/>.
+/// </summary>
+public sealed class MarkStreamEndpoint
+{
+    public static readonly MarkStreamEndpoint Instance = new();
+
+    private MarkStreamEndpoint() { }
+}

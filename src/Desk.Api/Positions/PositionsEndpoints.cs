@@ -46,7 +46,7 @@ public static class PositionsEndpoints
 
     internal static async Task<IResult> QueryAsync(
         GridRequest request, HttpContext http, MetaCache metaCache, IPortfolioEntitlements entitlements,
-        GridRepository grid, PositionsCache cache, TimeProvider time, CancellationToken ct)
+        GridRepository grid, PositionsCache cache, DatabasePermits permits, TimeProvider time, CancellationToken ct)
     {
         var started = Stopwatch.GetTimestamp();
         var meta = await metaCache.GetAsync(ct);
@@ -65,11 +65,14 @@ public static class PositionsEndpoints
         if (CachedResponse.TryHit(http, cache, etag, contentType, started) is { } hit)
             return hit;
 
-        // Totals depend on the filter, not on paging or sort: the first block of a view computes them (one round
-        // trip with the page) and every later block of that view reads only its indexed page.
+        // Totals depend on the filter, not on paging or sort: the first block of a view computes them and every later
+        // block of that view reads only its indexed page. The first view reads its page and its totals on two
+        // connections at once when a spare database permit is free (#241), else in one round trip on one.
         var summaryKey = $"sum:{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{Hash(query.SummaryKey)}";
         cache.Cache.TryGetValue(summaryKey, out GridSummary? summary);
-        var block = await grid.ReadBlockAsync(query, meta.Catalog, ct, summary);
+        GridBlock block;
+        using (var spare = summary is null ? permits.TryTakeSpare() : null) // released once both connections are back
+            block = await grid.ReadBlockAsync(query, meta.Catalog, ct, summary, concurrentSummary: spare?.IsAcquired == true);
         if (summary is null)
             cache.Cache.Set(summaryKey, new GridSummary(block.RowCount, block.Summary),
                 new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpiration = meta.BatchEndsAt });

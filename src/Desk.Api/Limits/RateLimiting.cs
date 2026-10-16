@@ -20,12 +20,12 @@ public static class RateLimiting
     public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits, ClientAddress clients, MarksOptions? marks = null)
     {
         marks ??= MarksOptions.From(new ConfigurationBuilder().Build());
-        var permits = new DatabasePermits(limits);
         services.AddSingleton(limits);
         services.AddSingleton(clients);
         services.AddSingleton(marks);
-        services.AddSingleton(permits);
         services.AddSingleton<ExportGate>();
+        var permits = new DatabasePermits(limits);
+        services.AddSingleton(_ => permits); // a factory, so the container disposes it
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ClientAddressDiagnostics>();
         services.AddHostedService(sp => sp.GetRequiredService<ClientAddressDiagnostics>());
@@ -89,8 +89,9 @@ public static class RateLimiting
                             QueueLimit = limits.PerUserQueue,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         }));
-            // A mark stream holds no database permit while it streams (it reads nothing then): it takes one from
-            // DatabasePermits for its start-up read only, and its slot here is a cap on open streams instead.
+            // One limiter instance for the partition and for handlers that take another permit (DatabasePermits). A mark
+            // stream holds no database permit while it streams (it reads nothing then): it takes one from DatabasePermits
+            // for its start-up read only, and its slot here is a cap on open streams instead.
             var database = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
@@ -100,7 +101,7 @@ public static class RateLimiting
                             PermitLimit = marks.GlobalStreams,
                             QueueLimit = 0,
                         })
-                        : RateLimitPartition.Get("db", _ => permits.Limiter));
+                        : RateLimitPartition.Get("db", _ => permits.Shared));
             o.GlobalLimiter = new AcquireOnce(PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database));
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
@@ -152,7 +153,7 @@ public static class RateLimiting
     }
 
     /// <summary>A refusal with no Retry-After: <see cref="AcquireOnce"/>'s skipped attempt, and every <see cref="DenyAll"/> answer.</summary>
-    private sealed class NotAcquired : RateLimitLease
+    internal sealed class NotAcquired : RateLimitLease
     {
         public static readonly NotAcquired Instance = new();
 

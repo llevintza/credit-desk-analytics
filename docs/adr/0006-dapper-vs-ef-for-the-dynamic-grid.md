@@ -202,3 +202,68 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 - **SQL portability:** on SQL Server this would be a persisted computed column (README §16).
 - **Hosted CI runner** (`budgets` job, run 38934774373 on PR #460, ubuntu-24.04): MISS All p50 / p95 / max 143.0 / 155.5 / 186.3 ms (was 217.3 / 249.0 / 418.1 ms, #256), MISS Risk 45.5 / 57.2 ms (was 75.2 / 134.7 ms), HIT 1.4 / 2.0 ms, 39,969 checks passed and 0 failed. The hosted runner is ~2.5× slower than the local stack, so All is still 5.5 ms over the 150 ms p95 there. README §10 states the budget as "local, warm".
 - **What's left for #241:** decide whether the local budget also applies on hosted runners (Helms' 2026-10-08 ruling suggested hosted thresholds of about 1.3× local), or take a further optimisation. The summary is now near its scan-and-deform floor locally: the 23 numeric `SUM`s alone take 19 ms, and the full summary 30 ms. The next lever is running the page and the summary concurrently on two connections, worth roughly the page read (~6 ms locally). It takes two pooled connections per first view against a pool sized for Neon (`DB_MAX_POOL_SIZE`, default 20), so it needs its own decision.
+
+## Addendum (#241 follow-up, 2026-10-16): a first view reads its page and totals on two connections
+
+**Context.** After the stored weight column (above), the All preset's whole-book MISS p95 on the hosted `budgets` runner was 155.5 ms against the 150 ms budget. The page and the summary still ran one after the other, in one batch on one connection, so a first view waited for the page read (~6 ms locally) plus the summary (~30–35 ms). This addendum adopts the next step the addendum above named: run the two at once, on two pooled connections.
+
+**Options.**
+1. Keep one batch (status quo).
+2. Always open a second connection for a first view. That's simple, but each first view would then hold two connections on one permit. The 8 shared permits could hold 23 connections, past the 20 that `DB_MAX_POOL_SIZE` and the `ConnectionBudget` sum (#211) allow. Under load the pool, not the limiter, would refuse requests.
+3. **Take a second shared database permit for the second connection, without waiting (chosen).** The rate limiter's `db` partition and the endpoint use one `ConcurrencyLimiter`, owned by `DatabasePermits`. `TryTakeSpare()` grants a spare only when nobody is queued and at least one other permit stays free, and it never waits. Without a spare, the first view is the one batch of option 1.
+4. A separate pool or semaphore for summaries, like the insights fan-out (`INSIGHTS_MAX_CONNECTIONS`). That's a new setting plus a new term in the budget sum, for no gain over option 3.
+
+**Why option 3 can't deadlock or starve.** A request holding a permit never waits for a second one (the attempt is synchronous and fails at once), so there's no hold-and-wait cycle. The limiter serves its queue oldest first, and a spare is refused while anyone is queued, so a spare never jumps the queue. Because the last free permit is never taken, a request that arrives next still finds one. Under saturation no spares are granted, and the endpoint behaves exactly as before. "Never the last free permit" is best-effort: the statistics check and `AttemptAcquire(1)` are two steps, so two first views racing with exactly two permits free can both get a spare and take the last one. The worst case is that the next request waits in the queue for one summary read (~35 ms locally). It can't deadlock, because nothing that holds a permit waits, and it doesn't break the pool sum, because every connection still holds a permit. A lock around the two steps would serialise every first view to remove a rare, bounded wait, so it isn't worth it. Every connection a request holds is still one permit, so the README §7.2 permits-vs-pool sum is unchanged (15 + 5 headroom = 20 at the defaults).
+
+**Correctness.** The page and the totals run on separate connections, never one connection or `DbContext` shared by two commands. The summary statement is the batch's second statement (`GridSqlBuilder.BuildSummary`: same text, same parameter names, the same `portfolio_id = ANY(@portfolios)` scope in SQL). If one read fails, the other is cancelled, and the caller sees the failure, not the sibling's cancellation. The caller's `CancellationToken` cancels both reads. Under READ COMMITTED each statement of the old batch already took its own snapshot, so reading on two connections changes no consistency guarantee, and the data changes only at a reseed (which also changes the ETag and the cache keys).
+
+**Evaluation** (local stack only: compose `-p wrk241c` with its own ports, seed 42, scale 1.0, as-of 2026-10-15, Postgres 17 in colima with 4 vCPUs, Apple M5, a shared machine. Throwaway viewer from Desk.UserAdmin; per-user limits raised in both apps' environments only. Base = #460's head image @a25afc1, branch = this change, both on **the same database**, alternating.)
+
+`perf/GridBenchmark` (committed; it now reads the latest as-of in the database), first block of a view, 200 rows, 50 timed iterations per row:
+
+| Run | Risk: one batch p50 / p95 ms | Risk: two connections | All: one batch p50 / p95 ms | All: two connections | All page alone p50 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 12.8 / 15.2 | 11.8 / 13.9 | 40.5 / 49.4 | **34.8 / 41.5** | 6.1 |
+| 2 | 13.1 / 16.8 | 11.6 / 13.2 | 45.0 / 51.8 | **37.0 / 46.5** | 6.3 |
+| 3 | 13.5 / 14.8 | 12.3 / 14.0 | 43.1 / 52.0 | **38.0 / 57.5** | 6.8 |
+
+The All first view gains 5–8 ms at p50, about the page read, as predicted. Risk gains about 1 ms.
+
+`perf/all-miss-timing.js` (committed; k6, one VU, 30 s, the All whole-book MISS, with the API's own `Server-Timing` next to k6's wall time):
+
+| Round | Build | db p50 / p95 ms | total p50 / p95 ms | wall p50 / p95 ms |
+|---|---|---:|---:|---:|
+| 1 | base | 41.3 / 53.6 | 43.1 / 56.1 | 47.6 / 62.7 |
+| 1 | **branch** | **35.8 / 45.2** | 37.7 / 47.1 | **42.2 / 52.5** |
+| 2 | base | 42.0 / 65.2 | 44.0 / 67.3 | 48.5 / 75.2 |
+| 2 | **branch** | **35.0 / 43.6** | 36.8 / 46.0 | **41.3 / 51.2** |
+
+`perf/positions.js` (the budgets script, one VU, 30 s per scenario):
+
+| Run | Build | MISS Risk p50 / p95 ms | HIT p50 / p95 ms | MISS All p50 / p95 ms |
+|---|---|---:|---:|---:|
+| 1 | base | 14.9 / 22.2 | 1.0 / 1.8 | 48.2 / 64.3 |
+| 1 | branch | 14.0 / 20.6 | 1.0 / 1.7 | 44.0 / 63.7 |
+| 2 | base | 15.2 / 23.1 | 1.0 / 1.6 | 47.0 / 56.1 |
+| 2 | branch | 13.9 / 18.2 | 1.0 / 1.9 | 46.0 / 89.0 |
+| 3 | base | 15.5 / 22.9 | 1.1 / 3.2 | 55.5 / 91.7 |
+| 3 | branch | 14.9 / 23.3 | 1.1 / 2.8 | 52.6 / 107.9 |
+
+The k6 rows were measured on this branch's code before `BuildSummary` was changed to reuse the batch's parameter names, so the summary SQL text then differed only in those names. A later round with the final image ran at load average 25–45 (other workers' stacks): both builds doubled, and it isn't used. Every positions.js run passed its thresholds except base run 1, which failed 1 check of 56,049. The p50 is lower in every pair (1–4 ms). Locally the p95 is dominated by noise on the shared machine: run 3 ran while another worker's stack was busy. The first two tables isolate the change and show it consistently.
+
+```
+# local stack only (see above); DATABASE_URL points at the compose Postgres on its own port
+DATABASE_URL=… dotnet run -c Release --project perf/GridBenchmark -- 200 <outDir>
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:<port> \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:2.3.0 run --quiet - < perf/all-miss-timing.js
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:<port> \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:2.3.0 run --quiet - < perf/positions.js
+```
+
+**Decision.** Option 3. `GridRepository.ReadBlockAsync(…, concurrentSummary)` reads both at once when the endpoint holds a spare permit from `DatabasePermits.TryTakeSpare()`, and the spare is released once both connections are back in the pool. No setting, budget or threshold changed.
+
+**Consequences.**
+- A first view can hold two permits for ~35 ms instead of one for ~41 ms. That's more permit-time per first view, but only while permits are idle. When requests queue, no spares are granted.
+- On Neon (`DB_MAX_POOL_SIZE` 20, a fractional CPU) the pool budget is unchanged. The page read is index-driven and small, so the second backend adds little CPU next to the summary's scan.
+- Tests: `DatabasePermitsTests` (a spare leaves one permit free, none with a single permit, none while a request is queued, one shared count); `ConcurrentSummaryTests` (two connections at once with the same block and totals as the batch; portfolio scope in SQL, an empty scope gives 0 rows; a failing page or summary surfaces its own error with both connections returned; a cancelled caller cancels both; the endpoint uses two connections for a first view and one for a later block; with one permit it uses one; six simultaneous first views on three permits all finish and never hold more than three connections).
+- **Hosted CI runner** (`budgets` job, run 38942923656 on PR #470 @7ec525e, ubuntu-24.04): MISS All p50 / p95 / max **120.2 / 134.9 / 171.8 ms** (after #460: 143.0 / 155.5 / 186.3 ms), MISS Risk 40.5 / 53.2 ms (was 45.5 / 57.2 ms), HIT 1.4 / 2.0 ms, 39,970 checks passed and 0 failed, all thresholds passed. The All whole-book MISS was within the 150 ms p95 budget on the hosted runner in both runs, with no budget or threshold changed. A second run on the docs-only head (run 38944173331 @cc00da6) measured MISS All p50 / p95 / max 93.4 / 101.7 / 150.0 ms, MISS Risk p95 42.4 ms, HIT p95 1.5 ms, 52,705 checks passed and 0 failed. Hosted runs have varied by about ±20 ms between runs, so whether two runs are enough to close #241 is Leo's call. The hosted gain (~20 ms at p95) is larger than the local one (~6–10 ms), as expected: on the slower runner the page read that now overlaps the summary is longer too.

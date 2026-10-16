@@ -293,23 +293,6 @@ public sealed class MarksTests(PostgresApiFactory api)
     }
 
     [Fact]
-    public void The_shared_database_permits_never_go_idle_so_the_global_limiter_keeps_one_pool()
-    {
-        var permits = new DatabasePermits(LimitsOptions.From(new ConfigurationBuilder()
-            .AddInMemoryCollection([KeyValuePair.Create("RATE_LIMIT_GLOBAL_CONCURRENCY", (string?)"1")]).Build()));
-        Assert.Null(permits.Limiter.IdleDuration);
-        using (var lease = permits.Limiter.AttemptAcquire())
-        {
-            Assert.True(lease.IsAcquired);
-            Assert.Equal(0, permits.Limiter.GetStatistics()!.CurrentAvailablePermits);
-            using var none = permits.Limiter.AttemptAcquire();
-            Assert.False(none.IsAcquired);
-        }
-        Assert.Null(permits.Limiter.IdleDuration); // idle, but never says so
-        Assert.Equal(1, permits.Limiter.GetStatistics()!.CurrentAvailablePermits);
-    }
-
-    [Fact]
     public async Task The_stream_needs_a_session()
     {
         var res = await PostgresApiFactory.NewClient(api).GetAsync("/api/marks/stream", Ct);

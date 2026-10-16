@@ -508,6 +508,61 @@ test("the pinned base makes the gate's diff match the classifier's when main mov
   }
 });
 
+// #278 (#447 nit): when the changes job fails before it pins a base (or leaves no output), the coverage gate
+// falls back to the event base, the pre-#213 range. That fallback must be visible (a ::warning::), and the
+// step summary must say which base the gate actually diffed from.
+test("coverage gate step: warns on the event-base fallback and labels its diff base (#278)", () => {
+  const coverage = jobBlock("coverage");
+  const m = /^      - name: Coverage gates\n([\s\S]*?)(?=^      - |(?![\s\S]))/m.exec(coverage);
+  assert.ok(m, "Coverage gates step not found");
+  assert.ok(m[1].includes("PINNED_BASE: ${{ needs.changes.outputs.base_sha }}"));
+  assert.ok(m[1].includes("CHANGES_RESULT: ${{ needs.changes.result }}"));
+  const script = /^ {8}run: \|\n((?: {10}.*\n|\n)+)/m.exec(m[1])[1].replace(/^ {10}/gm, "");
+
+  const dir = mkdtempSync(join(tmpdir(), "ci-cov-"));
+  try {
+    const git = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("config", "commit.gpgsign", "false");
+    git("commit", "-q", "--allow-empty", "-m", "event base");
+    const eventBase = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "merge commit's first parent");
+    const pinnedBase = git("rev-parse", "HEAD");
+    // No _base/perf/coverage-gate.mjs here, so the step stops (exit 1) right after it labels the base.
+    const runStep = (env) => {
+      const sum = join(dir, ".git", "sum");
+      writeFileSync(sum, "");
+      const r = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: sum, BASE_SHA: eventBase, RUN_API: "true", RUN_WEB: "true", ...env },
+      });
+      assert.equal(r.status, 1, r.stderr);
+      assert.match(r.stdout, /^::error::BASE_SHA .* has no perf\/coverage-gate\.mjs/m);
+      return { stdout: r.stdout, summary: readFileSync(sum, "utf8") };
+    };
+
+    const pinned = runStep({ PINNED_BASE: pinnedBase, DIFF_BASE: pinnedBase, CHANGES_RESULT: "success" });
+    assert.doesNotMatch(pinned.stdout, /::warning::/);
+    assert.match(pinned.summary, new RegExp(`Diff base \\(#213, pinned by the changes job\\): \`${pinnedBase}\``));
+    assert.match(pinned.summary, new RegExp(`_base \\(gate, thresholds, floor\\): \`${eventBase}\``));
+
+    for (const result of ["failure", "success"]) {
+      const fallback = runStep({ PINNED_BASE: "", DIFF_BASE: eventBase, CHANGES_RESULT: result });
+      assert.match(
+        fallback.stdout,
+        new RegExp(`^::warning::The changes job \\(${result}\\) left no base_sha; the coverage gate diffs from the event base ${eventBase}`, "m"),
+      );
+      assert.match(fallback.summary, new RegExp(`Diff base \\(#213, event-base fallback: the changes job left no base_sha\\): \`${eventBase}\``));
+      assert.doesNotMatch(fallback.summary, /pinned by the changes job/);
+    }
+  } finally {
+    removeRepo(dir);
+  }
+});
+
 // Every file a .NET test project builds from or links must run the api job (R173-02).
 test("every test-project input maps to the api job (or every flag)", () => {
   const repo = new URL("../..", import.meta.url).pathname;
