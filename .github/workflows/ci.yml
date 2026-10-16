@@ -446,6 +446,12 @@ jobs:
             .github/scripts/pages-script-check.test.mjs
       - name: Deploy Swagger/OpenAPI exposure smoke tests (#110)
         run: node --test .github/scripts/swagger-exposure-smoke.test.mjs
+      - name: Render deploy id and status helper, stubbed Render (#302, ≥80% line/branch)
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=.github/scripts/render-deploy.mjs \
+            .github/scripts/render-deploy.test.mjs
       - name: Cloudflare IP range check, fixture only (#161, ≥80% line/branch)
         run: |
           node --test --experimental-test-coverage \
