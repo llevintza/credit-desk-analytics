@@ -361,6 +361,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: CI/Deploy concurrency wiring tests (#207)
         run: node --test .github/scripts/concurrency-wiring.test.mjs
+      - name: Payload-size check tests (#136, ≥80% line/branch)
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=perf/payload-size.mjs \
+            perf/payload-size.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
