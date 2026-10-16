@@ -32,6 +32,7 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 | Gate-script tests | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/coverage-gate.mjs perf/coverage-gate.test.mjs` |
 | Change-classifier tests (#169) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/ci-changes.mjs .github/scripts/ci-changes.test.mjs` |
 | CI/Deploy concurrency wiring tests (#207) | `node --test .github/scripts/concurrency-wiring.test.mjs` |
+| Perf jobs wiring and wire-bytes check (#198, #348) | `node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs` |
 | CI image pin agreement (#255) | `node --test .github/scripts/ci-image-pins.test.mjs` |
 | Seeder cap wiring tests (#224) | `node --test .github/scripts/seed-cap-wiring.test.mjs` |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
