@@ -159,6 +159,25 @@ public sealed class GridQueryTests
         Assert.Equal("%2024%", p["p8"]);
     }
 
+    [Fact]
+    public void Prices_are_face_weighted_and_every_other_average_is_MV_weighted()
+    {
+        // #459 (Leo, 2026-10-16): the par-weighted price a desk quotes, not the |MV|-weighted Σp²f / Σpf.
+        var weighted = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation is Aggregation.WeightedByMarketValue or Aggregation.WeightedByCurrentFace).ToList();
+        Assert.All(weighted, c => Assert.Equal(c.Kind == ColumnKind.Price ? Aggregation.WeightedByCurrentFace : Aggregation.WeightedByMarketValue, c.Aggregation));
+        Assert.Equal(108, weighted.Count(c => c.Aggregation == Aggregation.WeightedByCurrentFace)); // 100 scenarios + 8
+        Assert.Contains(weighted, c => c.Name == "price");
+
+        var sql = Sql(new GridRequest(Columns: ["price", "spread_bp", "current_face"]));
+        var summary = sql.Sql.Split(";\n")[1];
+        Assert.Equal(
+            "SELECT COUNT(*)::int AS row_count, " +
+            "SUM(\"price\" * face_weight_f8) / NULLIF(SUM(face_weight_f8) FILTER (WHERE \"price\" IS NOT NULL), 0) AS \"price\", " +
+            "SUM(\"spread_bp\" * weight_f8) / NULLIF(SUM(weight_f8) FILTER (WHERE \"spread_bp\" IS NOT NULL), 0) AS \"spread_bp\", " +
+            "SUM(\"current_face\") AS \"current_face\" " +
+            "FROM core.position_snapshot WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios);", summary);
+    }
+
     private static string Haystack() =>
         $"concat_ws(' ', {string.Join(", ", ColumnCatalog.PositionSnapshot.Where(c => c.Kind == ColumnKind.Text).Select(c => $"\"{c.Name}\""))})";
 

@@ -16,7 +16,11 @@ public enum ColumnKind
 }
 
 /// <summary>How the footer summary row aggregates a column over ALL filtered rows (README §6, P1).</summary>
-public enum Aggregation { None, Sum, WeightedByMarketValue }
+/// <remarks>
+/// Prices (<see cref="ColumnKind.Price"/>) are averaged by |current face|, the par-weighted price desks quote; an
+/// |MV|-weighted price is Σp²f / Σpf (#459). Every other average weighs by |market value| (#131, README §8).
+/// </remarks>
+public enum Aggregation { None, Sum, WeightedByMarketValue, WeightedByCurrentFace }
 
 public sealed record ColumnDef(string Name, string Group, ColumnKind Kind, Aggregation Aggregation, string Header)
 {
@@ -79,7 +83,7 @@ public static class ColumnCatalog
         Add("face", holding, ColumnKind.Money, Aggregation.Sum, "Original face");
         Add("current_face", holding, ColumnKind.Money, Aggregation.Sum, "Current face");
         Add("factor", holding, ColumnKind.Ratio, Aggregation.WeightedByMarketValue, "Factor");
-        Add("book_price", holding, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Book px");
+        Add("book_price", holding, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Book px");
         Add("book_value", holding, ColumnKind.Money, Aggregation.Sum, "Book value");
         Add("market_value", holding, ColumnKind.Money, Aggregation.Sum, "Market value");
         Add("accrued", holding, ColumnKind.Money, Aggregation.Sum, "Accrued");
@@ -88,10 +92,10 @@ public static class ColumnCatalog
         Add("pct_of_portfolio_mv", holding, ColumnKind.Pct, Aggregation.None, "% of port MV");
 
         const string pricing = "Pricing";
-        Add("price", pricing, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Price");
-        Add("price_chg_1d", pricing, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Px chg 1d");
-        Add("price_chg_1w", pricing, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Px chg 1w");
-        Add("price_chg_1m", pricing, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Px chg 1m");
+        Add("price", pricing, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Price");
+        Add("price_chg_1d", pricing, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Px chg 1d");
+        Add("price_chg_1w", pricing, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Px chg 1w");
+        Add("price_chg_1m", pricing, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Px chg 1m");
         Add("yield", pricing, ColumnKind.Pct, Aggregation.WeightedByMarketValue, "Yield");
         Add("spread_bp", pricing, ColumnKind.Bp, Aggregation.WeightedByMarketValue, "Spread");
         Add("oas_bp", pricing, ColumnKind.Bp, Aggregation.WeightedByMarketValue, "OAS");
@@ -165,13 +169,13 @@ public static class ColumnCatalog
         const string scenarios = "Scenarios (price)";
         foreach (var r in ScenarioRateShocksBp)
         foreach (var s in ScenarioSpreadShocksBp)
-            Add(ScenarioColumn(r, s), scenarios, ColumnKind.Price, Aggregation.WeightedByMarketValue,
+            Add(ScenarioColumn(r, s), scenarios, ColumnKind.Price, Aggregation.WeightedByCurrentFace,
                 $"R{(r >= 0 ? "+" : "")}{r} S{(s >= 0 ? "+" : "")}{s}");
 
         const string stress = "Stress";
-        Add("worst_case_price", stress, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Worst px");
-        Add("best_case_price", stress, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Best px");
-        Add("scenario_range", stress, ColumnKind.Price, Aggregation.WeightedByMarketValue, "Px range");
+        Add("worst_case_price", stress, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Worst px");
+        Add("best_case_price", stress, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Best px");
+        Add("scenario_range", stress, ColumnKind.Price, Aggregation.WeightedByCurrentFace, "Px range");
         Add("stress_loss_mv", stress, ColumnKind.Money, Aggregation.Sum, "Stress loss");
 
         const string flags = "Flags";
