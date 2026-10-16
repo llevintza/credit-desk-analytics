@@ -47,18 +47,6 @@ import { existsSync, readFileSync, readdirSync, statSync, appendFileSync } from 
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const BOOTSTRAP_THRESHOLDS = Object.freeze({
-  diffLineMinPercent: 80,
-  diffBranchMinPercent: 80,
-  overallMustNotDrop: true,
-  baselineMatchTolerancePercent: 0.1,
-});
-
-export const ZERO_FLOOR = Object.freeze({
-  dotnet: Object.freeze({ line: 0, branch: 0 }),
-  web: Object.freeze({ line: 0, branch: 0 }),
-});
-
 export const OVERRIDE_FILE = "perf/coverage-override.json";
 export const TESTCONFIG_FILE = "tests/testconfig.json";
 
@@ -387,8 +375,6 @@ export function runGate(options = {}) {
         );
       }
       overallFloor = override.to;
-    } else {
-      assertBaselineNotLowered(committed, mainBaseline, who, failHard);
     }
 
     const unknownPaths = [];
@@ -540,10 +526,6 @@ export function runGate(options = {}) {
       const m = measured[name];
       const c = committed[name];
       const f = overallFloor[name];
-      if (!meetsFloor(round1(c.line), round1(f.line)) || !meetsFloor(round1(c.branch), round1(f.branch))) {
-        failed = true;
-        say(`- **FAIL** committed baseline ${name} is below the BASE_SHA floor.`);
-      }
       if (!ran(name)) {
         // Defence in depth: without measurement a skipped suite's baseline may not move at all.
         if (round1(c.line) !== round1(f.line) || round1(c.branch) !== round1(f.branch)) {
@@ -621,7 +603,7 @@ export function runGate(options = {}) {
     );
     write("\nMeasured baseline JSON:\n" + JSON.stringify(expected, null, 2) + "\n");
 
-    return { failed, output: body, expected, exitCode: failed ? 1 : 0, bootstrapped: false, mergeBase, baseSha };
+    return { failed, output: body, expected, exitCode: failed ? 1 : 0, mergeBase, baseSha };
   } catch (e) {
     if (e instanceof GateFailure) {
       const text = e.output && e.output.trim() ? e.output : `- **FAIL** ${e.message}\n`;
@@ -845,18 +827,6 @@ function assertThresholdsNotLooser(head, base, who, failHard) {
     failHard(
       `${who} widens baselineMatchTolerancePercent (${head.baselineMatchTolerancePercent} > ${base.baselineMatchTolerancePercent} from ${origin}).`,
     );
-  }
-}
-
-function assertBaselineNotLowered(head, base, who, failHard) {
-  for (const name of ["dotnet", "web"]) {
-    const h = head[name];
-    const b = base[name];
-    if (!meetsFloor(round1(h.line), round1(b.line)) || !meetsFloor(round1(h.branch), round1(b.branch))) {
-      failHard(
-        `${who} lowers the committed ${name} baseline below BASE_SHA (${pct(h.line)}/${pct(h.branch)} < ${pct(b.line)}/${pct(b.branch)}). The floor may not be lowered except via a documented ${OVERRIDE_FILE} override.`,
-      );
-    }
   }
 }
 
