@@ -57,13 +57,7 @@ public static class GridSqlBuilder
     /// </param>
     public static GridSql Build(GridQuery q, IEnumerable<ColumnDef> catalog, bool includeSummary = true)
     {
-        var p = new List<KeyValuePair<string, object>>
-        {
-            new("as_of", q.AsOf),
-            new("portfolios", q.PortfolioIds),
-            new("offset", q.Offset),
-            new("limit", q.Limit),
-        };
+        var p = PageParameters(q);
         var where = Where(q, catalog, p);
 
         var sql = new StringBuilder();
@@ -75,12 +69,36 @@ public static class GridSqlBuilder
             return new GridSql(sql.ToString(), p);
 
         // Totals over ALL filtered rows (the pinned summary row), in the same round trip.
-        sql.Append('\n').Append("SELECT COUNT(*)::int AS row_count");
+        AppendSummary(sql.Append('\n'), q, where);
+        return new GridSql(sql.ToString(), p);
+    }
+
+    /// <summary>
+    /// The summary statement alone (the second result of <see cref="Build"/>), for a first view that reads its page
+    /// and its totals on two connections at once (#241). The same text and parameter names; no paging values.
+    /// </summary>
+    public static GridSql BuildSummary(GridQuery q, IEnumerable<ColumnDef> catalog)
+    {
+        var p = PageParameters(q); // the filter parameters are numbered after these, as in Build
+        var where = Where(q, catalog, p);
+        p.RemoveAll(x => x.Key is "offset" or "limit");
+        return new GridSql(AppendSummary(new StringBuilder(), q, where).ToString(), p);
+    }
+
+    private static List<KeyValuePair<string, object>> PageParameters(GridQuery q) =>
+    [
+        new("as_of", q.AsOf),
+        new("portfolios", q.PortfolioIds),
+        new("offset", q.Offset),
+        new("limit", q.Limit),
+    ];
+
+    private static StringBuilder AppendSummary(StringBuilder sql, GridQuery q, string where)
+    {
+        sql.Append("SELECT COUNT(*)::int AS row_count");
         foreach (var c in q.Columns.Where(c => c.Aggregation != Aggregation.None))
             sql.Append(", ").Append(Aggregate(c)).Append(" AS ").Append(Quote(c.Name));
-        sql.Append(" FROM ").Append(Table).Append(" WHERE ").Append(where).Append(';');
-
-        return new GridSql(sql.ToString(), p);
+        return sql.Append(" FROM ").Append(Table).Append(" WHERE ").Append(where).Append(';');
     }
 
     /// <summary>The page query alone, for CSV export (no OFFSET window beyond the cap, no summary).</summary>

@@ -200,6 +200,24 @@ public sealed class GridQueryTests
     }
 
     [Fact]
+    public void The_summary_alone_is_the_batchs_second_statement_with_the_same_parameters_but_no_paging()
+    {
+        // #241: a first view may read its totals on a second connection. Same text and parameter names as in the
+        // batch (one statement shape for Postgres), the same scope and filter values, and no OFFSET/LIMIT values.
+        var q = Normalize(new GridRequest(
+            StartRow: 200, EndRow: 400,
+            Columns: ["deal_name", "market_value", "spread_bp"],
+            FilterModel: new() { ["spread_bp"] = new("number", "greaterThan", Json("250")) },
+            QuickFilter: "clo"));
+        var batch = GridSqlBuilder.Build(q, ColumnCatalog.PositionSnapshot);
+        var summary = GridSqlBuilder.BuildSummary(q, ColumnCatalog.PositionSnapshot);
+
+        Assert.Equal(batch.Sql.Split(";\n")[1], summary.Sql);
+        Assert.Equal(batch.Parameters.Where(p => p.Key is not ("offset" or "limit")), summary.Parameters);
+        Assert.Equal(["as_of", "portfolios", "p4", "p5"], summary.Parameters.Select(p => p.Key));
+    }
+
+    [Fact]
     public void Prices_are_face_weighted_and_every_other_average_is_MV_weighted()
     {
         // #459 (Leo, 2026-10-16): the par-weighted price a desk quotes, not the |MV|-weighted Σp²f / Σpf.
