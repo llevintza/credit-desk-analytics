@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 // #207: main CI must never drop a push, and only the tip of main deploys.
 // These assert the concurrency wiring in ci.yml, deploy.yml and db-ops.yml, so a
@@ -153,8 +154,41 @@ test("deploy.yml: the gate runs outside the group, has no secrets, and a non-tip
   assert.doesNotMatch(skip[1], /allowed=true|exit 0/);
 });
 
-test("db-ops.yml: keeps the workflow-level non-cancelling production group shared with deploy", () => {
-  assert.match(DB_OPS, /^concurrency:\n {2}group: production\n {2}cancel-in-progress: false$/m);
+// #242: db-ops shares deploy's production group on its run job only, and its gate (outside the group) refuses
+// while a Deploy run is in flight, so a dispatch can't become the pending run that replaces the tip's release.
+test("db-ops.yml: only the run job holds the production group; the gate refuses during a Deploy", () => {
+  assert.ok(!topLevel(DB_OPS, "concurrency"), "no workflow-level group in db-ops.yml");
+  assert.deepEqual(jobIds(DB_OPS), ["gate", "run"]);
+  assert.ok(jobBlock(DB_OPS.slice(DB_OPS.indexOf("\njobs:")), "run").includes(PRODUCTION_JOB_CONCURRENCY));
+  assert.match(jobBlock(DB_OPS.slice(DB_OPS.indexOf("\njobs:")), "run"), /^ {4}needs: gate\n {4}if: needs\.gate\.outputs\.allowed == 'true'$/m);
+  const gate = jobBlock(DB_OPS.slice(DB_OPS.indexOf("\njobs:")), "gate");
+  assert.doesNotMatch(gate, /^ {4}concurrency:|environment:|secrets\./m);
+  assert.match(gate, /^ {4}permissions:\n {6}contents: read\n {6}actions: read #/m);
+  const step = gate.slice(gate.indexOf("- name: Refuse while a Deploy is in flight"));
+  assert.match(step, /^ {8}if: steps\.tip\.outputs\.allowed == 'true'$/m);
+  assert.match(step, /actions\/workflows\/deploy\.yml\/runs/);
+  assert.match(step, /select\(\.status != "completed"\)/);
+  assert.match(step, /\[ "\$active" -ne 0 \]; then\n {12}echo "::error::A Deploy run is in flight/);
+  assert.match(step, /::error::Could not list Deploy runs; refusing DB ops \(fail closed\)/);
+});
+
+test("db-ops.yml: the in-flight refusal, run in bash against a stub gh", () => {
+  const gate = jobBlock(DB_OPS.slice(DB_OPS.indexOf("\njobs:")), "gate");
+  const step = gate.slice(gate.indexOf("- name: Refuse while a Deploy is in flight"));
+  const body = /\n {8}run: \|\n((?: {10}.*\n?|\s*\n)+)/.exec(step)[1].split("\n").map((l) => l.slice(10)).join("\n");
+  const run = (ghOut, ghRc = 0) =>
+    spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", `gh() { printf '%s' '${ghOut}'; return ${ghRc}; }\n${body}`], {
+      env: { PATH: process.env.PATH, GITHUB_REPOSITORY: "o/r" },
+      encoding: "utf8",
+    });
+  assert.equal(run("0").status, 0);
+  const busy = run("2");
+  assert.equal(busy.status, 1);
+  assert.match(busy.stdout, /::error::A Deploy run is in flight \(2 not completed\)/);
+  assert.notEqual(run("", 1).status, 0, "a failed list fails closed");
+  const garbage = run("null");
+  assert.equal(garbage.status, 1);
+  assert.match(garbage.stdout, /Could not list Deploy runs/);
 });
 
 // #321: every job runs on the pinned ubuntu-24.04 image, never a moving label. Moving to a

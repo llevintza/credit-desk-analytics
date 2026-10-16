@@ -18,9 +18,10 @@ on:
         description: Type RESEED-PRODUCTION to allow a reseed
         default: ""
 
-concurrency:
-  group: production
-  cancel-in-progress: false
+# #242: the `production` group sits on the run job (the one that reaches Neon), as in deploy.yml, not on the
+# workflow. A workflow-level group made this run pending the moment it was dispatched, and a newly pending run
+# replaces the group's pending one: a db-ops dispatch could cancel the tip's pending Deploy release. The gate
+# runs outside the group and refuses while a Deploy run is still in flight, before this run enters it.
 
 permissions:
   contents: read
@@ -37,6 +38,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read # list Deploy runs (read-only)
     outputs:
       allowed: ${{ steps.tip.outputs.allowed }}
     steps:
@@ -67,6 +69,24 @@ jobs:
           else
             echo "allowed=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Refuse while a Deploy is in flight
+        if: steps.tip.outputs.allowed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Any Deploy run not yet completed (queued, waiting, pending or in progress) may be holding or waiting for
+          # the production group. Entering the group now could cancel its pending release (#242). Fails closed if
+          # the list can't be read. Dispatch again when the Deploy has finished.
+          active=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?per_page=50" \
+            --jq '[.workflow_runs[] | select(.status != "completed") | .id] | length')
+          if ! [[ $active =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not list Deploy runs; refusing DB ops (fail closed)."
+            exit 1
+          fi
+          if [ "$active" -ne 0 ]; then
+            echo "::error::A Deploy run is in flight ($active not completed). DB ops would share its production group and could cancel its pending release. Nothing was run; dispatch again after it finishes."
+            exit 1
+          fi
 
   run:
     needs: gate
@@ -76,6 +96,9 @@ jobs:
     permissions:
       contents: read
     environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
     env:
       # Inputs go through env, never interpolated into scripts (script injection).
       OPERATION: ${{ inputs.operation }}
