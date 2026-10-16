@@ -2,7 +2,7 @@
 //
 //   docker run --rm -i --add-host=host.docker.internal:host-gateway \
 //     -e BASE_URL=http://host.docker.internal:5181 -e DESK_EMAIL=… -e DESK_PASSWORD=… \
-//     grafana/k6:1.3.0 run - < perf/positions.js
+//     grafana/k6:2.3.0 run - < perf/positions.js
 //
 // The API must run with the per-user limit raised for the run (RATE_LIMIT_PER_USER_PER_MIN/BURST): k6 is one user.
 // MISS requests are the whole book under a filter value that has never been asked for, so neither the block nor the

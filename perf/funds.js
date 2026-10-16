@@ -3,7 +3,7 @@
 //
 //   docker run --rm -i --add-host=host.docker.internal:host-gateway \
 //     -e BASE_URL=http://host.docker.internal:5182 -e DESK_EMAIL=… -e DESK_PASSWORD=… \
-//     grafana/k6:1.3.0 run - < perf/funds.js
+//     grafana/k6:2.3.0 run - < perf/funds.js
 //
 // DESK_EMAIL must be an admin: setup() clears the response cache so MISS really misses on a rerun.
 // The API must run with the per-user limit raised for the run (RATE_LIMIT_PER_USER_PER_MIN/BURST): k6 is one user.
