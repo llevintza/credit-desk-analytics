@@ -17,8 +17,21 @@ export type OverlayStatus = 'off' | 'connecting' | 'live' | 'paused' | 'empty' |
 export const idleMs = 5 * 60_000;
 /** How often the totals are refreshed from the server while the overlay is live (README §6 P6). */
 export const totalsMs = 30_000;
-/** The wait before reconnecting after a dropped stream (the server's SSE `retry`). */
+/** The first wait before reconnecting after a dropped stream (the server's SSE `retry`); it doubles per drop in a row. */
 export const retryMs = 5_000;
+/** The longest wait between reconnects. */
+export const maxRetryMs = 60_000;
+
+/**
+ * The wait before reconnect attempt `failures` (1 = the first after a drop): exponential backoff from {@link retryMs},
+ * capped at {@link maxRetryMs}, with jitter (a random half to all of it), so tabs that dropped together (a restart)
+ * don't all come back in the same second. A 429's Retry-After is a floor, never cut short by the jitter.
+ */
+export function reconnectDelayMs(failures: number, error: unknown, random: () => number = Math.random): number {
+  const backoff = Math.min(maxRetryMs, retryMs * 2 ** Math.max(0, failures - 1));
+  const jittered = Math.round(backoff * (0.5 + random() / 2));
+  return Math.max(jittered, retryAfterMs(error) ?? 0);
+}
 /** Drops in a row before the overlay gives up and shows an error; a stream that says hello resets the count. */
 export const maxRetries = 5;
 
@@ -45,6 +58,8 @@ export class MarksOverlay {
 
   /** Set by the page: the marks one chunk of the stream applied, oldest first. */
   onMarks: (marks: Mark[]) => void = () => undefined;
+  /** The jitter source for {@link reconnectDelayMs}; tests pin it. */
+  random: () => number = Math.random;
   /** Set by the page: the current view without paging, or null when it shows no marked column. */
   totalsRequest: () => TotalsRequest | null = () => null;
 
@@ -165,7 +180,10 @@ export class MarksOverlay {
     }
   }
 
-  /** A dropped or refused stream: wait (the server's Retry-After on a 429) and try again, a few times. */
+  /**
+   * A dropped or refused stream: wait (backoff with jitter, at least the server's Retry-After on a 429) and try
+   * again, a few times, and only while the user is still here.
+   */
   private dropped(error: unknown): void {
     this.stream = null;
     if (++this.failures > maxRetries) {
@@ -178,7 +196,7 @@ export class MarksOverlay {
       this.retry = null;
       if (this.active()) this.connect();
       else this.pause();
-    }, retryAfterMs(error) ?? retryMs);
+    }, reconnectDelayMs(this.failures, error, this.random));
   }
 
   private refreshTotals(): void {

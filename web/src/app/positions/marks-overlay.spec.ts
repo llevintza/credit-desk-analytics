@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { DeskApi } from '../data-access/desk-api';
 import { Mark, MarkTotals } from './marks';
-import { MarksOverlay, idleMs, maxRetries, retryMs, totalsMs } from './marks-overlay';
+import { MarksOverlay, idleMs, maxRetries, maxRetryMs, reconnectDelayMs, retryMs, totalsMs } from './marks-overlay';
 
 interface OpenStream { portfolioIds: number[]; lastEventId: number | null; text: string; subject: Subject<string>; }
 
@@ -50,6 +50,7 @@ describe('MarksOverlay', () => {
     api = new FakeApi();
     TestBed.configureTestingModule({ providers: [MarksOverlay, { provide: DeskApi, useValue: api }] });
     overlay = TestBed.inject(MarksOverlay);
+    overlay.random = () => 1; // deterministic waits; the jitter has its own test
     applied = [];
     overlay.onMarks = (marks) => applied.push(marks);
   });
@@ -104,29 +105,54 @@ describe('MarksOverlay', () => {
     expect(api.streams.length).toBe(1);
   });
 
-  it('retries a cut-off stream after the retry wait and a refused one after its Retry-After, then gives up', () => {
+  it('retries a dropped stream with growing waits (at least a 429\'s Retry-After), then gives up', () => {
+    overlay.random = () => 1; // no jitter: the full backoff
     overlay.start([]);
     api.send(hello());
-    api.last.subject.complete(); // cut off without a bye
+    api.last.subject.complete(); // cut off without a bye: 1st drop, 5 s
     expect(overlay.status()).toBe('connecting');
     vi.advanceTimersByTime(retryMs - 1);
     expect(api.streams.length).toBe(1);
     vi.advanceTimersByTime(1);
     expect(api.streams.length).toBe(2);
 
-    const busy = new HttpErrorResponse({ status: 429, headers: new HttpHeaders({ 'Retry-After': '3' }) });
+    // 2nd drop in a row: 10 s, and a 429 asking for 30 s gets its 30 s.
+    const busy = new HttpErrorResponse({ status: 429, headers: new HttpHeaders({ 'Retry-After': '30' }) });
     api.last.subject.error(busy);
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(29_999);
+    expect(api.streams.length).toBe(2);
+    vi.advanceTimersByTime(1);
     expect(api.streams.length).toBe(3);
 
+    // 3rd: 20 s. A hello resets the count, so the next drop waits 5 s again.
+    api.last.subject.error(new HttpErrorResponse({ status: 503 }));
+    vi.advanceTimersByTime(19_999);
+    expect(api.streams.length).toBe(3);
+    vi.advanceTimersByTime(1);
+    api.send(hello());
+    api.last.subject.complete();
+    vi.advanceTimersByTime(retryMs);
+    expect(api.streams.length).toBe(5);
+
     for (let i = 0; i < maxRetries; i++) {
+      document.dispatchEvent(new KeyboardEvent('keydown')); // still at the desk, so it keeps retrying, not pausing
       api.last.subject.error(new HttpErrorResponse({ status: 503 }));
-      vi.advanceTimersByTime(retryMs);
+      vi.advanceTimersByTime(maxRetryMs);
     }
     expect(overlay.status()).toBe('error');
     const opened = api.streams.length;
-    vi.advanceTimersByTime(10 * retryMs);
+    vi.advanceTimersByTime(10 * maxRetryMs);
     expect(api.streams.length).toBe(opened);
+  });
+
+  it('reconnect waits back off exponentially to a cap, with jitter, never under Retry-After', () => {
+    const busy = (s: string) => new HttpErrorResponse({ status: 429, headers: new HttpHeaders({ 'Retry-After': s }) });
+    expect([1, 2, 3, 4, 5, 6].map((n) => reconnectDelayMs(n, null, () => 1))).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000]);
+    expect(reconnectDelayMs(1, null, () => 0)).toBe(2_500); // jitter takes up to half off
+    expect(reconnectDelayMs(3, null, () => 0.5)).toBe(15_000);
+    expect(reconnectDelayMs(1, busy('20'), () => 0)).toBe(20_000); // the server's Retry-After is a floor
+    expect(reconnectDelayMs(4, busy('2'), () => 1)).toBe(40_000);
+    expect(reconnectDelayMs(0, new Error('x'), () => 1)).toBe(5_000);
   });
 
   it('pauses instead of reconnecting once its user has been idle, and resumes on the next input', () => {
