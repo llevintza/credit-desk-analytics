@@ -10,6 +10,11 @@
 --             would get without the sort index, without dropping it.
 -- Each plan runs once to warm the cache, then once for the record. A summary table follows the plans. Rows removed by a
 -- parallel node are per worker (EXPLAIN's per-loop average).
+-- Guard addresses (#338): a unix socket (`docker exec` as above) has no server address; host psql through the
+-- published port reaches the container's Docker bridge address (measured 172.17.0.3 on the default bridge; compose
+-- networks take the next /16s of Docker's default pool, 172.18-172.31). 172.16.0.0/12 is there for Docker only and is
+-- kept whole because a /16 would refuse compose networks. It also matches any other RFC 1918 172.16-31 server, so the
+-- address alone doesn't prove the server is local; the database name check and the rule above still apply.
 \pset pager off
 \set ON_ERROR_STOP on
 DO $guard$
