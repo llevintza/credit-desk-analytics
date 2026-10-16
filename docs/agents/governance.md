@@ -31,7 +31,7 @@ concurrency:
 jobs:
   agents-drift-base:                       # no job-level if: (a skipped required check counts as passing)
     name: agents-drift (base)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -52,7 +52,7 @@ jobs:
         run: node scripts/agents/check-drift.mjs --root "$RUNNER_TEMP/pr/tree" --paths "$RUNNER_TEMP/pr/paths.json" --base . --regen
   governance-paths-base:                   # no job-level if:
     name: governance-paths (base)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read

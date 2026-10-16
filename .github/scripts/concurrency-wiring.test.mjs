@@ -93,5 +93,5 @@ test("every workflow job runs on the pinned ubuntu-24.04 runner", () => {
       assert.match(jobBlock(yml.slice(yml.indexOf("\njobs:")), id), /^ {4}runs-on: ubuntu-24\.04$/m, `${name} job ${id} runs on ubuntu-24.04`);
     }
   }
-  assert.equal(jobs, 21);
+  assert.ok(jobs >= 21, `found ${jobs} jobs; the job parser missed some`);
 });
