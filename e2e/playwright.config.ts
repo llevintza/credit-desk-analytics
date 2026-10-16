@@ -14,15 +14,18 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
+  // secret-guard runs after html (reporters end in order) and fails the run if the password is in the report (#155).
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }], ['./reporters/secret-guard.ts']],
   use: {
     baseURL: process.env.BASE_URL ?? 'http://localhost:8080',
     viewport: { width: 1600, height: 900 },
     trace: 'retain-on-failure',
   },
   projects: [
-    // No trace for the login: it would record the throwaway password's fill (#155).
+    // The login enters the password without a recorded value, and records no trace either (#155).
     { name: 'setup', testMatch: /auth\.setup\.ts/, use: { trace: 'off' } },
+    // The guard's own checks, next to it: no browser, no stack.
+    { name: 'guard', testDir: './reporters' },
     { name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 900 }, storageState: '.auth/state.json' }, dependencies: ['setup'] },
   ],
 });
