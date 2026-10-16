@@ -363,6 +363,8 @@ jobs:
         run: node --test .github/scripts/concurrency-wiring.test.mjs
       - name: k6 handleSummary and the budgets jq (#271)
         run: node --test .github/scripts/k6-summary.test.mjs
+      - name: Seeder cap wiring tests (#224)
+        run: node --test .github/scripts/seed-cap-wiring.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.

@@ -65,7 +65,7 @@ public sealed class DataSourceRegistry(IConfiguration config, DbConnectionCounte
     public const int MaxAllowedPoolSize = 100;
 
     // A typo must not lift the cap: anything outside 1–100 falls back to the default (as LimitsOptions, plus a ceiling).
-    internal static int MaxPoolSizeFrom(IConfiguration config) =>
+    public static int MaxPoolSizeFrom(IConfiguration config) =>
         int.TryParse(config["DB_MAX_POOL_SIZE"], out var v) && v is > 0 and <= MaxAllowedPoolSize ? v : DefaultMaxPoolSize;
 
     internal int DistinctDataSources => _byConnectionString.Count;
