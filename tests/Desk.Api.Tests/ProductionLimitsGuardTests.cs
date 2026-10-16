@@ -32,6 +32,8 @@ public sealed partial class ProductionLimitsGuardTests
         ["RATE_LIMIT_PER_USER_INSIGHTS_QUEUE"] = Defaults.InsightsQueue,
         ["EXPORT_GLOBAL_SLOTS"] = Defaults.ExportSlots,
         ["EXPORT_TIMEOUT_SECONDS"] = Defaults.ExportTimeout.TotalSeconds,
+        // The built-in cap (25,000). EXPORT_MAX_ROWS may only lower it, so this is the largest production value.
+        ["EXPORT_MAX_ROWS"] = Defaults.ExportMaxRows,
     };
 
     [Fact]
@@ -43,14 +45,21 @@ public sealed partial class ProductionLimitsGuardTests
     [Fact]
     public void Ceilings_cover_every_key_LimitsOptions_reads()
     {
-        // A new limit key must be added to the scan: setting each listed key to a raised value changes every field.
-        var raised = new ConfigurationBuilder().AddInMemoryCollection(
-            Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, (c.Value + 1).ToString(CultureInfo.InvariantCulture)))).Build();
-        var options = LimitsOptions.From(raised);
-        var unchanged = typeof(LimitsOptions).GetProperties()
+        // A new limit key must be added to the scan: moving each listed key off its ceiling changes every field.
+        // One above covers a limit that accepts a raise. EXPORT_MAX_ROWS is clamped at this ceiling, so only one
+        // below moves it. A field that stays put in both directions is not read from any listed key.
+        var stuck = UnchangedWhen(1).Intersect(UnchangedWhen(-1));
+        Assert.Empty(stuck);
+    }
+
+    private static IEnumerable<string> UnchangedWhen(double delta)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(
+            Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, (c.Value + delta).ToString(CultureInfo.InvariantCulture)))).Build();
+        var options = LimitsOptions.From(config);
+        return typeof(LimitsOptions).GetProperties()
             .Where(p => Equals(p.GetValue(options), p.GetValue(Defaults)))
             .Select(p => p.Name);
-        Assert.Empty(unchanged);
     }
 
     [Fact]
