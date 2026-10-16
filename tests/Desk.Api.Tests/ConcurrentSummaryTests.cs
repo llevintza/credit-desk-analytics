@@ -103,6 +103,8 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         var batch = await grid.ReadBlockAsync(query, Catalog, Ct);
         Assert.Equal(1, sources.Peak);
         sources.Reset();
+        // The totals can finish before the page's connection opens, so a peak of 2 is held for, not left to timing.
+        sources.HoldUntilOpenTogether(2);
         var concurrent = await grid.ReadBlockAsync(query, Catalog, Ct, concurrentSummary: true);
 
         Assert.Equal(2, sources.Peak);
@@ -112,6 +114,18 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         Assert.Equal(batch.Summary, concurrent.Summary);
         Assert.Equal(batch.Rows, concurrent.Rows);
         Assert.Equal(batch.Columns.Select(Values), concurrent.Columns.Select(Values));
+    }
+
+    [Fact]
+    public async Task The_hold_fails_a_read_that_never_has_two_connections_open_at_once()
+    {
+        // What makes the peak of 2 above a proof: one batch on one connection never reaches the hold's count.
+        var (grid, sources) = Repository();
+        sources.HoldUntilOpenTogether(2, TimeSpan.FromMilliseconds(200));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => grid.ReadBlockAsync(AllPreset(1, 2), Catalog, Ct));
+        Assert.Equal(1, sources.Peak);
+        Assert.Equal(0, sources.Open);
     }
 
     [Fact]
@@ -183,9 +197,13 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         var sources = new Holder();
         await using var host = WithCountingSources(sources);
         var client = await SignedInAsync(host);
+        await PostAsync(client, Filtered(-1e15 - 3, startRow: 0)); // loads the meta cache, its own core read
 
+        sources.Value!.Reset();
+        sources.Value.HoldUntilOpenTogether(2);
         var first = await PostAsync(client, Filtered(-1e15 - 1, startRow: 0));
-        Assert.Equal(2, sources.Value!.Peak);
+        Assert.Equal(2, sources.Value.Peak);
+        sources.Value.Release();
         sources.Value.Reset();
         var later = await PostAsync(client, Filtered(-1e15 - 1, startRow: 100));
         Assert.Equal(1, sources.Value.Peak);
@@ -276,17 +294,27 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
         public CountingSources? Value { get; set; }
     }
 
-    /// <summary>Counts the <c>core</c> connections open at once (Dapper's reads); everything else passes through.</summary>
+    /// <summary>
+    /// Counts the <c>core</c> connections open at once (Dapper's reads); everything else passes through. While a
+    /// <see cref="HoldUntilOpenTogether">hold</see> is set, each new connection waits until that many are open, so
+    /// reads that run concurrently are seen open together whatever their timing, and reads that don't time out.
+    /// </summary>
     private sealed class CountingSources(IDataSourceRegistry inner) : IDataSourceRegistry
     {
         private int _open;
         private int _peak;
+        private Hold? _hold;
 
         public int Open => Volatile.Read(ref _open);
 
         public int Peak => Volatile.Read(ref _peak);
 
         public void Reset() => Volatile.Write(ref _peak, Open);
+
+        public void HoldUntilOpenTogether(int count, TimeSpan? timeout = null) =>
+            Volatile.Write(ref _hold, new Hold(count, timeout ?? TimeSpan.FromSeconds(30)));
+
+        public void Release() => Volatile.Write(ref _hold, null);
 
         public NpgsqlDataSource Get(string source) => inner.Get(source);
 
@@ -301,7 +329,30 @@ public sealed class ConcurrentSummaryTests(PostgresApiFactory api)
             {
                 if (e.CurrentState == ConnectionState.Closed) Interlocked.Decrement(ref _open);
             };
+            if (Volatile.Read(ref _hold) is { } hold)
+            {
+                try
+                {
+                    await hold.ArriveAsync(now, ct);
+                }
+                catch
+                {
+                    await conn.DisposeAsync();
+                    throw;
+                }
+            }
             return conn;
+        }
+
+        private sealed class Hold(int count, TimeSpan timeout)
+        {
+            private readonly TaskCompletionSource _together = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task ArriveAsync(int open, CancellationToken ct)
+            {
+                if (open >= count) _together.TrySetResult();
+                return _together.Task.WaitAsync(timeout, ct);
+            }
         }
     }
 }
