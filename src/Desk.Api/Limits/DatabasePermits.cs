@@ -32,6 +32,9 @@ public sealed class DatabasePermits : IDisposable
     /// request holding a permit can't block on another (no deadlock); it is refused while anyone is queued (the
     /// limiter serves its queue oldest first), and it never takes the last free permit, so a request that arrives
     /// next still finds one. Dispose the lease after the extra connection is back in the pool.
+    /// The statistics check and the acquire are two steps, so two first views racing with exactly two permits free
+    /// can both get a spare and take the last one. That is acceptable: the next request then waits in the queue for
+    /// at most one summary read, never deadlocks, and every connection still holds a permit, so the pool sum holds.
     /// </summary>
     public RateLimitLease TryTakeSpare() =>
         _permits.GetStatistics() is { CurrentAvailablePermits: >= 2, CurrentQueuedCount: 0 }
