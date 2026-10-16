@@ -153,3 +153,20 @@ test("#256 item 2: the k6 step's rc handling, run for 0, 99 and 107 (MIN_BOOK=ab
   assert.match(script.summary, /k6 did not complete: 104 config, 107 script exception, 108 abort/);
   assert.match(script.summary, /\| k6 produced no summary \|/);
 });
+
+test("#463: the claude-review job is opt-in via CLAUDE_REVIEW_ENABLED and keeps its guards", () => {
+  const REVIEW = jobBlock(WORKFLOWS.find(([f]) => f === "claude-review.yml")[1], "review");
+  const cond = /^ {4}if: >-\n((?: {6}.*\n)+)/m.exec(REVIEW);
+  assert.ok(cond, "review job has no folded if: block");
+  const terms = cond[1].split("\n").map((l) => l.trim().replace(/ &&$/, "")).filter(Boolean);
+  for (const t of [
+    "vars.CLAUDE_REVIEW_ENABLED == 'true'",
+    "github.event.pull_request.draft == false",
+    "github.event.pull_request.head.repo.full_name == github.repository",
+    "github.event.pull_request.user.login != 'dependabot[bot]'",
+    "(github.actor == 'cursor[bot]' || !endsWith(github.actor, '[bot]'))",
+  ]) assert.ok(terms.includes(t), `review if: is missing ${t}`);
+  // Every term is AND-ed: an || at the top level would let the job run with the switch off.
+  assert.equal(cond[1].trim().split("&&").length, terms.length);
+  assert.match(REVIEW, /#463/);
+});
