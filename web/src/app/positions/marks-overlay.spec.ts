@@ -212,6 +212,23 @@ describe('MarksOverlay', () => {
     expect(api.totals.length).toBe(4);
   });
 
+  it('without a page listener marks are still applied, and events it does not know are ignored', () => {
+    const bare = TestBed.runInInjectionContext(() => new MarksOverlay());
+    bare.start([]);
+    api.send(hello(), ['ping', { x: 1 }], ['mark', mark(1, 10)]);
+    expect(bare.book.get(1)?.seq).toBe(10);
+    expect(bare.status()).toBe('live');
+  });
+
+  it('stop during a retry wait cancels the retry', () => {
+    overlay.start([]);
+    api.last.subject.error(new HttpErrorResponse({ status: 503 }));
+    overlay.stop();
+    vi.advanceTimersByTime(10 * retryMs);
+    expect(api.streams.length).toBe(1);
+    expect(overlay.status()).toBe('off');
+  });
+
   it('stop closes everything and forgets the marks and totals', () => {
     overlay.totalsRequest = () => ({ columns: ['price'] });
     overlay.start([]);

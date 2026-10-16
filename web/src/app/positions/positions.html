@@ -17,8 +17,8 @@
           (click)="toggleOverlay()" title="Intraday marks on price and spread (latest as-of only; pauses when you're idle)">
     Live marks
   </button>
-  @if (overlay.status() !== 'off') {
-    <span class="live-status" data-testid="live-status" role="status" [attr.data-status]="overlay.status()">{{ liveLabel() }}</span>
+  @if (liveLabel(); as label) {
+    <span class="live-status" data-testid="live-status" role="status" [attr.data-status]="overlay.status()">{{ label }}</span>
   }
   <span class="spacer"></span>
   @if (query.loading()) { <span class="muted" role="status">Loading…</span> }

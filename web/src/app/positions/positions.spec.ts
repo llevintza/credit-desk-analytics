@@ -301,6 +301,36 @@ describe('Positions page', () => {
     expect(el.querySelector('[data-testid=live-status]')).toBeNull();
   });
 
+  it('live marks: says what the overlay is doing, and skips rows it cannot place', async () => {
+    const { fixture, el, http, grid, query, ready } = await render();
+    const overlay = fixture.debugElement.injector.get(MarksOverlay);
+    const rows = [{ position_id: 1, bond_id: 7, price: 99 }];
+    expect(query.decorate(rows)).toBe(rows); // overlay off: blocks pass through untouched
+    overlay.onMarks([{ bondId: 7, seq: 1, eventTs: 't', price: 1, spreadBp: null }]); // no grid yet: nothing to do
+    await ready();
+    (el.querySelector('[data-testid=live-marks]') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    const stream = http.expectOne((r) => r.url === '/api/marks/stream');
+    // A row without a bond id is shown as it is; one whose block was purged since is skipped.
+    expect(query.decorate([{ position_id: 5, price: 90 }])).toEqual([{ position_id: 5, price: 90 }]);
+    query.decorate([{ position_id: 6, bond_id: 7, price: 90 }]);
+    stream.event({ type: HttpEventType.DownloadProgress, loaded: 1, partialText:
+      'event: mark\ndata: {"bondId":7,"seq":5,"eventTs":"t","price":100.5,"spreadBp":200}\n\n' +
+      'event: mark\ndata: {"bondId":8,"seq":5,"eventTs":"t","price":90,"spreadBp":null}\n\n' });
+    expect(grid.getRowNode).toHaveBeenCalledWith('6');
+    expect(grid.flashCells).not.toHaveBeenCalled();
+
+    const label = () => el.querySelector('[data-testid=live-status]')?.textContent?.trim();
+    for (const [status, text] of [['connecting', 'Connecting…'], ['paused', 'Paused (idle) · click to resume'], ['empty', 'No bonds to mark'], ['error', 'Live marks unavailable']] as const) {
+      overlay.status.set(status);
+      await fixture.whenStable();
+      expect(label()).toBe(text);
+    }
+    overlay.status.set('off');
+    await fixture.whenStable();
+    expect(label()).toBeUndefined();
+  });
+
   it('live marks: turning it off closes the stream and drops bond_id', async () => {
     const { fixture, el, http, query, ready } = await render();
     await ready();
