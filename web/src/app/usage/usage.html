@@ -1,0 +1,101 @@
+<section class="toolbar" aria-label="Usage controls">
+  <div class="windows" role="group" aria-label="Window">
+    @for (w of windows; track w) {
+      <button type="button" [attr.data-testid]="'window-' + w" [class.active]="w === days()" [attr.aria-pressed]="w === days()"
+              (click)="setWindow(w)">{{ w === 1 ? 'Today' : 'Last ' + w + ' days' }}</button>
+    }
+  </div>
+  <button type="button" data-testid="refresh" (click)="refresh()">Refresh</button>
+  <span class="spacer"></span>
+  @switch (clearState()) {
+    @case ('done') { <span class="note" role="status" data-testid="clear-status">Server caches cleared.</span> }
+    @case ('error') { <span class="note bad" role="alert" data-testid="clear-status">Could not clear the caches.</span> }
+  }
+  <button type="button" data-testid="clear-cache" [disabled]="clearState() === 'busy'" (click)="clearCache()"
+          title="Drops cached reference data and grid blocks on the server (after a manual reseed)">Clear server caches</button>
+</section>
+
+@switch (state().kind) {
+  @case ('error') { <div class="error-tile" role="alert">Could not load usage. <button type="button" data-testid="retry" (click)="refresh()">Retry</button></div> }
+  @case ('loading') { <div class="skeleton" aria-busy="true" aria-label="Loading usage"></div> }
+}
+
+@if (report(); as r) {
+  <div class="body" data-testid="usage">
+    <p class="caption" data-testid="caption">{{ r.from }} to {{ r.to }} (UTC days) · from the audit log, up to its last flush</p>
+
+    <section class="kpis" aria-label="Totals">
+      <div class="kpi"><span class="label">Requests</span><span class="value" data-testid="kpi-requests">{{ countText(r.requests) }}</span></div>
+      <div class="kpi"><span class="label">Cache hit ratio</span><span class="value" data-testid="kpi-ratio">{{ ratioText(r.hitRatio) }}</span></div>
+      <div class="kpi"><span class="label">Hits / misses</span><span class="value" data-testid="kpi-hits">{{ countText(r.hits) }} / {{ countText(r.misses) }}</span></div>
+    </section>
+
+    <div class="tiles">
+      <article class="tile">
+        <header><h3>Per day</h3></header>
+        @if (r.days.length === 0) {
+          <p class="empty" data-testid="days-empty">No requests in this window.</p>
+        } @else {
+          <div class="scroll">
+            <table data-testid="days">
+              <thead><tr><th scope="col">Day</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Hits</th><th scope="col" class="num">Misses</th><th scope="col" class="num">Hit ratio</th></tr></thead>
+              <tbody>
+                @for (d of r.days; track d.day) {
+                  <tr><th scope="row">{{ d.day }}</th><td class="num">{{ countText(d.requests) }}</td><td class="num">{{ countText(d.hits) }}</td>
+                    <td class="num">{{ countText(d.misses) }}</td><td class="num">{{ ratioText(d.hitRatio) }}</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </article>
+
+      <article class="tile">
+        <header><h3>Requests per user per day</h3></header>
+        @if (r.users.length === 0) {
+          <p class="empty">No requests in this window.</p>
+        } @else {
+          <div class="scroll">
+            <table data-testid="users">
+              <thead><tr><th scope="col">Day</th><th scope="col">User</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Hits</th><th scope="col" class="num">Misses</th><th scope="col" class="num">5xx</th><th scope="col" class="num">Avg ms</th></tr></thead>
+              <tbody>
+                @for (u of r.users; track u.day + '|' + u.userName) {
+                  <tr><th scope="row">{{ u.day }}</th><td>{{ u.userName ?? '—' }}</td><td class="num">{{ countText(u.requests) }}</td><td class="num">{{ countText(u.hits) }}</td>
+                    <td class="num">{{ countText(u.misses) }}</td><td class="num" [class.neg]="u.errors > 0">{{ countText(u.errors) }}</td><td class="num">{{ countText(u.avgMs) }}</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </article>
+
+      <article class="tile wide">
+        <header>
+          <h3>Slowest 20 requests</h3>
+          @if (slowDays().length) {
+            <label class="field">Day
+              <select data-testid="slow-day" aria-label="Day of the slowest requests" (change)="pickSlowDay($event)">
+                @for (d of slowDays(); track d) { <option [value]="d" [selected]="d === shownSlowDay()">{{ d }}</option> }
+              </select>
+            </label>
+          }
+        </header>
+        @if (slowest().length === 0) {
+          <p class="empty">No requests in this window.</p>
+        } @else {
+          <div class="scroll">
+            <table data-testid="slowest">
+              <thead><tr><th scope="col" class="num">#</th><th scope="col">Time (UTC)</th><th scope="col">User</th><th scope="col">Endpoint</th><th scope="col" class="num">Status</th><th scope="col" class="num">Rows</th><th scope="col" class="num">ms</th><th scope="col">Cache</th></tr></thead>
+              <tbody>
+                @for (s of slowest(); track s.id) {
+                  <tr><td class="num">{{ $index + 1 }}</td><td>{{ timeText(s.at) }}</td><td>{{ s.userName ?? '—' }}</td><td class="endpoint">{{ s.endpoint }}</td>
+                    <td class="num" [class.neg]="s.status >= 500">{{ s.status }}</td><td class="num">{{ countText(s.rows) }}</td><td class="num">{{ countText(s.ms) }}</td><td>{{ s.cache ?? '' }}</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </article>
+    </div>
+  </div>
+}

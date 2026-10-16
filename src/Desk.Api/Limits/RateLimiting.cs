@@ -21,6 +21,8 @@ public static class RateLimiting
         services.AddSingleton(limits);
         services.AddSingleton(clients);
         services.AddSingleton<ExportGate>();
+        var permits = new DatabasePermits(limits);
+        services.AddSingleton(_ => permits); // a factory, so the container disposes it
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ClientAddressDiagnostics>();
         services.AddHostedService(sp => sp.GetRequiredService<ClientAddressDiagnostics>());
@@ -76,15 +78,11 @@ public static class RateLimiting
                             QueueLimit = limits.PerUserQueue,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         }));
+            // One limiter instance for the partition and for handlers that take a second permit (DatabasePermits).
             var database = PartitionedRateLimiter.Create<HttpContext, string>(http =>
                 !IsApi(http)
                     ? RateLimitPartition.GetNoLimiter("static")
-                    : RateLimitPartition.GetConcurrencyLimiter("db", _ => new ConcurrencyLimiterOptions
-                    {
-                        PermitLimit = limits.GlobalConcurrency,
-                        QueueLimit = limits.GlobalQueue,
-                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                    }));
+                    : RateLimitPartition.Get("db", _ => permits.Shared));
             o.GlobalLimiter = new AcquireOnce(PartitionedRateLimiter.CreateChained(perUserConcurrency, perUser, database));
 
             o.AddPolicy(LoginPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
@@ -136,7 +134,7 @@ public static class RateLimiting
     }
 
     /// <summary>A refusal with no Retry-After: <see cref="AcquireOnce"/>'s skipped attempt, and every <see cref="DenyAll"/> answer.</summary>
-    private sealed class NotAcquired : RateLimitLease
+    internal sealed class NotAcquired : RateLimitLease
     {
         public static readonly NotAcquired Instance = new();
 

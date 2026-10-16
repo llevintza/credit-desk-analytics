@@ -10,6 +10,12 @@ on:
     - cron: "41 6 * * 1"
   workflow_dispatch:
 
+# #278: one run at a time. A dispatch during the scheduled run waits for it instead of
+# duplicating it; an in-progress run is never cancelled, so a drift report always lands.
+concurrency:
+  group: cloudflare-ips
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

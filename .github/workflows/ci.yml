@@ -254,10 +254,25 @@ jobs:
       - run: npm run lint
       - run: npm test -- --watch=false --coverage
       - run: npm run build
+      # #278: the script check comes from BASE_SHA, like the classifier, so a PR that edits it cannot relax its own
+      # check. pages.yml on main runs main's copy before publishing.
+      - name: Base checkout for the script check (#278)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          path: _base
+          persist-credentials: false
       # #355: the same check pages.yml runs before publishing, on the PR's build, so a foreign script fails here and
       # not after the merge. The plain build has no meta CSP (pages.yml adds it), hence --no-csp.
       - name: No untrusted scripts in the build (#355)
-        run: node --disable-warning=ExperimentalWarning --experimental-vm-modules ../.github/scripts/pages-script-check.mjs dist/web/browser --base / --no-csp
+        run: |
+          CHECK=$GITHUB_WORKSPACE/_base/.github/scripts/pages-script-check.mjs
+          # Never the head copy: a base without the check (older than #355) fails closed. Merge main.
+          if [ ! -f "$CHECK" ]; then
+            echo "::error::The base commit has no .github/scripts/pages-script-check.mjs; merge main. Failing closed."
+            exit 1
+          fi
+          node --disable-warning=ExperimentalWarning --experimental-vm-modules "$CHECK" dist/web/browser --base / --no-csp
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-web
@@ -311,6 +326,9 @@ jobs:
           # #213: diff from the base the changes job pinned, so the gate sees the same
           # range as the classifier. Only if that job left no output, the event base.
           DIFF_BASE: ${{ needs.changes.outputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          # #278: what the changes job pinned (empty when it failed first), so the fallback is visible.
+          PINNED_BASE: ${{ needs.changes.outputs.base_sha }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
@@ -334,7 +352,13 @@ jobs:
               exit 1
             fi
           done
-          echo "Diff base (#213, from the changes job): \`${DIFF_BASE}\`. _base (gate, thresholds, floor): \`${BASE_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${PINNED_BASE:-}" ]; then
+            BASE_LABEL="pinned by the changes job"
+          else
+            BASE_LABEL="event-base fallback: the changes job left no base_sha"
+            echo "::warning::The changes job (${CHANGES_RESULT:-unknown}) left no base_sha; the coverage gate diffs from the event base ${DIFF_BASE}, the pre-#213 range."
+          fi
+          echo "Diff base (#213, ${BASE_LABEL}): \`${DIFF_BASE}\`. _base (gate, thresholds, floor): \`${BASE_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
           # The gate exists on main since #5 (741b19eb). Never run the head copy:
           # a BASE_SHA without the gate (retarget, stale base, deleted gate,
           # rewound main) fails closed here, before any code under test runs.

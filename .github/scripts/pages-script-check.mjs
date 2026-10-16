@@ -11,7 +11,8 @@
 //   - has a <script src> (or a script preload) that is not a file of the site itself;
 //   - has an inline <script> body whose sha256 is not in INLINE_ALLOWLIST (empty: Angular emits none);
 //   - has an inline event handler (on…=) or a javascript: URL in any HTML file;
-//   - has a meta CSP whose script-src is anything but 'self' (pages.yml writes it), or none at all in index.html;
+//   - has a meta CSP whose script-src is anything but 'self' (pages.yml writes it), or none at all in index.html or
+//     404.html (the deep-link entry point, #278);
 //   - has a JS module that imports anything but a relative file of the site (static, dynamic or importScripts),
 //     a dynamic import whose specifier isn't a literal, or creates a <script> element.
 // Lightweight on purpose: regexes over Angular's minified output, no dependencies, fail closed.
@@ -26,6 +27,10 @@ const { SourceTextModule } = vm;
 if (typeof SourceTextModule !== "function") {
   throw new Error("run with node --experimental-vm-modules (pages-script-check parses each JS file as a module)");
 }
+
+// The site's entry points: index.html, and 404.html, which Pages serves for every deep link (#278). Each must carry
+// the meta CSP itself.
+const CSP_ENTRY_POINTS = new Set(["index.html", "404.html"]);
 
 // sha256 (base64, CSP style) of each inline script body allowed to ship. Add one only with a review that says why.
 export const INLINE_ALLOWLIST = new Set([]);
@@ -102,7 +107,7 @@ export function checkHtml(html, { file, root, base, requireCsp = true }) {
   }
 
   const csps = [...html.matchAll(/<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy[^>]*>/gi)];
-  if (csps.length === 0 && requireCsp && where === "index.html") findings.push(`${where}: no meta Content-Security-Policy`);
+  if (csps.length === 0 && requireCsp && CSP_ENTRY_POINTS.has(where)) findings.push(`${where}: no meta Content-Security-Policy`);
   for (const m of csps) {
     const policy = attr(m[0], "content") ?? "";
     const scriptSrc = /(?:^|;)\s*script-src\s+([^;]*)/i.exec(policy)?.[1].trim();

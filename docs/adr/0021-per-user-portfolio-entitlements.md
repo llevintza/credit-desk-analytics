@@ -215,6 +215,13 @@ README §6 P4 and this ADR's rule list "deals" among portfolio-owned data. Phase
 - **R1 allowlist:** no entry. The deal code never reads the unscoped portfolio list.
 - **Stub-provider tests (E7):** `tests/Desk.Api.Tests/DealsTests.cs` covers both: `A_single_portfolio_sees_only_its_own_holdings` (with a deal other portfolios also hold, and an out-of-scope request that is dropped) and `An_empty_entitlement_returns_zero_position_rows`.
 
+## Amendment (2026-10-16, #70): the admin Usage endpoint
+
+- **`GET /api/admin/usage`** (`src/Desk.Api/Admin/AdminEndpoints.cs`, ADR-0027) is **exempt**. It returns counts and timings from `app.audit`: user names, route templates (for example `GET /api/deals/{dealId}`, never the request's values), statuses, row counts, ms and cache status. The audit log stores no portfolio id, position or holding, so the report can't carry one.
+- It is admin-only (`AuthSetup.AdminPolicy`), and an admin already sees every portfolio (E1), so a scope wouldn't change what it returns.
+- **R1 allowlist:** no entry. The handler doesn't take `IPortfolioEntitlements` and never reads the unscoped portfolio list.
+- **R4:** `EntitlementClassificationTests.Exempt` lists the path with this reason. If the audit row ever records request parameters such as portfolio ids, this exemption lapses and the endpoint needs a scope.
+
 ## Implementation (2026-10-16, #122)
 
 What #122 built, and where it differs in detail from the text above. Nothing here changes a ruling.
