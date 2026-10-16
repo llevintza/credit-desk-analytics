@@ -361,6 +361,35 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: CI/Deploy concurrency wiring tests (#207)
         run: node --test .github/scripts/concurrency-wiring.test.mjs
+      - name: Perf jobs wiring and the wire-bytes check (#198, #348)
+        run: node --test .github/scripts/perf-jobs.test.mjs perf/bundle-wire-bytes.test.mjs
+
+  perf-deps:
+    # Dependabot /perf bumps (#190, #198): install perf/ from its lockfile and round-trip the
+    # @msgpack/msgpack API that perf/parse-bench.mjs uses (ADR-0007). No DB, no secrets.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: perf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: node --check parse-bench.mjs
+      - name: msgpack round-trip
+        run: >
+          node --input-type=module -e
+          "import { encode, decode } from '@msgpack/msgpack';
+          const doc = { columns: ['a', 'b'], data: [[1, 2], ['x', 'y']] };
+          if (JSON.stringify(decode(encode(doc))) !== JSON.stringify(doc)) process.exit(1);"
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
@@ -480,6 +509,13 @@ jobs:
           # #43 AC4: exits 1 on any mismatch (pipefail keeps that through tee).
           BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
             dotnet run -c Release --project perf/LastBlockCheck | tee -a "$GITHUB_STEP_SUMMARY"
+      # #348: bundle-budget.mjs estimates the initial bundle as Brotli q1 in the API's 16 KB writes (#252). Check that
+      # against the bytes this stack's API really sends, for the exact files the image serves. Fails when any file's
+      # wire bytes exceed the estimate (the budget would then be under-measured).
+      - name: Bundle wire bytes vs the bundle-budget estimate
+        run: |
+          docker compose -f docker-compose.yml -f "$RUNNER_TEMP/budgets-limits.yml" cp app:/app/wwwroot "$RUNNER_TEMP/spa"
+          BASE_URL=http://localhost:8080 node perf/bundle-wire-bytes.mjs "$RUNNER_TEMP/spa" | tee -a "$GITHUB_STEP_SUMMARY"
       # README §10 P1 latency (#135): perf/positions.js on the same scale-1.0 stack, the worst-case MISS (#129, the
       # whole book, never asked for before) for the Risk and All presets, and HIT with X-Cache: HIT asserted. The p95s
       # go to the step summary against 150 / 15 ms. Non-blocking until #87 makes it required: a breach or a failed
