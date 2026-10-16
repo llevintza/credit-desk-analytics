@@ -49,6 +49,7 @@ jobs:
       run_e2e: ${{ steps.classify.outputs.run_e2e }}
       run_budgets: ${{ steps.classify.outputs.run_budgets }}
       run_coverage: ${{ steps.classify.outputs.run_coverage }}
+      base_sha: ${{ steps.base.outputs.base_sha }}
     steps:
       - if: github.event_name != 'pull_request'
         env:
@@ -67,6 +68,30 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: _base
           persist-credentials: false
+      # #213: one diff base, pinned here, for the classifier and the coverage gate.
+      # A PR run tests GITHUB_SHA, the merge commit GitHub built on the base branch;
+      # its first parent can be newer than pull_request.base.sha when main moves.
+      # Diffing from that parent gives both only this PR's changes. _base (rules,
+      # floor) stays at pull_request.base.sha. Anything unexpected keeps the event base.
+      - id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          BASE="$EVENT_BASE"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            PARENT1=$(git rev-parse --verify --quiet 'HEAD^1^{commit}' || true)
+            PARENT2=$(git rev-parse --verify --quiet 'HEAD^2^{commit}' || true)
+            if [ -n "$PARENT1" ] && [ "$PARENT2" = "$HEAD_SHA" ] \
+              && git merge-base --is-ancestor "$EVENT_BASE" "$PARENT1" 2>/dev/null; then
+              BASE="$PARENT1"
+            else
+              echo "::warning::HEAD is not the merge of ${HEAD_SHA} onto a descendant of ${EVENT_BASE}; the diff base stays ${EVENT_BASE}."
+            fi
+          fi
+          echo "base_sha=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "Diff base for the classifier and the coverage gate (#213): \`${BASE}\` (event base \`${EVENT_BASE}\`)." >> "$GITHUB_STEP_SUMMARY"
       - if: github.event_name == 'pull_request'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -75,6 +100,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DIFF_BASE: ${{ steps.base.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           CLASSIFIER=_base/.github/scripts/ci-changes.mjs
@@ -83,7 +109,7 @@ jobs:
             echo "BASE_SHA has no classifier: every job runs." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          node "$CLASSIFIER" --base "$BASE_SHA" --head "$HEAD_SHA"
+          node "$CLASSIFIER" --base "$DIFF_BASE" --head "$HEAD_SHA"
 
   secrets:
     # Fails on any credential in ANY commit of the branch, not just the final tree (.gitleaks.toml).
@@ -282,6 +308,9 @@ jobs:
       - name: Coverage gates
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # #213: diff from the base the changes job pinned, so the gate sees the same
+          # range as the classifier. Only if that job left no output, the event base.
+          DIFF_BASE: ${{ needs.changes.outputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
@@ -292,17 +321,20 @@ jobs:
           SUITES=""
           if [ "$RUN_API" != false ]; then SUITES=dotnet; fi
           if [ "$RUN_WEB" != false ]; then SUITES="${SUITES:+$SUITES,}web"; fi
-          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            echo "::error::BASE_SHA is missing (merge-base unresolved). Failing closed."
-            exit 1
-          fi
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --no-recurse-submodules "$PWD/_base" "$BASE_SHA"
-          fi
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "::error::Cannot resolve BASE_SHA ${BASE_SHA}. Failing closed."
-            exit 1
-          fi
+          for SHA in "${BASE_SHA:-}" "${DIFF_BASE:-}"; do
+            if [ -z "$SHA" ] || [ "$SHA" = "0000000000000000000000000000000000000000" ]; then
+              echo "::error::BASE_SHA or the diff base is missing (merge-base unresolved). Failing closed."
+              exit 1
+            fi
+            if ! git cat-file -e "${SHA}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --no-recurse-submodules "$PWD/_base" "$SHA"
+            fi
+            if ! git cat-file -e "${SHA}^{commit}" 2>/dev/null; then
+              echo "::error::Cannot resolve ${SHA}. Failing closed."
+              exit 1
+            fi
+          done
+          echo "Diff base (#213, from the changes job): \`${DIFF_BASE}\`. _base (gate, thresholds, floor): \`${BASE_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
           # The gate exists on main since #5 (741b19eb). Never run the head copy:
           # a BASE_SHA without the gate (retarget, stale base, deleted gate,
           # rewound main) fails closed here, before any code under test runs.
@@ -314,7 +346,7 @@ jobs:
           node "$GATE" \
             --dotnet TestResults/coverage \
             --web web/coverage \
-            --base "$BASE_SHA" \
+            --base "$DIFF_BASE" \
             --base-dir _base \
             --default-dir _base \
             --default-sha "$BASE_SHA" \
@@ -388,6 +420,8 @@ jobs:
             --test-coverage-lines=80 --test-coverage-branches=80 \
             --test-coverage-include=.github/scripts/pages-script-check.mjs \
             .github/scripts/pages-script-check.test.mjs
+      - name: Deploy Swagger/OpenAPI exposure smoke tests (#110)
+        run: node --test .github/scripts/swagger-exposure-smoke.test.mjs
       - name: Cloudflare IP range check, fixture only (#161, ≥80% line/branch)
         run: |
           node --test --experimental-test-coverage \

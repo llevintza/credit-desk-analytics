@@ -229,6 +229,26 @@ jobs:
           test "$root_code" = 200
           test "$me_code" = 401
 
+      - name: Smoke test (Swagger UI and the OpenAPI document are not public)
+        if: steps.tip.outputs.allowed == 'true'
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          # #110 (Helms ruling 3): #105 put Swagger behind the admin role, so an anonymous 2xx here
+          # fails the deploy. Off (the prod default): both are 404. On (SWAGGER_ENABLED=true):
+          # /swagger is a 301 to the public UI shell (ADR-0024; no redirect is followed) and the
+          # document is 401. No answer (000) fails too: exposure could not be ruled out.
+          exposed=0
+          for path in /swagger /openapi/v1.json; do
+            code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL$path" || true)
+            echo "GET $path -> $code"
+            case "$code" in
+              2??) echo "::error::$path answers $code without a session; Swagger UI and the OpenAPI document must not be public (#94, #105)"; exposed=1 ;;
+              000|'') echo "::error::$path did not answer; could not rule out exposure"; exposed=1 ;;
+            esac
+          done
+          exit "$exposed"
+
       - name: Summary
         if: always()
         env:

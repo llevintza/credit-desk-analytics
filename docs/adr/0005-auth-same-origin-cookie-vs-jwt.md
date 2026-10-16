@@ -169,6 +169,28 @@ pr174 round 2  firstRowsPaintedMs median 186  all 199,186,187,179,169
 main  round 3  firstRowsPaintedMs median 208  all 229,203,208,308,184
 pr174 round 3  firstRowsPaintedMs median 176  all 181,172,176,173,176
 ```
+
+**P2 fund page cold first paint under the cap (#338).** The P1 run above was measured before phase 5. The fund page sends little at first paint: `ScopeService.load()` asks for the as-of date and the portfolios together (2 requests, now queued one behind the other), and then the page sends one `GET /api/funds/{id}/performance`. A new range or fund replaces that request through `switchMap`, so the page never has more than one in flight. Measured with the opt-in Playwright perf test `fund page first paint, cold API caches`. Each navigation first clears the API's caches (`POST /api/admin/cache/clear`), then times navigation start → first fund-grid row. That's 20 cold navigations per round, 3 rounds per setting, interleaved on one app image and one local database.
+
+| Local stack (Release image at e180f03, seed 42 at scale 1.0, as of 2026-10-06, one throwaway admin) | Cap 1, queue 8 (default) | Cap raised to 8 |
+|---|---|---|
+| Fund first row painted, cold API caches, p50 / p95 / max (60 navigations) | 90 / 238 / 345 ms | 101 / 259 / 635 ms |
+| Per-round medians | 158, 69, 91 ms | 94, 96, 137 ms |
+
+- No measurable cost: the two settings are within run-to-run noise, and both are far under the 1.0 s budget. The cold path is three small requests, and two of them (as-of and portfolios) are cache misses of a few ms each. `RATE_LIMIT_PER_USER_CONCURRENCY` stays at 1.
+
+```
+# local stack only: docker compose -p wrk338 with the e2e override (per-user rate limits raised), Postgres migrated and
+# seeded --scale 1.0 --as-of 2026-10-06, an admin created locally with Desk.UserAdmin; the "cap raised" rounds add
+# RATE_LIMIT_PER_USER_CONCURRENCY=8 to the app service and recreate only the app container
+cd e2e && PERF=1 BASE_URL=http://localhost:58338 DESK_EMAIL=… DESK_PASSWORD=… npx playwright test perf --grep 'fund page first paint'
+cap 1  round 1  fundFirstPaintColdMs p50 158  p95 293  max 345
+cap 8  round 1  fundFirstPaintColdMs p50  94  p95 165  max 635
+cap 8  round 2  fundFirstPaintColdMs p50  96  p95 288  max 347
+cap 1  round 2  fundFirstPaintColdMs p50  69  p95  82  max  88
+cap 8  round 3  fundFirstPaintColdMs p50 137  p95 237  max 259
+cap 1  round 3  fundFirstPaintColdMs p50  91  p95 158  max 193
+```
 - Audit rows are written after the rate limiter (a 429 is never written), and coalesced: one insert per `AUDIT_FLUSH_SECONDS` (default 30 s), or sooner at 500 rows.
 - Every failed login runs the same PBKDF2 work: exactly one verification (#118, R105-F2). The paths are an unknown email, a wrong, empty or missing password, a locked, disabled or expired account, an account with no stored password, and the attempt that triggers lockout (which used to hash twice). `DeskSignInManager.CheckPasswordSignInAsync` checks the account once, then verifies either the stored hash or `TimingGuard`'s decoy, never both. The decoy is a v3 hash with the configured iteration count, verified through the app's own `IPasswordHasher`, so it costs the same as a real check. `LoginTimingTests` counts the verifications per path.
   - **Correction (#230):** this bullet used to say that response time "doesn't reveal which emails exist or what state an account is in". Equal hashing alone doesn't give that. The DB work still differs: a wrong password on an active account runs `AccessFailedAsync` (about 3 more round trips) where an unknown email or a locked, disabled or expired account runs 1 SELECT, and the switch to fast answers after the 5th failure shows that lockout began.
