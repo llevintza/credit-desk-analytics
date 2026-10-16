@@ -131,3 +131,43 @@ test('the reporter fails the run on a leak in a step, an error or a file, and pa
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('fails closed when the run needs the password and DESK_PASSWORD is empty, unset or too short', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'secret-guard-'));
+  const config = { configFile: join(dir, 'playwright.config.ts') } as never;
+  const suite = (...projects: string[]) => ({ allTests: () => projects.map((name) => ({ parent: { project: () => ({ name }) } })) }) as never;
+  const printed: string[] = [];
+  const logged = console.error;
+  const saved = process.env.DESK_PASSWORD;
+  console.error = (message: string) => printed.push(message);
+  try {
+    for (const secrets of [[''], ['13-characters']]) {
+      const weak = new SecretGuard({ dirs: [dir], secrets });
+      weak.onBegin(config, suite('guard', 'setup', 'chromium'));
+      expect(await weak.onEnd()).toEqual({ status: 'failed' });
+    }
+    expect(printed.join('\n')).toContain('DESK_PASSWORD is empty or shorter than 14 characters');
+    expect(printed.join('\n')).not.toContain('13-characters');
+
+    delete process.env.DESK_PASSWORD;
+    const unset = new SecretGuard({ dirs: [dir] });
+    unset.onBegin(config, suite('setup'));
+    expect(await unset.onEnd()).toEqual({ status: 'failed' });
+
+    // The guard's own checks need no password: a run of only the guard project passes without one.
+    printed.length = 0;
+    const selfCheck = new SecretGuard({ dirs: [dir], secrets: [''] });
+    selfCheck.onBegin(config, suite('guard', 'guard'));
+    expect(await selfCheck.onEnd()).toBeUndefined();
+    expect(printed).toEqual([]);
+
+    const strong = new SecretGuard({ dirs: [dir], secrets: ['14-characters!'] });
+    strong.onBegin(config, suite('setup', 'chromium'));
+    expect(await strong.onEnd()).toBeUndefined();
+  } finally {
+    console.error = logged;
+    if (saved === undefined) delete process.env.DESK_PASSWORD;
+    else process.env.DESK_PASSWORD = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
