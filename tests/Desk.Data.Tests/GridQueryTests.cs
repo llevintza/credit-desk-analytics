@@ -142,8 +142,8 @@ public sealed class GridQueryTests
             "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 ESCAPE '\\' AND " + Haystack() + " ILIKE @p8 ESCAPE '\\' " +
             "ORDER BY \"market_value\" DESC, \"position_id\" DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;\n" +
             "SELECT COUNT(*)::int AS row_count, SUM(\"market_value\") AS \"market_value\", " +
-            "SUM(\"spread_bp\" * w.weight_f8) / NULLIF(SUM(w.weight_f8) FILTER (WHERE \"spread_bp\" IS NOT NULL), 0) AS \"spread_bp\" " +
-            "FROM core.position_snapshot CROSS JOIN LATERAL (SELECT abs(market_value)::float8 AS weight_f8 OFFSET 0) w WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 ESCAPE '\\' AND \"sector\" = ANY(@p5) " +
+            "SUM(\"spread_bp\" * weight_f8) / NULLIF(SUM(weight_f8) FILTER (WHERE \"spread_bp\" IS NOT NULL), 0) AS \"spread_bp\" " +
+            "FROM core.position_snapshot WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND \"deal_name\" ILIKE @p4 ESCAPE '\\' AND \"sector\" = ANY(@p5) " +
             "AND \"spread_bp\" > @p6 AND " + Haystack() + " ILIKE @p7 ESCAPE '\\' AND " + Haystack() + " ILIKE @p8 ESCAPE '\\';";
         Assert.Equal(expected, sql.Sql); // the WHERE text and its parameters are shared by both statements
 

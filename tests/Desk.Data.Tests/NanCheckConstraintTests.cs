@@ -117,7 +117,7 @@ public sealed class NanCheckConstraintTests(MigratedDatabase db) : IClassFixture
         var spread = ColumnCatalog.PositionSnapshot.Single(c => c.Name == "spread_bp");
         var mv = ColumnCatalog.PositionSnapshot.Single(c => c.Name == GridSqlBuilder.WeightColumn);
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {GridSqlBuilder.Aggregate(spread)}, {GridSqlBuilder.Aggregate(mv)} FROM {GridSqlBuilder.SummaryFrom} WHERE as_of_date = @d", conn);
+            $"SELECT {GridSqlBuilder.Aggregate(spread)}, {GridSqlBuilder.Aggregate(mv)} FROM {GridSqlBuilder.Table} WHERE as_of_date = @d", conn);
         cmd.Parameters.AddWithValue("d", day);
         await using var r = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
         Assert.True(await r.ReadAsync(TestContext.Current.CancellationToken));

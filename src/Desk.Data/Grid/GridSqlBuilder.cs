@@ -18,20 +18,22 @@ public static class GridSqlBuilder
     public const string WeightColumn = "market_value";
 
     /// <summary>
-    /// The weight as float8, computed once per row. Writing <c>market_value::float8</c> inside each weighted average
-    /// repeats the numeric→float8 cast per aggregate per row: for the "All" preset (174 aggregates) that was 2.4 s of
-    /// a 2.43 s summary. The <c>OFFSET 0</c> keeps Postgres from flattening the LATERAL back into the expressions;
-    /// with it the same summary takes 96 ms (ADR-0006).
-    /// </summary>
-    internal const string SummaryFrom = Table + " CROSS JOIN LATERAL (SELECT " + WeightExpression + " AS weight_f8 OFFSET 0) w";
-
-    /// <summary>
     /// Weighted averages weigh by the size of a position, <c>ABS(market_value)</c> (#131, README §8 and §6 P1). A signed weight is
     /// right only while every position is long: a short (or any negative value) would cancel longs in the denominator
     /// and could flip its sign, giving a meaningless average instead of <c>null</c>. Zero weights still count for
     /// nothing, and no weight at all gives <c>null</c>.
     /// </summary>
     internal const string WeightExpression = "abs(" + WeightColumn + ")::float8";
+
+    /// <summary>
+    /// The weight as float8, stored once per row: a generated column holding <see cref="WeightExpression"/>
+    /// (migration SnapshotWeightColumn). Writing <c>market_value::float8</c> inside each weighted average repeats the
+    /// numeric→float8 cast per aggregate per row: for the "All" preset (174 aggregates) that was 2.4 s of a 2.43 s
+    /// summary. A <c>CROSS JOIN LATERAL (… OFFSET 0)</c> cast it once per row (96 ms), but its nested loop also kept
+    /// every aggregate in the leader. Over the stored column the summary is a plain aggregate, which Postgres splits
+    /// across parallel workers (#241, ADR-0006). Never a catalog column, so no request can name it.
+    /// </summary>
+    internal const string WeightF8Column = "weight_f8";
 
     /// <param name="includeSummary">
     /// False when the caller already holds this filter's totals (they don't depend on paging or sort): the batch is
@@ -60,7 +62,7 @@ public static class GridSqlBuilder
         sql.Append('\n').Append("SELECT COUNT(*)::int AS row_count");
         foreach (var c in q.Columns.Where(c => c.Aggregation != Aggregation.None))
             sql.Append(", ").Append(Aggregate(c)).Append(" AS ").Append(Quote(c.Name));
-        sql.Append(" FROM ").Append(SummaryFrom).Append(" WHERE ").Append(where).Append(';');
+        sql.Append(" FROM ").Append(Table).Append(" WHERE ").Append(where).Append(';');
 
         return new GridSql(sql.ToString(), p);
     }
@@ -88,13 +90,13 @@ public static class GridSqlBuilder
     }
 
     /// <summary>
-    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightExpression"/>). Rows where the measure is NULL don't
+    /// SUM for additive measures; |market value|-weighted average otherwise (<see cref="WeightF8Column"/>). Rows where the measure is NULL don't
     /// count toward the weight, and zero or no weight gives NULL, never NaN (README §8).
     /// </summary>
     internal static string Aggregate(ColumnDef c) => c.Aggregation switch
     {
         Aggregation.Sum => $"SUM({Quote(c.Name)})",
-        _ => $"SUM({Quote(c.Name)} * w.weight_f8) / NULLIF(SUM(w.weight_f8) FILTER (WHERE {Quote(c.Name)} IS NOT NULL), 0)",
+        _ => $"SUM({Quote(c.Name)} * {WeightF8Column}) / NULLIF(SUM({WeightF8Column}) FILTER (WHERE {Quote(c.Name)} IS NOT NULL), 0)",
     };
 
     private static string Where(GridQuery q, IEnumerable<ColumnDef> catalog, List<KeyValuePair<string, object>> p)

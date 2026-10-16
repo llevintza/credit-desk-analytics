@@ -13,15 +13,18 @@ public sealed class WeightedAverageTests(PostgresApiFactory api)
 {
     private static readonly ColumnDef Spread = ColumnCatalog.PositionSnapshot.Single(c => c.Name == "spread_bp");
 
-    /// <summary>The builder's aggregate and weight over (spread_bp, market_value) rows given as a VALUES list.</summary>
+    /// <summary>
+    /// The builder's aggregate over (spread_bp, market_value) rows given as a VALUES list, with the weight computed by the
+    /// same expression as the snapshot's stored weight column (MigrationTests pins the two together).
+    /// </summary>
     private async Task<double?> WeightedAsync(string rows)
     {
         Assert.Equal(Aggregation.WeightedByMarketValue, Spread.Aggregation);
         await using var conn = new NpgsqlConnection(api.ConnectionString);
         await conn.OpenAsync(TestContext.Current.CancellationToken);
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {GridSqlBuilder.Aggregate(Spread)} FROM (VALUES {rows}) AS t(spread_bp, market_value) " +
-            $"CROSS JOIN LATERAL (SELECT {GridSqlBuilder.WeightExpression} AS weight_f8 OFFSET 0) w", conn);
+            $"SELECT {GridSqlBuilder.Aggregate(Spread)} FROM (SELECT spread_bp, {GridSqlBuilder.WeightExpression} AS {GridSqlBuilder.WeightF8Column} " +
+            $"FROM (VALUES {rows}) AS v(spread_bp, market_value)) AS t", conn);
         return await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken) is double d ? d : null;
     }
 
