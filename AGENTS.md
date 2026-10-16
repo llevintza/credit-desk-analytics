@@ -23,9 +23,9 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
 6. **Every PR also gets an automated Claude review** (README §14.5). Claude's PR review is ADVISORY only. Merges to main and kickoff of the next §15 phase happen only through the review gate (Tech Coordinator plus Code Reviewer).
 
    The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
-   1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+   1. Every suite (.NET xUnit: Desk.Api.Tests, Desk.Data.Tests, Desk.Seeder.Tests; web Vitest; the gate-script `node --test` suites in the `gate-tests` job; compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
    2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-   3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+   3. Any workflow, action, Dockerfile, render.yaml, `.github/dependabot.yml`, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
    Tech Coordinator merges and starts the next phase.
 
@@ -97,9 +97,9 @@ These hold in every harness. The deny lists and the guard hook (planned; arrives
 
 - CI is green: build, tests, lint, e2e, budgets (each once it exists).
 - The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
-  1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+  1. Every suite (.NET xUnit: Desk.Api.Tests, Desk.Data.Tests, Desk.Seeder.Tests; web Vitest; the gate-script `node --test` suites in the `gate-tests` job; compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
   2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; ≥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-  3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+  3. Any workflow, action, Dockerfile, render.yaml, `.github/dependabot.yml`, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 - Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped because the base-sourced `changes` classifier reported its flag as exactly `false` was not affected by the diff, and is not "skipped" under clause 1. Any other skip (a failed or cancelled dependency, a missing classifier output, a disabled step) is. Code Reviewer checks the `changes` job summary. Clause 1 still applies in full to every job that runs.
 - Acceptance criteria for the touched pages are checked off in the PR body.
 - ADRs are written for the choices made, with numbers.
