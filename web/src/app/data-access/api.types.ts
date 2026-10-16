@@ -7,7 +7,7 @@ export interface Me { email: string; roles: string[]; expiresAt: string; }
 export interface AsOf { latest: string; dates: string[]; }
 
 export type ColumnKind = 'Key' | 'Text' | 'Date' | 'Money' | 'Price' | 'Bp' | 'Pct' | 'Ratio' | 'Count' | 'Flag';
-export type Aggregation = 'None' | 'Sum' | 'WeightedByMarketValue';
+export type Aggregation = 'None' | 'Sum' | 'WeightedByMarketValue' | 'WeightedByCurrentFace';
 
 export interface CatalogColumn { name: string; group: string; kind: ColumnKind; aggregation: Aggregation; header: string; }
 

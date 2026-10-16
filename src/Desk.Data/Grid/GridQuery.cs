@@ -19,26 +19,30 @@ public sealed record GridQuery(
 {
     /// <summary>
     /// What the totals depend on: the filter and the aggregated columns, not paging or sort. Every block of one
-    /// filtered view shares it, so the summary is computed once per view.
+    /// filtered view shares it, so the summary is computed once per view. Each column carries its aggregation: a
+    /// catalog change (|MV|- to face-weighted, #459) changes the key, so a cached total is never served under a new label.
     /// </summary>
     public string SummaryKey => Key(new
     {
         AsOf, PortfolioIds,
-        Aggregated = Columns.Where(c => c.Aggregation != Catalog.Aggregation.None).Select(c => c.Name).Order(StringComparer.Ordinal),
+        Aggregated = Columns.Where(c => c.Aggregation != Catalog.Aggregation.None).Select(ColumnKey).Order(StringComparer.Ordinal),
         Filters = Filters.Select(KeyOf), QuickTokens,
     });
 
     /// <summary>
     /// Everything that changes the result, as JSON: user text is escaped by the serializer, so two different
-    /// queries can never produce the same key (a shared cache must not be poisonable through filter values).
+    /// queries can never produce the same key (a shared cache must not be poisonable through filter values). Columns
+    /// carry their aggregation, as in <see cref="SummaryKey"/>, so the block cache and ETag follow a catalog change too.
     /// </summary>
     public string CanonicalKey => Key(new
     {
         AsOf, PortfolioIds, Offset, Limit,
-        Columns = Columns.Select(c => c.Name),
+        Columns = Columns.Select(ColumnKey),
         Sort = Sort.Select(s => new { s.Column.Name, s.Descending }),
         Filters = Filters.Select(KeyOf), QuickTokens,
     });
+
+    private static string ColumnKey(ColumnDef c) => $"{c.Name}:{c.Aggregation}";
 
     private static object KeyOf(GridFilter f) => new
     {
