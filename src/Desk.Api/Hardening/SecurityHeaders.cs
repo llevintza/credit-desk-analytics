@@ -22,6 +22,9 @@ public sealed class SecurityHeaders(RequestDelegate next)
     public const string PermissionsPolicy =
         "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
+    /// <summary>HSTS lifetime (#66). No includeSubDomains or preload: the host is a subdomain of a shared platform domain.</summary>
+    public static readonly TimeSpan HstsMaxAge = TimeSpan.FromDays(365);
+
     public Task InvokeAsync(HttpContext http)
     {
         var h = http.Response.Headers;
