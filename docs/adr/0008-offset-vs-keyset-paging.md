@@ -133,4 +133,48 @@ Full plans and the per-plan summary table: [`perf/evidence/explain-sort-plans-sc
 **Decision**
 - **No index change.** Targeted `(as_of_date, portfolio_id, X)` indexes would save under 2 ms on any shape measured here, and each costs about the size of a sort index again within the 350 MB budget.
 - **No `work_mem` change**, for the reason above.
-- **`random_page_cost` 1.1 for the grid role is a candidate, not a decision.** It wins 4× on indexed deep blocks and loses on unindexed ones, and it needs Neon's real setting and cold-read behaviour first. Proposed in #326; nothing is implemented here.
+- **`random_page_cost` 1.1 for the grid role is a candidate, not a decision.** It wins 4× on indexed deep blocks and loses on unindexed ones, and it needs Neon's real setting and cold-read behaviour first. Proposed in #326; nothing is implemented here. (Decided 2026-10-16: see the #326 addendum below.)
+
+## Addendum (2026-10-16, #326): `random_page_cost` 1.1 for the app role
+
+**Decision (Helms, 2026-10-16, #418 §A).** Set `random_page_cost = 1.1` for the role the API connects as on Neon, based on the #188 evidence above, and confirm it with a live EXPLAIN on Neon. This replaces the "candidate, not a decision" line in the #188 decision.
+
+**How it is applied: a runbook step, not a migration.** Roles aren't migration-managed. Neon creates `neondb_owner`, and both the app (`DATABASE_URL`) and deploy's migrate and seed steps (`NEON_DATABASE_URL`) connect as it (`docs/deployment-setup.md`). A migration could only target `CURRENT_USER`, which binds the setting to whichever role happens to run migrations, and it would also change every local, CI and Testcontainers database. So Leo runs one statement by hand, once per Neon project or branch (README §13.1 has the full steps, including the rollback):
+
+```sql
+ALTER ROLE neondb_owner IN DATABASE neondb SET random_page_cost = 1.1;
+```
+
+- It's scoped to that role in that database, never server-wide or `ALTER DATABASE` for every role. It's idempotent and changes no data.
+- An ordinary (non-superuser) role may set `random_page_cost` on itself, because the parameter is user-settable. This was checked locally with a `NOSUPERUSER NOCREATEROLE` probe role. A new session then reports `random_page_cost | 1.1 | database user` in `pg_settings`.
+- It takes effect for **new** connections, so the Render service is restarted afterwards.
+
+**Local before/after.** `perf/explain-random-page-cost.sql` runs the page query `GridSqlBuilder.Build` emits (Risk preset, 200 rows, all 12 books, latest date) at OFFSET 0, 2,000, 10,000 and the last block (19,801). It covers two indexed sorts and two sort columns that have no sort index (`yield`, `oas_bp`), each with `random_page_cost` 4 and 1.1 set per case. Each plan has one warm-up run, then 5 timed runs (median). The script is read-only: one `DO` block, no DDL, no temp objects. Without `-v target=neon` it refuses a non-local server.
+
+Setup: compose Postgres 17.11 (own project, `shared_buffers` 128 MB, `work_mem` 4 MB, every other planner setting at its default), seeded at scale 1.0 (seed 42, `--as-of 2026-10-06`), warm cache.
+
+```
+docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-random-page-cost.sql
+```
+
+Full plans: [`perf/evidence/explain-random-page-cost-scale1.txt`](../../perf/evidence/explain-random-page-cost-scale1.txt).
+
+**The timings are noisy.** The machine ran at a load average of 66–76 (other worktrees' stacks and test runs). Medians for one case moved 2–10× between the 4 passes, so the ms column is a range over all 4 passes and shows direction only. The plan, buffers and temp columns came out identical in every pass (temp on the parallel last block varies with the per-worker split). Read the time ranges against the quiet-machine numbers in the #188 table above.
+
+| Block | Sort (index?) | rpc 4: plan | buffers / temp | ms | rpc 1.1: plan | buffers / temp | ms |
+|---|---|---|---:|---:|---|---:|---:|
+| OFFSET 0 | market_value DESC, spread_bp ASC (yes) | sort index | 204 / 0 | 0.1–0.6 | sort index (same) | 204 / 0 | 0.1–0.9 |
+| OFFSET 2,000 | the same two (yes) | sort index | 2,217–2,234 / 0 | 2.9–10.2 | sort index (same) | 2,217–2,234 / 0 | 2.3–10.8 |
+| OFFSET 10,000 | the same two (yes) | seq scan + external merge | 8,064 / 791 | 33–84 | **sort index** | 10,272–10,347 / **0** | **8–43** |
+| Last block | the same two (yes) | parallel seq scan + external merge | 8,156–8,160 / 333–623 | 24–352 | **sort index** | 20,139–20,276 / **0** | **29–67** |
+| OFFSET 0–2,000 | yield DESC, oas_bp ASC (no) | seq scan + top-N | 8,064 / 0 | 22–109 | `ix_snapshot_portfolio` + top-N | 4,081 / 0 | 19–72 |
+| OFFSET 10,000 | the same two (no) | seq scan + external merge | 8,064 / 791 | 30–105 | `ix_snapshot_portfolio` + external merge | 4,081 / 791 | 28–104 |
+| Last block | the same two (no) | parallel seq scan + external merge | 8,156–8,160 / 305–610 | 22–337 | `ix_snapshot_portfolio` + external merge | 4,081 / 791 | 39–124 |
+
+**Findings**
+- **Indexed sorts:** 1.1 changes the plan only where #188 said it would. At OFFSET 0 and 2,000 the plan and buffers are identical. At OFFSET ≥ 10,000 the planner keeps the sort index: the on-disk sort is gone (0 temp blocks against 791), and the block is faster in every pass, consistent with #188's 4× on a quiet machine.
+- **Unindexed sorts:** 1.1 swaps the seq scan for `ix_snapshot_portfolio`, which reads only the latest date's heap pages (4,081 against 8,064 buffers). It still sorts every row, so it spills as before. Under this load the times overlap at every depth. #188 measured this switch as 21–31 ms against 16–21 ms on a quiet machine, a small loss. Every case is inside the P1 150 ms p95, and grid blocks are cached until the next batch (ADR-0009).
+- **The setting is role-wide.** Insights, aggregates and the seeder's queries run as the same role. They are not re-measured here; Leo's live EXPLAIN and the deploy smoke test are the check. The rollback is one statement.
+- **CI and compose stay on the default 4.** The `budgets` job measures the default planner, so its deep-block numbers are conservative relative to production.
+
+**Still open (Leo, never an agent):** on Neon, record `SHOW random_page_cost` (the script's header), then run the script before and after the `ALTER ROLE` (README §13.1 steps 1–3) and paste the headers and summaries on #326. That closes #326's first acceptance criterion, which covers Neon's real value and cold-read behaviour.
