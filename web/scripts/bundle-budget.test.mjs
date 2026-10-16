@@ -301,12 +301,15 @@ for (const [label, tag, message] of [
   });
 }
 
-// #266 N1: `<!--` is only a comment outside <script>/<style> bodies and quoted attributes. Stripping it there would
+// #266 N1, #337: `<!--` is only a comment outside <script>/<style>/<title>/<textarea> bodies and quoted attributes. Stripping it there would
 // swallow every tag up to the next `-->`.
 for (const [label, decoy] of [
   ['a script body', '<script>var s="<!--";</script>'],
   ['a style body', '<style>p::before{content:"<!--"}</style>'],
   ['a quoted attribute', '<div title="<!--"></div>'],
+  // #337: <title> and <textarea> are raw text too, so a `<!--` inside either is text.
+  ['a title', '<title>a <!-- b</title>'],
+  ['a textarea', '<textarea><!--</textarea>'],
 ]) {
   test(`counts scripts after a <!-- in ${label}`, () => {
     const r = run({

@@ -76,6 +76,10 @@ public static class GridSqlBuilder
         };
         var where = Where(q, catalog, p);
         var sql = new StringBuilder();
+        // First the matching rows, counted only up to one past the cap (no sort, so it stops there): the caller knows
+        // whether the export is truncated before it writes a byte (#277). Then the rows themselves.
+        sql.Append("SELECT count(*) FROM (SELECT 1 FROM ").Append(Table).Append(" WHERE ").Append(where)
+           .Append(" LIMIT @limit + 1) AS capped; ");
         sql.Append("SELECT ").AppendJoin(", ", q.Columns.Select(c => Quote(c.Name)))
            .Append(" FROM ").Append(Table).Append(" WHERE ").Append(where)
            .Append(" ORDER BY ").AppendJoin(", ", q.Sort.Select(s => $"{Quote(s.Column.Name)} {(s.Descending ? "DESC" : "ASC")}"))

@@ -1,6 +1,6 @@
 # docs/agents: index and U-item results
 
-> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/README.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]** and listed in the drafts README. These pages load on demand via links only (no `@` imports, N7). They are steering paths, covered by `governance-paths (base)` and CODEOWNERS.
+> Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/README.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]**. These pages load on demand via links only (no `@` imports, N7). They are steering paths, covered by `governance-paths (base)` and CODEOWNERS.
 
 | Page | Contents |
 |---|---|

@@ -12,4 +12,12 @@ public sealed class DeskUser : IdentityUser<Guid>
     public bool IsDisabled { get; set; }
 
     public bool IsActiveAt(DateTimeOffset now) => !IsDisabled && now < ExpiresAt;
+
+    /// <summary>
+    /// Identity's lockout rule, the one the API applies (<c>DeskUserManager.IsLockedOutAsync</c>, #294): locked while
+    /// lockout is enabled and <paramref name="now"/> is at or before the lockout end. <c>UserAdmin list</c> shows the
+    /// same (#313).
+    /// </summary>
+    public static bool IsLockedOutAt(bool lockoutEnabled, DateTimeOffset? lockoutEnd, DateTimeOffset now) =>
+        lockoutEnabled && lockoutEnd >= now;
 }
