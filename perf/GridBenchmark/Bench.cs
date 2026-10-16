@@ -20,7 +20,9 @@ namespace GridBenchmark;
 
 public static class Bench
 {
-    private static readonly DateOnly AsOf = new(2026, 10, 6);
+    // The latest as-of in the database, the one the API serves by default (a fixed date measured an empty book
+    // whenever the seed's as-of differed).
+    private static DateOnly AsOf;
 
     public static async Task Main(string[] args)
     {
@@ -36,7 +38,10 @@ public static class Bench
         var normalizer = new GridQueryNormalizer(catalog);
         int[] portfolios;
         await using (var conn = new NpgsqlConnection(cs))
+        {
             portfolios = (await conn.QueryAsync<int>("SELECT portfolio_id FROM core.portfolio")).ToArray();
+            AsOf = DateOnly.FromDateTime(await conn.ExecuteScalarAsync<DateTime>("SELECT max(as_of_date) FROM core.position_snapshot"));
+        }
 
         Console.WriteLine($"iterations={iterations}  as_of={AsOf:yyyy-MM-dd}  .NET {Environment.Version}  {Environment.ProcessorCount} cores");
         foreach (var (preset, columns) in new[] { ("Risk", BuiltInPresets.Risk), ("All", BuiltInPresets.All) })
@@ -56,6 +61,8 @@ public static class Bench
             Console.WriteLine("| Batch | p50 ms | p95 ms | alloc KB/op |");
             Console.WriteLine("|---|---:|---:|---:|");
             await Measure("page + summary, one round trip (first block of a view)", Math.Max(20, iterations / 4), () => repo.ReadBlockAsync(query, catalog, CancellationToken.None));
+            await Measure("page + summary on two connections at once (#241, with a spare permit)", Math.Max(20, iterations / 4),
+                () => repo.ReadBlockAsync(query, catalog, CancellationToken.None, concurrentSummary: true));
 
             var block = await repo.ReadBlockAsync(query, catalog, CancellationToken.None);
             var generatedAt = DateTimeOffset.UtcNow;
