@@ -149,7 +149,7 @@ ALTER ROLE neondb_owner IN DATABASE neondb SET random_page_cost = 1.1;
 - An ordinary (non-superuser) role may set `random_page_cost` on itself, because the parameter is user-settable. This was checked locally with a `NOSUPERUSER NOCREATEROLE` probe role. A new session then reports `random_page_cost | 1.1 | database user` in `pg_settings`.
 - It takes effect for **new** connections, so the Render service is restarted afterwards.
 
-**Local before/after.** `perf/explain-random-page-cost.sql` runs the page query `GridSqlBuilder.Build` emits (Risk preset, 200 rows, all 12 books, latest date) at OFFSET 0, 2,000, 10,000 and the last block (19,801). It covers two indexed sorts and two sort columns that have no sort index (`yield`, `oas_bp`), each with `random_page_cost` 4 and 1.1 set per case. Each plan has one warm-up run, then 5 timed runs (median). The script is read-only: one `DO` block, no DDL, no temp objects. Without `-v target=neon` it refuses a non-local server.
+**Local before/after.** `perf/explain-random-page-cost.sql` runs the page query `GridSqlBuilder.Build` emits (Risk preset, 200 rows, all 12 books, latest date) at OFFSET 0, 2,000, 10,000 and the last block (19,801). It covers two indexed sorts and two sort columns that have no sort index (`yield`, `oas_bp`), each with `random_page_cost` 4 and 1.1 set per case. Since 2026-10-16 (#326 follow-up) it also runs two P3 insights grids, the `InsightCatalog` SQL for `top_issuers_mv` (a core join to `deal` and `issuer`) and `spread_change_1m` (a `market.spread_index` self-join), under both values. Each plan has one warm-up run, then 5 timed runs (median). The script is read-only in both modes (`BEGIN READ ONLY` … `ROLLBACK`): one `DO` block, no DDL, no temp objects. Without `-v target=neon` it refuses a non-local server.
 
 Setup: compose Postgres 17.11 (own project, `shared_buffers` 128 MB, `work_mem` 4 MB, every other planner setting at its default), seeded at scale 1.0 (seed 42, `--as-of 2026-10-06`), warm cache.
 
@@ -157,7 +157,7 @@ Setup: compose Postgres 17.11 (own project, `shared_buffers` 128 MB, `work_mem` 
 docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-random-page-cost.sql
 ```
 
-Full plans: [`perf/evidence/explain-random-page-cost-scale1.txt`](../../perf/evidence/explain-random-page-cost-scale1.txt).
+Full plans: [`perf/evidence/explain-random-page-cost-scale1.txt`](../../perf/evidence/explain-random-page-cost-scale1.txt) (the #326 follow-up run, load average 16, with the insights cases; the table below is from the four earlier passes).
 
 **The timings are noisy.** The machine ran at a load average of 66–76 (other worktrees' stacks and test runs). Medians for one case moved 2–10× between the 4 passes, so the ms column is a range over all 4 passes and shows direction only. The plan, buffers and temp columns came out identical in every pass (temp on the parallel last block varies with the per-worker split). Read the time ranges against the quiet-machine numbers in the #188 table above.
 
@@ -174,7 +174,14 @@ Full plans: [`perf/evidence/explain-random-page-cost-scale1.txt`](../../perf/evi
 **Findings**
 - **Indexed sorts:** 1.1 changes the plan only where #188 said it would. At OFFSET 0 and 2,000 the plan and buffers are identical. At OFFSET ≥ 10,000 the planner keeps the sort index: the on-disk sort is gone (0 temp blocks against 791), and the block is faster in every pass, consistent with #188's 4× on a quiet machine.
 - **Unindexed sorts:** 1.1 swaps the seq scan for `ix_snapshot_portfolio`, which reads only the latest date's heap pages (4,081 against 8,064 buffers). It still sorts every row, so it spills as before. Under this load the times overlap at every depth. #188 measured this switch as 21–31 ms against 16–21 ms on a quiet machine, a small loss. Every case is inside the P1 150 ms p95, and grid blocks are cached until the next batch (ADR-0009).
-- **The setting is role-wide.** Insights, aggregates and the seeder's queries run as the same role. They are not re-measured here; Leo's live EXPLAIN and the deploy smoke test are the check. The rollback is one statement.
+- **The setting is role-wide.** Insights, aggregates and the seeder's queries run as the same role. The #326 follow-up run adds two insights grids (load average 16; the grid rows in that run reproduce the plans, buffers and temp above, with times at or below the low end of the ranges):
+
+  | Insights grid | rpc 4: plan | buffers / temp | ms | rpc 1.1: plan | buffers / temp | ms |
+  |---|---|---:|---:|---|---:|---:|
+  | `top_issuers_mv` | seq scan on `position_snapshot`, hash joins, top-N | 8,097 / 0 | 9.5 | `ix_snapshot_portfolio`, the same joins | 4,114 / 0 | 8.3 |
+  | `spread_change_1m` | seq scan on `position_snapshot` for the held cells, bitmap heap scan for the 1M date, `spread_index_pkey` loops | 8,356 / 0 | 9.2 | `ix_snapshot_portfolio` for the held cells, index-only scan for the 1M date, the same loops | 4,818 / 0 | 9.1 |
+
+  Both read the latest date through `ix_snapshot_portfolio` instead of a seq scan (about half the buffers), with no spill and no slower time. The other insights grids, the aggregates and the seeder are not measured; Leo's live EXPLAIN (it now includes these two) and the deploy smoke test are the check. The rollback is one statement.
 - **CI and compose stay on the default 4.** The `budgets` job measures the default planner, so its deep-block numbers are conservative relative to production.
 
 **Still open (Leo, never an agent):** on Neon, record `SHOW random_page_cost` (the script's header), then run the script before and after the `ALTER ROLE` (README §13.1 steps 1–3) and paste the headers and summaries on #326. That closes #326's first acceptance criterion, which covers Neon's real value and cold-read behaviour.
