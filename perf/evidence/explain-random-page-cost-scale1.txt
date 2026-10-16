@@ -1,4 +1,4 @@
-12:06  up 15 days,  3:37, 67 users, load averages: 66.75 70.71 43.45
+13:43  up 15 days,  5:14, 54 users, load averages: 15.77 10.18 7.59
                                             version                                             
 ------------------------------------------------------------------------------------------------
  PostgreSQL 17.11 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
@@ -19,420 +19,621 @@
 
 NOTICE:  as of 2026-10-06: 20001 rows, 12 books
 NOTICE:  === OFFSET 0 | market_value DESC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=0.32..293.80 rows=200 width=294) (actual time=0.021..0.650 rows=200 loops=1)
+NOTICE:  Limit  (cost=0.32..294.07 rows=200 width=294) (actual time=0.005..0.118 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=204
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29263.09 rows=19942 width=294) (actual time=0.021..0.639 rows=200 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29258.09 rows=19920 width=294) (actual time=0.005..0.110 rows=200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=204
-NOTICE:  Planning Time: 0.064 ms
-NOTICE:  Execution Time: 0.680 ms
+NOTICE:  Planning Time: 0.035 ms
+NOTICE:  Execution Time: 0.131 ms
 NOTICE:  === OFFSET 0 | market_value DESC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=0.32..88.40 rows=200 width=294) (actual time=0.004..0.304 rows=200 loops=1)
+NOTICE:  Limit  (cost=0.32..88.47 rows=200 width=294) (actual time=0.004..0.112 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=204
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8782.72 rows=19942 width=294) (actual time=0.003..0.271 rows=200 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8780.45 rows=19920 width=294) (actual time=0.004..0.104 rows=200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=204
-NOTICE:  Planning Time: 0.022 ms
-NOTICE:  Execution Time: 0.348 ms
+NOTICE:  Planning Time: 0.023 ms
+NOTICE:  Execution Time: 0.125 ms
 NOTICE:  === OFFSET 0 | spread_bp ASC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=0.32..293.92 rows=200 width=294) (actual time=0.015..0.284 rows=200 loops=1)
+NOTICE:  Limit  (cost=0.32..294.19 rows=200 width=294) (actual time=0.004..0.116 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=204
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..29275.09 rows=19942 width=294) (actual time=0.015..0.273 rows=200 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..29270.09 rows=19920 width=294) (actual time=0.004..0.108 rows=200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=204
-NOTICE:  Planning Time: 0.084 ms
-NOTICE:  Execution Time: 0.315 ms
+NOTICE:  Planning Time: 0.023 ms
+NOTICE:  Execution Time: 0.128 ms
 NOTICE:  === OFFSET 0 | spread_bp ASC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=0.32..88.43 rows=200 width=294) (actual time=0.004..0.107 rows=200 loops=1)
+NOTICE:  Limit  (cost=0.32..88.51 rows=200 width=294) (actual time=0.004..0.106 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=204
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8786.02 rows=19942 width=294) (actual time=0.003..0.099 rows=200 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8783.75 rows=19920 width=294) (actual time=0.004..0.098 rows=200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=204
-NOTICE:  Planning Time: 0.033 ms
-NOTICE:  Execution Time: 0.124 ms
+NOTICE:  Planning Time: 0.030 ms
+NOTICE:  Execution Time: 0.117 ms
 NOTICE:  === OFFSET 0 | yield DESC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=9625.94..9626.44 rows=200 width=294) (actual time=70.947..70.981 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064
-NOTICE:    ->  Sort  (cost=9625.94..9675.80 rows=19942 width=294) (actual time=70.945..70.957 rows=200 loops=1)
+NOTICE:  Limit  (cost=9624.99..9625.49 rows=200 width=294) (actual time=22.135..22.150 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=644 read=7420
+NOTICE:    ->  Sort  (cost=9624.99..9674.79 rows=19920 width=294) (actual time=22.134..22.141 rows=200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: top-N heapsort  Memory: 198kB
-NOTICE:          Buffers: shared hit=8064
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.011..62.137 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=644 read=7420
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.013..17.329 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.526 ms
-NOTICE:  Execution Time: 71.044 ms
+NOTICE:                Buffers: shared hit=644 read=7420
+NOTICE:  Planning Time: 0.068 ms
+NOTICE:  Execution Time: 22.208 ms
 NOTICE:  === OFFSET 0 | yield DESC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=9526.42..9526.92 rows=200 width=294) (actual time=37.499..37.525 rows=200 loops=1)
+NOTICE:  Limit  (cost=9524.34..9524.84 rows=200 width=294) (actual time=15.680..15.693 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081
-NOTICE:    ->  Sort  (cost=9526.42..9576.28 rows=19942 width=294) (actual time=37.498..37.510 rows=200 loops=1)
+NOTICE:    ->  Sort  (cost=9524.34..9574.14 rows=19920 width=294) (actual time=15.679..15.684 rows=200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: top-N heapsort  Memory: 198kB
 NOTICE:          Buffers: shared hit=4081
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.021..24.680 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.013..10.762 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.136 ms
-NOTICE:  Execution Time: 37.658 ms
+NOTICE:  Planning Time: 0.053 ms
+NOTICE:  Execution Time: 15.748 ms
 NOTICE:  === OFFSET 0 | oas_bp ASC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=9625.94..9626.44 rows=200 width=294) (actual time=32.531..32.556 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064
-NOTICE:    ->  Sort  (cost=9625.94..9675.80 rows=19942 width=294) (actual time=32.529..32.540 rows=200 loops=1)
+NOTICE:  Limit  (cost=9624.99..9625.49 rows=200 width=294) (actual time=17.606..17.619 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=4448 read=3616 written=13
+NOTICE:    ->  Sort  (cost=9624.99..9674.79 rows=19920 width=294) (actual time=17.605..17.610 rows=200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: top-N heapsort  Memory: 193kB
-NOTICE:          Buffers: shared hit=8064
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.018..24.901 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=4448 read=3616 written=13
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.006..13.045 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.186 ms
-NOTICE:  Execution Time: 32.646 ms
+NOTICE:                Buffers: shared hit=4448 read=3616 written=13
+NOTICE:  Planning Time: 0.065 ms
+NOTICE:  Execution Time: 17.660 ms
 NOTICE:  === OFFSET 0 | oas_bp ASC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=9526.42..9526.92 rows=200 width=294) (actual time=77.437..77.501 rows=200 loops=1)
+NOTICE:  Limit  (cost=9524.34..9524.84 rows=200 width=294) (actual time=13.685..13.697 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081
-NOTICE:    ->  Sort  (cost=9526.42..9576.28 rows=19942 width=294) (actual time=77.435..77.490 rows=200 loops=1)
+NOTICE:    ->  Sort  (cost=9524.34..9574.14 rows=19920 width=294) (actual time=13.684..13.689 rows=200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: top-N heapsort  Memory: 193kB
 NOTICE:          Buffers: shared hit=4081
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.016..56.831 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.011..9.096 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 1.668 ms
-NOTICE:  Execution Time: 78.091 ms
+NOTICE:  Planning Time: 0.063 ms
+NOTICE:  Execution Time: 13.746 ms
 NOTICE:  === OFFSET 2000 | market_value DESC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=2935.11..3228.59 rows=200 width=294) (actual time=4.080..4.543 rows=200 loops=1)
+NOTICE:  Limit  (cost=2937.85..3231.60 rows=200 width=294) (actual time=1.119..1.231 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=2234
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29263.09 rows=19942 width=294) (actual time=0.011..4.456 rows=2200 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..29258.09 rows=19920 width=294) (actual time=0.005..1.185 rows=2200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=2234
-NOTICE:  Planning Time: 0.082 ms
-NOTICE:  Execution Time: 4.575 ms
+NOTICE:  Planning Time: 0.032 ms
+NOTICE:  Execution Time: 1.244 ms
 NOTICE:  === OFFSET 2000 | market_value DESC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=881.11..969.19 rows=200 width=294) (actual time=4.062..4.383 rows=200 loops=1)
+NOTICE:  Limit  (cost=881.86..970.01 rows=200 width=294) (actual time=1.085..1.195 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=2234
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8782.72 rows=19942 width=294) (actual time=0.018..4.282 rows=2200 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8780.45 rows=19920 width=294) (actual time=0.004..1.148 rows=2200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=2234
-NOTICE:  Planning Time: 1.132 ms
-NOTICE:  Execution Time: 4.444 ms
+NOTICE:  Planning Time: 0.025 ms
+NOTICE:  Execution Time: 1.207 ms
 NOTICE:  === OFFSET 2000 | spread_bp ASC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=2936.31..3229.91 rows=200 width=294) (actual time=3.093..3.432 rows=200 loops=1)
+NOTICE:  Limit  (cost=2939.05..3232.92 rows=200 width=294) (actual time=1.156..1.272 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=2217
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..29275.09 rows=19942 width=294) (actual time=0.012..3.362 rows=2200 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..29270.09 rows=19920 width=294) (actual time=0.005..1.224 rows=2200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=2217
-NOTICE:  Planning Time: 0.076 ms
-NOTICE:  Execution Time: 3.487 ms
+NOTICE:  Planning Time: 0.026 ms
+NOTICE:  Execution Time: 1.284 ms
 NOTICE:  === OFFSET 2000 | spread_bp ASC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=881.45..969.56 rows=200 width=294) (actual time=2.402..2.710 rows=200 loops=1)
+NOTICE:  Limit  (cost=882.19..970.38 rows=200 width=294) (actual time=1.186..1.299 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=2217
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8786.02 rows=19942 width=294) (actual time=0.010..2.653 rows=2200 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8783.75 rows=19920 width=294) (actual time=0.004..1.252 rows=2200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=2217
-NOTICE:  Planning Time: 0.079 ms
-NOTICE:  Execution Time: 2.839 ms
+NOTICE:  Planning Time: 0.027 ms
+NOTICE:  Execution Time: 1.311 ms
 NOTICE:  === OFFSET 2000 | yield DESC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=9975.88..9976.38 rows=200 width=294) (actual time=38.888..38.920 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064
-NOTICE:    ->  Sort  (cost=9970.88..10020.74 rows=19942 width=294) (actual time=38.666..38.833 rows=2200 loops=1)
+NOTICE:  Limit  (cost=9974.55..9975.05 rows=200 width=294) (actual time=17.758..17.771 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=4640 read=3424
+NOTICE:    ->  Sort  (cost=9969.55..10019.35 rows=19920 width=294) (actual time=17.670..17.722 rows=2200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: top-N heapsort  Memory: 2061kB
-NOTICE:          Buffers: shared hit=8064
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.013..26.375 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=4640 read=3424
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.004..12.126 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.116 ms
-NOTICE:  Execution Time: 39.228 ms
+NOTICE:                Buffers: shared hit=4640 read=3424
+NOTICE:  Planning Time: 0.048 ms
+NOTICE:  Execution Time: 17.868 ms
 NOTICE:  === OFFSET 2000 | yield DESC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=9876.36..9876.86 rows=200 width=294) (actual time=26.701..26.733 rows=200 loops=1)
+NOTICE:  Limit  (cost=9873.90..9874.40 rows=200 width=294) (actual time=14.529..14.542 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081
-NOTICE:    ->  Sort  (cost=9871.36..9921.22 rows=19942 width=294) (actual time=26.491..26.645 rows=2200 loops=1)
+NOTICE:    ->  Sort  (cost=9868.90..9918.70 rows=19920 width=294) (actual time=14.440..14.505 rows=2200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: top-N heapsort  Memory: 2061kB
 NOTICE:          Buffers: shared hit=4081
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.012..16.557 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.010..8.988 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.071 ms
-NOTICE:  Execution Time: 26.876 ms
+NOTICE:  Planning Time: 0.057 ms
+NOTICE:  Execution Time: 14.653 ms
 NOTICE:  === OFFSET 2000 | oas_bp ASC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=9975.88..9976.38 rows=200 width=294) (actual time=40.091..40.125 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064
-NOTICE:    ->  Sort  (cost=9970.88..10020.74 rows=19942 width=294) (actual time=39.893..40.037 rows=2200 loops=1)
+NOTICE:  Limit  (cost=9974.55..9975.05 rows=200 width=294) (actual time=18.006..18.019 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=4832 read=3232
+NOTICE:    ->  Sort  (cost=9969.55..10019.35 rows=19920 width=294) (actual time=17.923..17.974 rows=2200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: top-N heapsort  Memory: 2078kB
-NOTICE:          Buffers: shared hit=8064
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.269..25.233 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=4832 read=3232
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.005..12.343 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.625 ms
-NOTICE:  Execution Time: 40.397 ms
+NOTICE:                Buffers: shared hit=4832 read=3232
+NOTICE:  Planning Time: 0.056 ms
+NOTICE:  Execution Time: 18.121 ms
 NOTICE:  === OFFSET 2000 | oas_bp ASC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=9876.36..9876.86 rows=200 width=294) (actual time=37.134..37.149 rows=200 loops=1)
+NOTICE:  Limit  (cost=9873.90..9874.40 rows=200 width=294) (actual time=19.649..19.662 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081
-NOTICE:    ->  Sort  (cost=9871.36..9921.22 rows=19942 width=294) (actual time=37.028..37.098 rows=2200 loops=1)
+NOTICE:    ->  Sort  (cost=9868.90..9918.70 rows=19920 width=294) (actual time=19.565..19.621 rows=2200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: top-N heapsort  Memory: 2078kB
 NOTICE:          Buffers: shared hit=4081
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.027..24.921 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.011..12.324 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.134 ms
-NOTICE:  Execution Time: 37.412 ms
+NOTICE:  Planning Time: 0.058 ms
+NOTICE:  Execution Time: 19.800 ms
 NOTICE:  === OFFSET 10000 | market_value DESC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=10216.54..10217.04 rows=200 width=294) (actual time=64.669..64.713 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10191.54..10241.40 rows=19942 width=294) (actual time=62.456..64.321 rows=10200 loops=1)
+NOTICE:  Limit  (cost=10214.97..10215.47 rows=200 width=294) (actual time=28.895..28.931 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=5024 read=3040 written=28, temp read=495 written=791
+NOTICE:    ->  Sort  (cost=10189.97..10239.77 rows=19920 width=294) (actual time=27.988..28.722 rows=10200 loops=1)
 NOTICE:          Sort Key: market_value DESC, position_id DESC
 NOTICE:          Sort Method: external merge  Disk: 6312kB
-NOTICE:          Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.018..26.831 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=5024 read=3040 written=28, temp read=495 written=791
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.007..13.664 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.134 ms
-NOTICE:  Execution Time: 65.850 ms
+NOTICE:                Buffers: shared hit=5024 read=3040 written=28
+NOTICE:  Planning Time: 0.059 ms
+NOTICE:  Execution Time: 29.331 ms
 NOTICE:  === OFFSET 10000 | market_value DESC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=4404.29..4492.37 rows=200 width=294) (actual time=27.516..27.857 rows=200 loops=1)
+NOTICE:  Limit  (cost=4408.02..4496.17 rows=200 width=294) (actual time=6.948..7.079 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=10347
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8782.72 rows=19942 width=294) (actual time=0.042..27.563 rows=10200 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8780.45 rows=19920 width=294) (actual time=0.007..6.870 rows=10200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=10347
-NOTICE:  Planning Time: 0.127 ms
-NOTICE:  Execution Time: 27.902 ms
+NOTICE:  Planning Time: 0.050 ms
+NOTICE:  Execution Time: 7.099 ms
 NOTICE:  === OFFSET 10000 | spread_bp ASC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=10216.54..10217.04 rows=200 width=294) (actual time=47.923..47.958 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10191.54..10241.40 rows=19942 width=294) (actual time=46.144..47.615 rows=10200 loops=1)
+NOTICE:  Limit  (cost=10214.97..10215.47 rows=200 width=294) (actual time=26.011..26.037 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=5216 read=2848, temp read=495 written=791
+NOTICE:    ->  Sort  (cost=10189.97..10239.77 rows=19920 width=294) (actual time=25.087..25.836 rows=10200 loops=1)
 NOTICE:          Sort Key: spread_bp, position_id
 NOTICE:          Sort Method: external merge  Disk: 6312kB
-NOTICE:          Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.015..21.389 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=5216 read=2848, temp read=495 written=791
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.006..13.898 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.107 ms
-NOTICE:  Execution Time: 49.009 ms
+NOTICE:                Buffers: shared hit=5216 read=2848
+NOTICE:  Planning Time: 0.060 ms
+NOTICE:  Execution Time: 26.390 ms
 NOTICE:  === OFFSET 10000 | spread_bp ASC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=4405.95..4494.06 rows=200 width=294) (actual time=21.618..22.263 rows=200 loops=1)
+NOTICE:  Limit  (cost=4409.67..4497.86 rows=200 width=294) (actual time=6.284..6.405 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=10272
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8786.02 rows=19942 width=294) (actual time=0.012..21.892 rows=10200 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8783.75 rows=19920 width=294) (actual time=0.006..6.204 rows=10200 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=10272
-NOTICE:  Planning Time: 0.077 ms
-NOTICE:  Execution Time: 22.321 ms
+NOTICE:  Planning Time: 0.038 ms
+NOTICE:  Execution Time: 6.424 ms
 NOTICE:  === OFFSET 10000 | yield DESC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=10216.54..10217.04 rows=200 width=294) (actual time=49.244..49.268 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10191.54..10241.40 rows=19942 width=294) (actual time=48.347..49.071 rows=10200 loops=1)
+NOTICE:  Limit  (cost=10214.97..10215.47 rows=200 width=294) (actual time=25.462..25.485 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=5408 read=2656 written=32, temp read=495 written=791
+NOTICE:    ->  Sort  (cost=10189.97..10239.77 rows=19920 width=294) (actual time=24.552..25.288 rows=10200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: external merge  Disk: 6312kB
-NOTICE:          Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.009..24.341 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=5408 read=2656 written=32, temp read=495 written=791
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.006..13.050 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.074 ms
-NOTICE:  Execution Time: 50.004 ms
+NOTICE:                Buffers: shared hit=5408 read=2656 written=32
+NOTICE:  Planning Time: 0.044 ms
+NOTICE:  Execution Time: 25.873 ms
 NOTICE:  === OFFSET 10000 | yield DESC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=10117.02..10117.52 rows=200 width=294) (actual time=44.998..45.022 rows=200 loops=1)
+NOTICE:  Limit  (cost=10114.31..10114.81 rows=200 width=294) (actual time=24.874..24.899 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10092.02..10141.87 rows=19942 width=294) (actual time=43.913..44.746 rows=10200 loops=1)
+NOTICE:    ->  Sort  (cost=10089.31..10139.11 rows=19920 width=294) (actual time=23.921..24.683 rows=10200 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: external merge  Disk: 6312kB
 NOTICE:          Buffers: shared hit=4081, temp read=495 written=791
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.023..16.053 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.011..11.512 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.109 ms
-NOTICE:  Execution Time: 45.718 ms
+NOTICE:  Planning Time: 0.057 ms
+NOTICE:  Execution Time: 25.322 ms
 NOTICE:  === OFFSET 10000 | oas_bp ASC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=10216.54..10217.04 rows=200 width=294) (actual time=51.288..51.311 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10191.54..10241.40 rows=19942 width=294) (actual time=50.223..51.106 rows=10200 loops=1)
+NOTICE:  Limit  (cost=10214.97..10215.47 rows=200 width=294) (actual time=23.801..23.824 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=5600 read=2464, temp read=495 written=791
+NOTICE:    ->  Sort  (cost=10189.97..10239.77 rows=19920 width=294) (actual time=22.850..23.612 rows=10200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: external merge  Disk: 6312kB
-NOTICE:          Buffers: shared hit=8064, temp read=495 written=791
-NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19942 width=294) (actual time=0.014..26.307 rows=20001 loops=1)
+NOTICE:          Buffers: shared hit=5600 read=2464, temp read=495 written=791
+NOTICE:          ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=294) (actual time=0.006..12.480 rows=20001 loops=1)
 NOTICE:                Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Rows Removed by Filter: 20001
-NOTICE:                Buffers: shared hit=8064
-NOTICE:  Planning Time: 0.108 ms
-NOTICE:  Execution Time: 51.908 ms
+NOTICE:                Buffers: shared hit=5600 read=2464
+NOTICE:  Planning Time: 0.057 ms
+NOTICE:  Execution Time: 24.182 ms
 NOTICE:  === OFFSET 10000 | oas_bp ASC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=10117.02..10117.52 rows=200 width=294) (actual time=113.492..113.684 rows=200 loops=1)
+NOTICE:  Limit  (cost=10114.31..10114.81 rows=200 width=294) (actual time=21.853..21.876 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081, temp read=495 written=791
-NOTICE:    ->  Sort  (cost=10092.02..10141.87 rows=19942 width=294) (actual time=112.512..113.447 rows=10200 loops=1)
+NOTICE:    ->  Sort  (cost=10089.31..10139.11 rows=19920 width=294) (actual time=20.885..21.679 rows=10200 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: external merge  Disk: 6312kB
 NOTICE:          Buffers: shared hit=4081, temp read=495 written=791
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.022..51.046 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.015..9.871 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.100 ms
-NOTICE:  Execution Time: 115.016 ms
+NOTICE:  Planning Time: 0.060 ms
+NOTICE:  Execution Time: 22.272 ms
 NOTICE:  === OFFSET 19801 | market_value DESC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=11835.57..11835.69 rows=1 width=294) (actual time=45.379..49.406 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8156, temp read=332 written=333
-NOTICE:    ->  Gather Merge  (cost=9896.67..11835.57 rows=16618 width=294) (actual time=37.952..48.712 rows=20001 loops=1)
+NOTICE:  Limit  (cost=11832.82..11832.94 rows=1 width=294) (actual time=15.914..17.626 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=5948 read=2208 written=96, temp read=305 written=305
+NOTICE:    ->  Gather Merge  (cost=9896.02..11832.82 rows=16600 width=294) (actual time=12.649..17.238 rows=20001 loops=1)
 NOTICE:          Workers Planned: 2
 NOTICE:          Workers Launched: 2
-NOTICE:          Buffers: shared hit=8156, temp read=332 written=333
-NOTICE:          ->  Sort  (cost=8896.65..8917.42 rows=8309 width=294) (actual time=31.670..32.966 rows=6667 loops=3)
+NOTICE:          Buffers: shared hit=5948 read=2208 written=96, temp read=305 written=305
+NOTICE:          ->  Sort  (cost=8896.00..8916.75 rows=8300 width=294) (actual time=10.832..11.412 rows=6667 loops=3)
 NOTICE:                Sort Key: market_value DESC, position_id DESC
-NOTICE:                Sort Method: external merge  Disk: 2656kB
-NOTICE:                Buffers: shared hit=8156, temp read=332 written=333
-NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 2852kB
-NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 3401kB
-NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8309 width=294) (actual time=0.019..18.353 rows=6667 loops=3)
+NOTICE:                Sort Method: external merge  Disk: 2440kB
+NOTICE:                Buffers: shared hit=5948 read=2208 written=96, temp read=305 written=305
+NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 3818kB
+NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 2781kB
+NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8300 width=294) (actual time=0.011..6.349 rows=6667 loops=3)
 NOTICE:                      Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                      Rows Removed by Filter: 6667
-NOTICE:                      Buffers: shared hit=8070
-NOTICE:  Planning Time: 0.262 ms
-NOTICE:  Execution Time: 50.162 ms
+NOTICE:                      Buffers: shared hit=5862 read=2208 written=96
+NOTICE:  Planning Time: 0.067 ms
+NOTICE:  Execution Time: 17.791 ms
 NOTICE:  === OFFSET 19801 | market_value DESC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=8720.62..8782.72 rows=141 width=294) (actual time=48.760..49.020 rows=200 loops=1)
+NOTICE:  Limit  (cost=8728.00..8780.45 rows=119 width=294) (actual time=13.812..13.947 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=20276
-NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8782.72 rows=19942 width=294) (actual time=0.025..47.607 rows=20001 loops=1)
+NOTICE:    ->  Index Scan Backward using ix_snapshot_sort_market_value on position_snapshot  (cost=0.32..8780.45 rows=19920 width=294) (actual time=0.007..13.559 rows=20001 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=20276
-NOTICE:  Planning Time: 0.080 ms
-NOTICE:  Execution Time: 49.074 ms
+NOTICE:  Planning Time: 0.063 ms
+NOTICE:  Execution Time: 13.972 ms
 NOTICE:  === OFFSET 19801 | spread_bp ASC (indexed) | random_page_cost 4
-NOTICE:  Limit  (cost=11835.57..11835.69 rows=1 width=294) (actual time=57.089..62.906 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8160, temp read=610 written=610
-NOTICE:    ->  Gather Merge  (cost=9896.67..11835.57 rows=16618 width=294) (actual time=32.554..62.135 rows=20001 loops=1)
+NOTICE:  Limit  (cost=11832.82..11832.94 rows=1 width=294) (actual time=15.175..16.849 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=6444 read=1716 written=96, temp read=327 written=328
+NOTICE:    ->  Gather Merge  (cost=9896.02..11832.82 rows=16600 width=294) (actual time=11.948..16.445 rows=20001 loops=1)
 NOTICE:          Workers Planned: 2
 NOTICE:          Workers Launched: 2
-NOTICE:          Buffers: shared hit=8160, temp read=610 written=610
-NOTICE:          ->  Sort  (cost=8896.65..8917.42 rows=8309 width=294) (actual time=26.982..29.145 rows=6667 loops=3)
+NOTICE:          Buffers: shared hit=6444 read=1716 written=96, temp read=327 written=328
+NOTICE:          ->  Sort  (cost=8896.00..8916.75 rows=8300 width=294) (actual time=10.155..10.752 rows=6667 loops=3)
 NOTICE:                Sort Key: spread_bp, position_id
-NOTICE:                Sort Method: external merge  Disk: 2440kB
-NOTICE:                Buffers: shared hit=8160, temp read=610 written=610
-NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 2497kB
-NOTICE:                Worker 1:  Sort Method: external merge  Disk: 2440kB
-NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8309 width=294) (actual time=0.022..15.070 rows=6667 loops=3)
+NOTICE:                Sort Method: external merge  Disk: 2616kB
+NOTICE:                Buffers: shared hit=6444 read=1716 written=96, temp read=327 written=328
+NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 2578kB
+NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 3736kB
+NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8300 width=294) (actual time=0.009..6.562 rows=6667 loops=3)
 NOTICE:                      Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                      Rows Removed by Filter: 6667
-NOTICE:                      Buffers: shared hit=8070
-NOTICE:  Planning Time: 0.119 ms
-NOTICE:  Execution Time: 63.965 ms
+NOTICE:                      Buffers: shared hit=6354 read=1716 written=96
+NOTICE:  Planning Time: 0.099 ms
+NOTICE:  Execution Time: 17.032 ms
 NOTICE:  === OFFSET 19801 | spread_bp ASC (indexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=8723.90..8786.02 rows=141 width=294) (actual time=30.939..31.131 rows=200 loops=1)
+NOTICE:  Limit  (cost=8731.28..8783.75 rows=119 width=294) (actual time=13.606..13.776 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=20139
-NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8786.02 rows=19942 width=294) (actual time=0.049..30.450 rows=20001 loops=1)
+NOTICE:    ->  Index Scan using ix_snapshot_sort_spread_bp on position_snapshot  (cost=0.32..8783.75 rows=19920 width=294) (actual time=0.010..13.377 rows=20001 loops=1)
 NOTICE:          Index Cond: (as_of_date = '2026-10-06'::date)
 NOTICE:          Filter: (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[]))
 NOTICE:          Buffers: shared hit=20139
-NOTICE:  Planning Time: 0.358 ms
-NOTICE:  Execution Time: 31.188 ms
+NOTICE:  Planning Time: 0.065 ms
+NOTICE:  Execution Time: 13.810 ms
 NOTICE:  === OFFSET 19801 | yield DESC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=11835.57..11835.69 rows=1 width=294) (actual time=24.751..27.664 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8156, temp read=305 written=305
-NOTICE:    ->  Gather Merge  (cost=9896.67..11835.57 rows=16618 width=294) (actual time=18.031..26.972 rows=20001 loops=1)
+NOTICE:  Limit  (cost=11832.82..11832.94 rows=1 width=294) (actual time=13.260..14.894 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=7016 read=1140 written=88, temp read=305 written=305
+NOTICE:    ->  Gather Merge  (cost=9896.02..11832.82 rows=16600 width=294) (actual time=10.092..14.507 rows=20001 loops=1)
 NOTICE:          Workers Planned: 2
 NOTICE:          Workers Launched: 2
-NOTICE:          Buffers: shared hit=8156, temp read=305 written=305
-NOTICE:          ->  Sort  (cost=8896.65..8917.42 rows=8309 width=294) (actual time=14.789..16.067 rows=6667 loops=3)
+NOTICE:          Buffers: shared hit=7016 read=1140 written=88, temp read=305 written=305
+NOTICE:          ->  Sort  (cost=8896.00..8916.75 rows=8300 width=294) (actual time=8.726..9.177 rows=6667 loops=3)
 NOTICE:                Sort Key: yield DESC, position_id DESC
 NOTICE:                Sort Method: external merge  Disk: 2440kB
-NOTICE:                Buffers: shared hit=8156, temp read=305 written=305
-NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 3309kB
-NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 3290kB
-NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8309 width=294) (actual time=0.016..8.946 rows=6667 loops=3)
+NOTICE:                Buffers: shared hit=7016 read=1140 written=88, temp read=305 written=305
+NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 3259kB
+NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 3340kB
+NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8300 width=294) (actual time=0.014..5.466 rows=6667 loops=3)
 NOTICE:                      Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                      Rows Removed by Filter: 6667
-NOTICE:                      Buffers: shared hit=8070
-NOTICE:  Planning Time: 0.104 ms
-NOTICE:  Execution Time: 28.138 ms
+NOTICE:                      Buffers: shared hit=6930 read=1140 written=88
+NOTICE:  Planning Time: 0.069 ms
+NOTICE:  Execution Time: 15.048 ms
 NOTICE:  === OFFSET 19801 | yield DESC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=11735.20..11735.56 rows=141 width=294) (actual time=33.909..34.079 rows=200 loops=1)
+NOTICE:  Limit  (cost=11732.34..11732.64 rows=119 width=294) (actual time=21.534..21.627 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081, temp read=789 written=791
-NOTICE:    ->  Sort  (cost=11685.70..11735.56 rows=19942 width=294) (actual time=30.938..33.629 rows=20001 loops=1)
+NOTICE:    ->  Sort  (cost=11682.84..11732.64 rows=19920 width=294) (actual time=19.454..21.233 rows=20001 loops=1)
 NOTICE:          Sort Key: yield DESC, position_id DESC
 NOTICE:          Sort Method: external merge  Disk: 6312kB
 NOTICE:          Buffers: shared hit=4081, temp read=789 written=791
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.098..12.657 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.014..9.391 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.076 ms
-NOTICE:  Execution Time: 34.604 ms
+NOTICE:  Planning Time: 0.060 ms
+NOTICE:  Execution Time: 21.926 ms
 NOTICE:  === OFFSET 19801 | oas_bp ASC (unindexed) | random_page_cost 4
-NOTICE:  Limit  (cost=11835.57..11835.69 rows=1 width=294) (actual time=37.186..41.077 rows=200 loops=1)
-NOTICE:    Buffers: shared hit=8160, temp read=305 written=305
-NOTICE:    ->  Gather Merge  (cost=9896.67..11835.57 rows=16618 width=294) (actual time=30.543..40.347 rows=20001 loops=1)
+NOTICE:  Limit  (cost=11832.82..11832.94 rows=1 width=294) (actual time=16.000..17.843 rows=200 loops=1)
+NOTICE:    Buffers: shared hit=7528 read=632 written=64, temp read=657 written=658
+NOTICE:    ->  Gather Merge  (cost=9896.02..11832.82 rows=16600 width=294) (actual time=12.383..17.449 rows=20001 loops=1)
 NOTICE:          Workers Planned: 2
 NOTICE:          Workers Launched: 2
-NOTICE:          Buffers: shared hit=8160, temp read=305 written=305
-NOTICE:          ->  Sort  (cost=8896.65..8917.42 rows=8309 width=294) (actual time=24.418..25.506 rows=6667 loops=3)
+NOTICE:          Buffers: shared hit=7528 read=632 written=64, temp read=657 written=658
+NOTICE:          ->  Sort  (cost=8896.00..8916.75 rows=8300 width=294) (actual time=10.324..11.051 rows=6667 loops=3)
 NOTICE:                Sort Key: oas_bp, position_id
-NOTICE:                Sort Method: external merge  Disk: 2440kB
-NOTICE:                Buffers: shared hit=8160, temp read=305 written=305
-NOTICE:                Worker 0:  Sort Method: quicksort  Memory: 3716kB
-NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 2883kB
-NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8309 width=294) (actual time=0.027..13.627 rows=6667 loops=3)
+NOTICE:                Sort Method: external merge  Disk: 2808kB
+NOTICE:                Buffers: shared hit=7528 read=632 written=64, temp read=657 written=658
+NOTICE:                Worker 0:  Sort Method: external merge  Disk: 2448kB
+NOTICE:                Worker 1:  Sort Method: quicksort  Memory: 1813kB
+NOTICE:                ->  Parallel Seq Scan on position_snapshot  (cost=0.03..8355.71 rows=8300 width=294) (actual time=0.014..6.050 rows=6667 loops=3)
 NOTICE:                      Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                      Rows Removed by Filter: 6667
-NOTICE:                      Buffers: shared hit=8070
-NOTICE:  Planning Time: 0.190 ms
-NOTICE:  Execution Time: 41.631 ms
+NOTICE:                      Buffers: shared hit=7438 read=632 written=64
+NOTICE:  Planning Time: 0.062 ms
+NOTICE:  Execution Time: 18.223 ms
 NOTICE:  === OFFSET 19801 | oas_bp ASC (unindexed) | random_page_cost 1.1
-NOTICE:  Limit  (cost=11735.20..11735.56 rows=141 width=294) (actual time=31.296..31.457 rows=200 loops=1)
+NOTICE:  Limit  (cost=11732.34..11732.64 rows=119 width=294) (actual time=22.378..22.477 rows=200 loops=1)
 NOTICE:    Buffers: shared hit=4081, temp read=789 written=791
-NOTICE:    ->  Sort  (cost=11685.70..11735.56 rows=19942 width=294) (actual time=28.845..31.044 rows=20001 loops=1)
+NOTICE:    ->  Sort  (cost=11682.84..11732.64 rows=19920 width=294) (actual time=20.205..22.094 rows=20001 loops=1)
 NOTICE:          Sort Key: oas_bp, position_id
 NOTICE:          Sort Method: external merge  Disk: 6312kB
 NOTICE:          Buffers: shared hit=4081, temp read=789 written=791
-NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8664.54 rows=19942 width=294) (actual time=0.018..11.605 rows=20001 loops=1)
+NOTICE:          ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=294) (actual time=0.013..9.607 rows=20001 loops=1)
 NOTICE:                Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
 NOTICE:                Buffers: shared hit=4081
-NOTICE:  Planning Time: 0.078 ms
-NOTICE:  Execution Time: 31.977 ms
+NOTICE:  Planning Time: 0.063 ms
+NOTICE:  Execution Time: 22.797 ms
+NOTICE:  === insights | top_issuers_mv (P3 grid) | random_page_cost 4
+NOTICE:  Limit  (cost=9037.56..9037.58 rows=5 width=105) (actual time=8.720..8.721 rows=5 loops=1)
+NOTICE:    Buffers: shared hit=7881 read=216 written=12
+NOTICE:    ->  Sort  (cost=9037.56..9037.71 rows=60 width=105) (actual time=8.719..8.720 rows=5 loops=1)
+NOTICE:          Sort Key: (sum(p.market_value)) DESC NULLS LAST, d.issuer_id
+NOTICE:          Sort Method: top-N heapsort  Memory: 26kB
+NOTICE:          Buffers: shared hit=7881 read=216 written=12
+NOTICE:          ->  Hash Join  (cost=9035.47..9036.57 rows=60 width=105) (actual time=8.697..8.712 rows=60 loops=1)
+NOTICE:                Hash Cond: (d.issuer_id = i.issuer_id)
+NOTICE:                Buffers: shared hit=7881 read=216 written=12
+NOTICE:                ->  WindowAgg  (cost=9033.12..9033.45 rows=60 width=76) (actual time=8.684..8.693 rows=60 loops=1)
+NOTICE:                      Buffers: shared hit=7880 read=216 written=12
+NOTICE:                      ->  HashAggregate  (cost=9031.65..9032.40 rows=60 width=44) (actual time=8.652..8.660 rows=60 loops=1)
+NOTICE:                            Group Key: d.issuer_id
+NOTICE:                            Batches: 1  Memory Usage: 48kB
+NOTICE:                            Buffers: shared hit=7880 read=216 written=12
+NOTICE:                            ->  Hash Join  (cost=65.78..8882.25 rows=19920 width=12) (actual time=0.153..7.208 rows=20001 loops=1)
+NOTICE:                                  Hash Cond: (p.deal_id = d.deal_id)
+NOTICE:                                  Buffers: shared hit=7880 read=216 written=12
+NOTICE:                                  ->  Seq Scan on position_snapshot p  (cost=0.03..8764.07 rows=19920 width=12) (actual time=0.002..4.876 rows=20001 loops=1)
+NOTICE:                                        Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+NOTICE:                                        Rows Removed by Filter: 20001
+NOTICE:                                        Buffers: shared hit=7848 read=216 written=12
+NOTICE:                                  ->  Hash  (cost=47.00..47.00 rows=1500 width=8) (actual time=0.147..0.147 rows=1500 loops=1)
+NOTICE:                                        Buckets: 2048  Batches: 1  Memory Usage: 75kB
+NOTICE:                                        Buffers: shared hit=32
+NOTICE:                                        ->  Seq Scan on deal d  (cost=0.00..47.00 rows=1500 width=8) (actual time=0.001..0.067 rows=1500 loops=1)
+NOTICE:                                              Buffers: shared hit=32
+NOTICE:                ->  Hash  (cost=1.60..1.60 rows=60 width=33) (actual time=0.010..0.010 rows=60 loops=1)
+NOTICE:                      Buckets: 1024  Batches: 1  Memory Usage: 12kB
+NOTICE:                      Buffers: shared hit=1
+NOTICE:                      ->  Seq Scan on issuer i  (cost=0.00..1.60 rows=60 width=33) (actual time=0.002..0.004 rows=60 loops=1)
+NOTICE:                            Buffers: shared hit=1
+NOTICE:  Planning:
+NOTICE:    Buffers: shared hit=6
+NOTICE:  Planning Time: 0.202 ms
+NOTICE:  Execution Time: 8.778 ms
+NOTICE:  === insights | top_issuers_mv (P3 grid) | random_page_cost 1.1
+NOTICE:  Limit  (cost=8936.91..8936.92 rows=5 width=105) (actual time=8.223..8.225 rows=5 loops=1)
+NOTICE:    Buffers: shared hit=4114
+NOTICE:    ->  Sort  (cost=8936.91..8937.06 rows=60 width=105) (actual time=8.222..8.224 rows=5 loops=1)
+NOTICE:          Sort Key: (sum(p.market_value)) DESC NULLS LAST, d.issuer_id
+NOTICE:          Sort Method: top-N heapsort  Memory: 26kB
+NOTICE:          Buffers: shared hit=4114
+NOTICE:          ->  Hash Join  (cost=8934.82..8935.92 rows=60 width=105) (actual time=8.200..8.216 rows=60 loops=1)
+NOTICE:                Hash Cond: (d.issuer_id = i.issuer_id)
+NOTICE:                Buffers: shared hit=4114
+NOTICE:                ->  WindowAgg  (cost=8932.47..8932.80 rows=60 width=76) (actual time=8.187..8.196 rows=60 loops=1)
+NOTICE:                      Buffers: shared hit=4113
+NOTICE:                      ->  HashAggregate  (cost=8931.00..8931.75 rows=60 width=44) (actual time=8.168..8.175 rows=60 loops=1)
+NOTICE:                            Group Key: d.issuer_id
+NOTICE:                            Batches: 1  Memory Usage: 48kB
+NOTICE:                            Buffers: shared hit=4113
+NOTICE:                            ->  Hash Join  (cost=66.04..8781.60 rows=19920 width=12) (actual time=0.165..6.728 rows=20001 loops=1)
+NOTICE:                                  Hash Cond: (p.deal_id = d.deal_id)
+NOTICE:                                  Buffers: shared hit=4113
+NOTICE:                                  ->  Index Scan using ix_snapshot_portfolio on position_snapshot p  (cost=0.29..8663.41 rows=19920 width=12) (actual time=0.008..3.787 rows=20001 loops=1)
+NOTICE:                                        Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+NOTICE:                                        Buffers: shared hit=4081
+NOTICE:                                  ->  Hash  (cost=47.00..47.00 rows=1500 width=8) (actual time=0.153..0.154 rows=1500 loops=1)
+NOTICE:                                        Buckets: 2048  Batches: 1  Memory Usage: 75kB
+NOTICE:                                        Buffers: shared hit=32
+NOTICE:                                        ->  Seq Scan on deal d  (cost=0.00..47.00 rows=1500 width=8) (actual time=0.001..0.071 rows=1500 loops=1)
+NOTICE:                                              Buffers: shared hit=32
+NOTICE:                ->  Hash  (cost=1.60..1.60 rows=60 width=33) (actual time=0.010..0.011 rows=60 loops=1)
+NOTICE:                      Buckets: 1024  Batches: 1  Memory Usage: 12kB
+NOTICE:                      Buffers: shared hit=1
+NOTICE:                      ->  Seq Scan on issuer i  (cost=0.00..1.60 rows=60 width=33) (actual time=0.003..0.005 rows=60 loops=1)
+NOTICE:                            Buffers: shared hit=1
+NOTICE:  Planning:
+NOTICE:    Buffers: shared hit=6
+NOTICE:  Planning Time: 0.159 ms
+NOTICE:  Execution Time: 8.268 ms
+NOTICE:  === insights | spread_change_1m (P3 grid) | random_page_cost 4
+NOTICE:  Sort  (cost=9429.00..9429.00 rows=1 width=19) (actual time=8.420..8.423 rows=34 loops=1)
+NOTICE:    Sort Key: (array_position('{CLO,RMBS,CMBS,ABS,CRT}'::text[], s1.sector))
+NOTICE:    Sort Method: quicksort  Memory: 26kB
+NOTICE:    Buffers: shared hit=8332 read=24 written=24
+NOTICE:    CTE t
+NOTICE:      ->  Result  (cost=0.34..0.35 rows=1 width=4) (actual time=0.008..0.009 rows=1 loops=1)
+NOTICE:            Buffers: shared hit=3
+NOTICE:            InitPlan 1
+NOTICE:              ->  Limit  (cost=0.29..0.34 rows=1 width=4) (actual time=0.008..0.008 rows=1 loops=1)
+NOTICE:                    Buffers: shared hit=3
+NOTICE:                    ->  Index Only Scan Backward using spread_index_pkey on spread_index  (cost=0.29..1015.48 rows=18200 width=4) (actual time=0.007..0.007 rows=1 loops=1)
+NOTICE:                          Index Cond: (as_of_date <= '2026-10-06'::date)
+NOTICE:                          Heap Fetches: 1
+NOTICE:                          Buffers: shared hit=3
+NOTICE:    ->  Nested Loop  (cost=9420.00..9428.64 rows=1 width=19) (actual time=8.371..8.417 rows=34 loops=1)
+NOTICE:          Buffers: shared hit=8332 read=24 written=24
+NOTICE:          ->  Merge Join  (cost=9419.71..9420.28 rows=1 width=22) (actual time=8.353..8.365 rows=34 loops=1)
+NOTICE:                Merge Cond: ((s0.sector = position_snapshot.sector) AND (s0.rating = position_snapshot.rating_composite))
+NOTICE:                Buffers: shared hit=8230 read=24 written=24
+NOTICE:                ->  Sort  (cost=554.58..554.67 rows=35 width=15) (actual time=2.156..2.159 rows=35 loops=1)
+NOTICE:                      Sort Key: s0.sector, s0.rating
+NOTICE:                      Sort Method: quicksort  Memory: 26kB
+NOTICE:                      Buffers: shared hit=190
+NOTICE:                      ->  Nested Loop  (cost=490.46..553.68 rows=35 width=15) (actual time=2.147..2.152 rows=35 loops=1)
+NOTICE:                            Buffers: shared hit=190
+NOTICE:                            ->  Aggregate  (cost=490.17..490.18 rows=1 width=4) (actual time=2.143..2.143 rows=1 loops=1)
+NOTICE:                                  Buffers: shared hit=183
+NOTICE:                                  ->  Nested Loop  (cost=147.31..475.00 rows=6067 width=4) (actual time=0.219..1.572 rows=17430 loops=1)
+NOTICE:                                        Buffers: shared hit=183
+NOTICE:                                        ->  CTE Scan on t t_1  (cost=0.00..0.02 rows=1 width=4) (actual time=0.009..0.009 rows=1 loops=1)
+NOTICE:                                              Buffers: shared hit=3
+NOTICE:                                        ->  Bitmap Heap Scan on spread_index s  (cost=147.31..414.31 rows=6067 width=4) (actual time=0.210..0.783 rows=17430 loops=1)
+NOTICE:                                              Recheck Cond: (as_of_date <= (t_1.t1 - 30))
+NOTICE:                                              Heap Blocks: exact=112
+NOTICE:                                              Buffers: shared hit=180
+NOTICE:                                              ->  Bitmap Index Scan on spread_index_pkey  (cost=0.00..145.79 rows=6067 width=0) (actual time=0.203..0.203 rows=17430 loops=1)
+NOTICE:                                                    Index Cond: (as_of_date <= (t_1.t1 - 30))
+NOTICE:                                                    Buffers: shared hit=68
+NOTICE:                            ->  Index Scan using spread_index_pkey on spread_index s0  (cost=0.29..63.15 rows=35 width=19) (actual time=0.004..0.006 rows=35 loops=1)
+NOTICE:                                  Index Cond: (as_of_date = (max(s.as_of_date)))
+NOTICE:                                  Buffers: shared hit=7
+NOTICE:                ->  Sort  (cost=8865.13..8865.23 rows=40 width=7) (actual time=6.196..6.197 rows=38 loops=1)
+NOTICE:                      Sort Key: position_snapshot.sector, position_snapshot.rating_composite
+NOTICE:                      Sort Method: quicksort  Memory: 25kB
+NOTICE:                      Buffers: shared hit=8040 read=24 written=24
+NOTICE:                      ->  HashAggregate  (cost=8863.67..8864.07 rows=40 width=7) (actual time=6.181..6.183 rows=39 loops=1)
+NOTICE:                            Group Key: position_snapshot.sector, position_snapshot.rating_composite
+NOTICE:                            Batches: 1  Memory Usage: 24kB
+NOTICE:                            Buffers: shared hit=8040 read=24 written=24
+NOTICE:                            ->  Seq Scan on position_snapshot  (cost=0.03..8764.07 rows=19920 width=7) (actual time=0.003..4.096 rows=20001 loops=1)
+NOTICE:                                  Filter: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+NOTICE:                                  Rows Removed by Filter: 20001
+NOTICE:                                  Buffers: shared hit=8040 read=24 written=24
+NOTICE:          ->  Nested Loop  (cost=0.29..8.34 rows=1 width=15) (actual time=0.001..0.001 rows=1 loops=34)
+NOTICE:                Buffers: shared hit=102
+NOTICE:                ->  CTE Scan on t  (cost=0.00..0.02 rows=1 width=4) (actual time=0.000..0.000 rows=1 loops=34)
+NOTICE:                ->  Index Scan using spread_index_pkey on spread_index s1  (cost=0.29..8.31 rows=1 width=19) (actual time=0.001..0.001 rows=1 loops=34)
+NOTICE:                      Index Cond: ((as_of_date = t.t1) AND (sector = s0.sector) AND (rating = s0.rating))
+NOTICE:                      Buffers: shared hit=102
+NOTICE:  Planning:
+NOTICE:    Buffers: shared hit=6
+NOTICE:  Planning Time: 0.287 ms
+NOTICE:  Execution Time: 8.484 ms
+NOTICE:  === insights | spread_change_1m (P3 grid) | random_page_cost 1.1
+NOTICE:  Sort  (cost=9114.98..9114.99 rows=1 width=19) (actual time=8.568..8.572 rows=34 loops=1)
+NOTICE:    Sort Key: (array_position('{CLO,RMBS,CMBS,ABS,CRT}'::text[], s1.sector))
+NOTICE:    Sort Method: quicksort  Memory: 26kB
+NOTICE:    Buffers: shared hit=4818
+NOTICE:    CTE t
+NOTICE:      ->  Result  (cost=0.32..0.33 rows=1 width=4) (actual time=0.006..0.007 rows=1 loops=1)
+NOTICE:            Buffers: shared hit=3
+NOTICE:            InitPlan 1
+NOTICE:              ->  Limit  (cost=0.29..0.32 rows=1 width=4) (actual time=0.006..0.006 rows=1 loops=1)
+NOTICE:                    Buffers: shared hit=3
+NOTICE:                    ->  Index Only Scan Backward using spread_index_pkey on spread_index  (cost=0.29..581.74 rows=18200 width=4) (actual time=0.005..0.005 rows=1 loops=1)
+NOTICE:                          Index Cond: (as_of_date <= '2026-10-06'::date)
+NOTICE:                          Heap Fetches: 1
+NOTICE:                          Buffers: shared hit=3
+NOTICE:    ->  Nested Loop  (cost=9111.80..9114.64 rows=1 width=19) (actual time=8.521..8.565 rows=34 loops=1)
+NOTICE:          Buffers: shared hit=4818
+NOTICE:          ->  Merge Join  (cost=9111.52..9112.09 rows=1 width=22) (actual time=8.506..8.516 rows=34 loops=1)
+NOTICE:                Merge Cond: ((s0.sector = position_snapshot.sector) AND (s0.rating = position_snapshot.rating_composite))
+NOTICE:                Buffers: shared hit=4716
+NOTICE:                ->  Sort  (cost=347.04..347.13 rows=35 width=15) (actual time=2.551..2.554 rows=35 loops=1)
+NOTICE:                      Sort Key: s0.sector, s0.rating
+NOTICE:                      Sort Method: quicksort  Memory: 26kB
+NOTICE:                      Buffers: shared hit=635
+NOTICE:                      ->  Nested Loop  (cost=328.05..346.14 rows=35 width=15) (actual time=2.542..2.548 rows=35 loops=1)
+NOTICE:                            Buffers: shared hit=635
+NOTICE:                            ->  Aggregate  (cost=327.76..327.77 rows=1 width=4) (actual time=2.532..2.533 rows=1 loops=1)
+NOTICE:                                  Buffers: shared hit=628
+NOTICE:                                  ->  Nested Loop  (cost=0.29..312.60 rows=6067 width=4) (actual time=0.015..1.958 rows=17430 loops=1)
+NOTICE:                                        Buffers: shared hit=628
+NOTICE:                                        ->  CTE Scan on t t_1  (cost=0.00..0.02 rows=1 width=4) (actual time=0.007..0.008 rows=1 loops=1)
+NOTICE:                                              Buffers: shared hit=3
+NOTICE:                                        ->  Index Only Scan using spread_index_pkey on spread_index s  (cost=0.29..251.91 rows=6067 width=4) (actual time=0.008..1.209 rows=17430 loops=1)
+NOTICE:                                              Index Cond: (as_of_date <= (t_1.t1 - 30))
+NOTICE:                                              Heap Fetches: 17430
+NOTICE:                                              Buffers: shared hit=625
+NOTICE:                            ->  Index Scan using spread_index_pkey on spread_index s0  (cost=0.29..18.02 rows=35 width=19) (actual time=0.008..0.010 rows=35 loops=1)
+NOTICE:                                  Index Cond: (as_of_date = (max(s.as_of_date)))
+NOTICE:                                  Buffers: shared hit=7
+NOTICE:                ->  Sort  (cost=8764.48..8764.58 rows=40 width=7) (actual time=5.952..5.954 rows=38 loops=1)
+NOTICE:                      Sort Key: position_snapshot.sector, position_snapshot.rating_composite
+NOTICE:                      Sort Method: quicksort  Memory: 25kB
+NOTICE:                      Buffers: shared hit=4081
+NOTICE:                      ->  HashAggregate  (cost=8763.01..8763.41 rows=40 width=7) (actual time=5.937..5.939 rows=39 loops=1)
+NOTICE:                            Group Key: position_snapshot.sector, position_snapshot.rating_composite
+NOTICE:                            Batches: 1  Memory Usage: 24kB
+NOTICE:                            Buffers: shared hit=4081
+NOTICE:                            ->  Index Scan using ix_snapshot_portfolio on position_snapshot  (cost=0.29..8663.41 rows=19920 width=7) (actual time=0.009..3.451 rows=20001 loops=1)
+NOTICE:                                  Index Cond: ((as_of_date = '2026-10-06'::date) AND (portfolio_id = ANY ('{1,2,3,4,5,6,7,8,9,10,11,12}'::integer[])))
+NOTICE:                                  Buffers: shared hit=4081
+NOTICE:          ->  Nested Loop  (cost=0.29..2.54 rows=1 width=15) (actual time=0.001..0.001 rows=1 loops=34)
+NOTICE:                Buffers: shared hit=102
+NOTICE:                ->  CTE Scan on t  (cost=0.00..0.02 rows=1 width=4) (actual time=0.000..0.000 rows=1 loops=34)
+NOTICE:                ->  Index Scan using spread_index_pkey on spread_index s1  (cost=0.29..2.51 rows=1 width=19) (actual time=0.001..0.001 rows=1 loops=34)
+NOTICE:                      Index Cond: ((as_of_date = t.t1) AND (sector = s0.sector) AND (rating = s0.rating))
+NOTICE:                      Buffers: shared hit=102
+NOTICE:  Planning:
+NOTICE:    Buffers: shared hit=6
+NOTICE:  Planning Time: 0.290 ms
+NOTICE:  Execution Time: 8.635 ms
 NOTICE:  === Summary (buffers = shared hit + read on the top node; temp = temp blocks written)
 NOTICE:  offset | sort              | index     | rpc  | plan                                                       | buffers |  temp | median ms
-NOTICE:  0      | market_value DESC | indexed   | 4    | Index Scan Backward using sort_market_value                |     204 |     0 |     0.141
-NOTICE:  0      | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |     204 |     0 |     0.238
-NOTICE:  0      | spread_bp ASC     | indexed   | 4    | Index Scan using sort_spread_bp                            |     204 |     0 |     0.244
-NOTICE:  0      | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |     204 |     0 |     0.166
-NOTICE:  0      | yield DESC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    36.235
-NOTICE:  0      | yield DESC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    37.658
-NOTICE:  0      | oas_bp ASC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    32.646
-NOTICE:  0      | oas_bp ASC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    42.504
-NOTICE:  2000   | market_value DESC | indexed   | 4    | Index Scan Backward using sort_market_value                |    2234 |     0 |     4.515
-NOTICE:  2000   | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |    2234 |     0 |     4.398
-NOTICE:  2000   | spread_bp ASC     | indexed   | 4    | Index Scan using sort_spread_bp                            |    2217 |     0 |     3.487
-NOTICE:  2000   | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |    2217 |     0 |     4.008
-NOTICE:  2000   | yield DESC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    39.228
-NOTICE:  2000   | yield DESC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    33.733
-NOTICE:  2000   | oas_bp ASC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    45.090
-NOTICE:  2000   | oas_bp ASC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    35.016
-NOTICE:  10000  | market_value DESC | indexed   | 4    | external merge > Seq Scan                                  |    8064 |   791 |    73.531
-NOTICE:  10000  | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |   10347 |     0 |    16.415
-NOTICE:  10000  | spread_bp ASC     | indexed   | 4    | external merge > Seq Scan                                  |    8064 |   791 |    50.318
-NOTICE:  10000  | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |   10272 |     0 |    20.342
-NOTICE:  10000  | yield DESC        | unindexed | 4    | external merge > Seq Scan                                  |    8064 |   791 |    73.435
-NOTICE:  10000  | yield DESC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    48.171
-NOTICE:  10000  | oas_bp ASC        | unindexed | 4    | external merge > Seq Scan                                  |    8064 |   791 |    77.842
-NOTICE:  10000  | oas_bp ASC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    58.900
-NOTICE:  19801  | market_value DESC | indexed   | 4    | external merge > Parallel Seq Scan                         |    8156 |   333 |    72.217
-NOTICE:  19801  | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |   20276 |     0 |    47.587
-NOTICE:  19801  | spread_bp ASC     | indexed   | 4    | external merge > Parallel Seq Scan                         |    8160 |   610 |    63.965
-NOTICE:  19801  | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |   20139 |     0 |    28.580
-NOTICE:  19801  | yield DESC        | unindexed | 4    | external merge > Parallel Seq Scan                         |    8156 |   305 |    21.610
-NOTICE:  19801  | yield DESC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    43.185
-NOTICE:  19801  | oas_bp ASC        | unindexed | 4    | external merge > Parallel Seq Scan                         |    8160 |   305 |    26.645
-NOTICE:  19801  | oas_bp ASC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    43.604
+NOTICE:  0      | market_value DESC | indexed   | 4    | Index Scan Backward using sort_market_value                |     204 |     0 |     0.131
+NOTICE:  0      | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |     204 |     0 |     0.113
+NOTICE:  0      | spread_bp ASC     | indexed   | 4    | Index Scan using sort_spread_bp                            |     204 |     0 |     0.128
+NOTICE:  0      | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |     204 |     0 |     0.113
+NOTICE:  0      | yield DESC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    20.758
+NOTICE:  0      | yield DESC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    14.154
+NOTICE:  0      | oas_bp ASC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    16.862
+NOTICE:  0      | oas_bp ASC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    13.328
+NOTICE:  2000   | market_value DESC | indexed   | 4    | Index Scan Backward using sort_market_value                |    2234 |     0 |     1.227
+NOTICE:  2000   | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |    2234 |     0 |     1.256
+NOTICE:  2000   | spread_bp ASC     | indexed   | 4    | Index Scan using sort_spread_bp                            |    2217 |     0 |     1.275
+NOTICE:  2000   | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |    2217 |     0 |     1.228
+NOTICE:  2000   | yield DESC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    18.226
+NOTICE:  2000   | yield DESC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    15.422
+NOTICE:  2000   | oas_bp ASC        | unindexed | 4    | top-N heapsort > Seq Scan                                  |    8064 |     0 |    20.480
+NOTICE:  2000   | oas_bp ASC        | unindexed | 1.1  | top-N heapsort > Index Scan using portfolio                |    4081 |     0 |    17.909
+NOTICE:  10000  | market_value DESC | indexed   | 4    | external merge > Seq Scan                                  |    8064 |   791 |    28.243
+NOTICE:  10000  | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |   10347 |     0 |     7.099
+NOTICE:  10000  | spread_bp ASC     | indexed   | 4    | external merge > Seq Scan                                  |    8064 |   791 |    24.145
+NOTICE:  10000  | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |   10272 |     0 |     6.332
+NOTICE:  10000  | yield DESC        | unindexed | 4    | external merge > Seq Scan                                  |    8064 |   791 |    25.624
+NOTICE:  10000  | yield DESC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    21.983
+NOTICE:  10000  | oas_bp ASC        | unindexed | 4    | external merge > Seq Scan                                  |    8064 |   791 |    24.204
+NOTICE:  10000  | oas_bp ASC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    22.735
+NOTICE:  19801  | market_value DESC | indexed   | 4    | external merge > Parallel Seq Scan                         |    8156 |   305 |    19.025
+NOTICE:  19801  | market_value DESC | indexed   | 1.1  | Index Scan Backward using sort_market_value                |   20276 |     0 |    14.154
+NOTICE:  19801  | spread_bp ASC     | indexed   | 4    | external merge > Parallel Seq Scan                         |    8160 |   328 |    17.499
+NOTICE:  19801  | spread_bp ASC     | indexed   | 1.1  | Index Scan using sort_spread_bp                            |   20139 |     0 |    13.743
+NOTICE:  19801  | yield DESC        | unindexed | 4    | external merge > Parallel Seq Scan                         |    8156 |   305 |    15.048
+NOTICE:  19801  | yield DESC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    24.442
+NOTICE:  19801  | oas_bp ASC        | unindexed | 4    | external merge > Parallel Seq Scan                         |    8160 |   658 |    16.274
+NOTICE:  19801  | oas_bp ASC        | unindexed | 1.1  | external merge > Index Scan using portfolio                |    4081 |   791 |    22.797
+NOTICE:  -      | top_issuers_mv    | P3 grid   | 4    | top-N heapsort > Hash Join > Hash Join > Seq Scan > Seq Scan > Seq Scan |    8097 |     0 |     9.483
+NOTICE:  -      | top_issuers_mv    | P3 grid   | 1.1  | top-N heapsort > Hash Join > Hash Join > Index Scan using portfolio > Seq Scan > Seq Scan |    4114 |     0 |     8.268
+NOTICE:  -      | spread_change_1m  | P3 grid   | 4    | quicksort > Index Only Scan > Nested Loop > Merge Join > quicksort > Nested Loop > Nested Loop > Bitmap Heap Scan > Index Scan > Index Scan using spread_index_pkey > quicksort > Seq Scan > Nested Loop > Index Scan using spread_index_pkey |    8356 |     0 |     9.157
+NOTICE:  -      | spread_change_1m  | P3 grid   | 1.1  | quicksort > Index Only Scan > Nested Loop > Merge Join > quicksort > Nested Loop > Nested Loop > Index Only Scan using spread_index_pkey > Index Scan using spread_index_pkey > quicksort > Index Scan using portfolio > Nested Loop > Index Scan using spread_index_pkey |    4818 |     0 |     9.107
