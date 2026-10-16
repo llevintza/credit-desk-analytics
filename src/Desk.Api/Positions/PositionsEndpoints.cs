@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
+using Desk.Api.Lab;
 using Desk.Api.Limits;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
@@ -27,8 +28,10 @@ public static class PositionsEndpoints
 
         positions.MapPost("/query", QueryAsync)
             .WithName("QueryPositions")
-            .WithSummary("One block of the positions grid (columnar) plus the summary over all filtered rows. JSON, or MessagePack on Accept: application/x-msgpack.")
-            .Produces(StatusCodes.Status200OK, contentType: ColumnarSerializer.JsonContentType)
+            .WithSummary("One block of the positions grid (columnar) plus the summary over all filtered rows. JSON, or MessagePack on Accept: "
+                + $"{ColumnarSerializer.MsgPackContentType}, or row objects on Accept: {ColumnarSerializer.RowJsonContentType} (the Performance Lab's baseline).")
+            .Produces(StatusCodes.Status200OK, contentType: ColumnarSerializer.JsonContentType,
+                additionalContentTypes: [ColumnarSerializer.MsgPackContentType, ColumnarSerializer.RowJsonContentType])
             .Produces(StatusCodes.Status304NotModified)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
@@ -56,31 +59,44 @@ public static class PositionsEndpoints
             return resolved.Error;
         var query = resolved.Query!;
 
-        var msgpack = WantsMsgPack(http.Request);
-        var contentType = msgpack ? ColumnarSerializer.MsgPackContentType : ColumnarSerializer.JsonContentType;
+        var format = Negotiate(http.Request);
+        var contentType = format switch
+        {
+            Representation.MsgPack => ColumnarSerializer.MsgPackContentType,
+            Representation.RowJson => ColumnarSerializer.RowJsonContentType,
+            _ => ColumnarSerializer.JsonContentType,
+        };
         var hash = Hash(query.CanonicalKey);
         // The ETag changes with the data (reseed), the query and the representation: a 304 needs no database read.
-        var etag = $"W/\"{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{hash}:{(msgpack ? "mp" : "js")}\"";
+        var tag = format switch { Representation.MsgPack => "mp", Representation.RowJson => "rj", _ => "js" };
+        var etag = $"W/\"{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{hash}:{tag}\"";
         http.Response.Headers.Vary = HeaderNames.Accept;
         if (CachedResponse.TryHit(http, cache, etag, contentType, started) is { } hit)
             return hit;
 
         // Totals depend on the filter, not on paging or sort: the first block of a view computes them and every later
         // block of that view reads only its indexed page. The first view reads its page and its totals on two
-        // connections at once when a spare database permit is free (#241), else in one round trip on one.
+        // connections at once when a spare database permit is free (#241), else in one round trip on one. A lab run
+        // with the cache off (admin) computes them again and leaves the cached ones alone.
+        var bypass = LabSwitches.BypassCache(http);
         var summaryKey = $"sum:{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{Hash(query.SummaryKey)}";
-        cache.Cache.TryGetValue(summaryKey, out GridSummary? summary);
+        GridSummary? summary = null;
+        if (!bypass)
+            cache.Cache.TryGetValue(summaryKey, out summary);
         GridBlock block;
         using (var spare = summary is null ? permits.TryTakeSpare() : null) // released once both connections are back
             block = await grid.ReadBlockAsync(query, meta.Catalog, ct, summary, concurrentSummary: spare?.IsAcquired == true);
-        if (summary is null)
+        if (summary is null && !bypass)
             cache.Cache.Set(summaryKey, new GridSummary(block.RowCount, block.Summary),
                 new MemoryCacheEntryOptions { Size = 256 + 64 * block.Summary.Count, AbsoluteExpiration = meta.BatchEndsAt });
         var serializeStarted = Stopwatch.GetTimestamp();
         var generatedAt = time.GetUtcNow();
-        var bytes = msgpack
-            ? ColumnarSerializer.ToMsgPack(block, query.AsOf, generatedAt)
-            : ColumnarSerializer.ToJson(block, query.AsOf, generatedAt);
+        var bytes = format switch
+        {
+            Representation.MsgPack => ColumnarSerializer.ToMsgPack(block, query.AsOf, generatedAt),
+            Representation.RowJson => ColumnarSerializer.ToRowJson(block, query.AsOf, generatedAt),
+            _ => ColumnarSerializer.ToJson(block, query.AsOf, generatedAt),
+        };
         var serializeMs = Stopwatch.GetElapsedTime(serializeStarted).TotalMilliseconds;
         return CachedResponse.Store(http, cache, etag, bytes, contentType, meta.BatchEndsAt, block.DbMs, serializeMs, started, block.Rows);
     }
@@ -212,8 +228,19 @@ public static class PositionsEndpoints
             : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "No data loaded",
                 detail: "The database has not been seeded yet.");
 
-    internal static bool WantsMsgPack(HttpRequest request) =>
-        request.Headers.Accept.ToString().Contains(ColumnarSerializer.MsgPackContentType, StringComparison.OrdinalIgnoreCase);
+    /// <summary>The block's wire format, from <c>Accept</c> (ADR-0007): columnar JSON unless another one is asked for.</summary>
+    internal enum Representation { Json, MsgPack, RowJson }
+
+    internal static Representation Negotiate(HttpRequest request)
+    {
+        var accept = request.Headers.Accept.ToString();
+        if (accept.Contains(ColumnarSerializer.MsgPackContentType, StringComparison.OrdinalIgnoreCase))
+            return Representation.MsgPack;
+        // Row objects are the Performance Lab's baseline (README §6 P5), never the default.
+        return accept.Contains(ColumnarSerializer.RowJsonContentType, StringComparison.OrdinalIgnoreCase)
+            ? Representation.RowJson
+            : Representation.Json;
+    }
 
     /// <summary>README §8 observability: <c>Server-Timing</c> (db, serialize, total) and <c>X-Cache</c>.</summary>
     internal static void SetTiming(HttpContext http, string cache, double dbMs, double serializeMs, long started)
