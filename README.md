@@ -99,7 +99,7 @@ flowchart LR
   API -- "per-source queries in parallel" --> MKT & SURV & PRC & REF
 ```
 
-Rendered diagrams for readers without repo access: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png) (SVG sources alongside, in `docs/architecture/`).
+Rendered diagrams, for sharing outside GitHub: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png). The SVG sources sit alongside in `docs/architecture/`; re-render the PNGs after editing one with `node docs/architecture/render.mjs` (Playwright Chromium from `e2e/`, 2×).
 
 **Key decisions (each one gets an ADR, see §15):**
 
@@ -530,7 +530,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - per signed-in user concurrency: 1 request in flight, queue 8, then 429 (`RATE_LIMIT_PER_USER_CONCURRENCY` / `RATE_LIMIT_PER_USER_QUEUE`); exports are capped separately (below)
   - per signed-in user, insights source reads (`GET /api/insights/{source}`) in their own partition: 5 in flight, queue 15, then 429 (`RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY` / `RATE_LIMIT_PER_USER_INSIGHTS_QUEUE`), so the P3 board's five sources load in parallel (ADR-0005, #357)
   - **global concurrency limiter** on DB-bound endpoints: 8 concurrent, queue 32, then 429 with `Retry-After`
-- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows.
+- **Query guards:** command timeout 10 s; block ≤ 500 rows; ≤ 250 columns; CSV export ≤ 25,000 rows (`EXPORT_MAX_ROWS` may lower it, never raise it; over the cap, see §8 `X-Export-Truncated`).
 - **Exports:** 1 at a time per user and `EXPORT_GLOBAL_SLOTS` (2) in total, without waiting: 429 with `Retry-After`. Deadline `EXPORT_TIMEOUT_SECONDS` (60) on the whole stream: 503 before any output; mid-stream the connection is aborted, so a truncated download fails.
 - **Cache-first:** grid, aggregate and performance responses are cached until the next as-of date. A healthy demo session should hit Neon only on first views.
 - **Kill switch:** `MAINTENANCE_MODE=true` makes every `/api` call return 503 with a friendly message **without touching the database**. The login page shows a banner.
@@ -589,9 +589,10 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Response compression:** Brotli and gzip, on HTTPS too.
 - **Caching:** `IMemoryCache` with a size limit, keyed per the P1 rules, expiring at the next batch time (06:30 America/New_York), plus `ETag` / `If-None-Match`.
 - **Observability:**
-  - A `Server-Timing` header (db, serialize, total) on every data endpoint, and `X-Cache: HIT|MISS`.
+  - A `Server-Timing` header (db, serialize, total) on every data endpoint, and `X-Cache: HIT|MISS`. On the CSV export both are set before the first byte: `db` is the time to the first row, `ser` is 0 (rows are written as they stream), and `X-Cache` is always `MISS`.
   - Structured logs with request id.
   - The slowest 20 queries per day are visible on the admin page.
+- **CSV export truncation:** the export counts the matching rows up to one past its cap (`LIMIT cap + 1`, no sort) in the same round trip as the rows. When more rows match than the cap, it writes the cap's rows and sends `X-Export-Truncated: true` before the first byte; otherwise the header is absent.
 - **Static SPA:** `UseStaticFiles` + `MapFallbackToFile("index.html")`. Long-cache hashed assets, and `no-cache` for `index.html`.
 - **Same origin, so no CORS** is configured in production. In development the Angular dev server proxies `/api` to the API.
 
@@ -739,6 +740,8 @@ cd web && npm ci && npm start              # http://localhost:4200 (proxies /api
 
 The tools read `DATABASE_URL` (or `ConnectionStrings__<Source>`) from the environment. There's deliberately **no built-in default connection string**: credentials only ever come from `.env` locally, from CI configuration, or from the production secret. Both Npgsql keyword strings and `postgres://` URIs work. Creating accounts (`Desk.UserAdmin`) arrives in phase 2.
 
+- **Agent sessions and credentials:** never export a Neon or production connection string in a shell that runs an agent session (Claude Code, Cursor, Grok). The human exports only local compose values for a session; tests use Testcontainers (ADR-0020 OQ-12).
+
 Or the whole stack in containers: `docker compose up --build` gives the app on http://localhost:8080. Migrate and seed from the host as above; the app never migrates at startup.
 
 **`.env.example`** (key names only):
@@ -855,7 +858,8 @@ services:
 2. **web:**
    - `npm ci && npm run lint && npm test -- --watch=false --coverage && npm run build`
    - Vitest coverage via `@vitest/coverage-v8` (lcov + text-summary)
-   - the bundle budget is enforced by `angular.json` budgets
+   - `npm test` first runs `test:tooling`: `node --test` with `--experimental-test-coverage` over `web/scripts` and `web/eslint-rules` at **≥80% line and branch** (#317); the report prints in the web job log
+   - the README §10 bundle budget is enforced by `web/scripts/bundle-budget.mjs`, run by `npm run build` after `ng build`: the Brotli size (q1, in the API's 16 KB writes, #252) of the initial JS + CSS that `index.html` loads, plus every file those reach through a static `import`/`export … from` or CSS `@import`, followed transitively (#204, #259); exit 1 above 500 KB, and it fails closed when it can't measure (#145). The raw-size `angular.json` budgets remain a second guard
 3. **coverage:** job summary of line/branch % per project and the coverlet scope (exclusions); **diff coverage ≥ 80%** vs the merge-base with the PR base; **overall % must not drop** vs `perf/coverage-baseline.json` at BASE_SHA. **Precision and tolerance (#318):** the no-drop check compares the measured percentage at full precision (covered/total, unrounded) with the 1-decimal floor, and allows a dip of at most `baselineMatchTolerancePercent` (0.1pp; the gate rejects any value above 0.1) **in the drop direction only**: with a 98.8% floor, 98.74% passes and 98.6% fails. The committed baseline may never sit below the floor (no tolerance there). It must match measured within the same tolerance in either direction, compared at measured precision, so run-to-run jitter neither fails the gate nor forces a baseline edit, while a real improvement of more than 0.1pp (e.g. 98.92% vs a committed 98.8) still has to be committed. The tolerance applies to line and branch for both suites. The summary prints covered/total counts per suite. CI checks out BASE_SHA into `_base` (`fetch-depth: 0`, `persist-credentials: false`) and **always** runs **`_base/perf/coverage-gate.mjs`**. There is no HEAD fallback and no `_default` checkout. A BASE_SHA without the gate (retarget, stale base, deleted gate, rewound main) **fails closed** before `node` — bootstrap is closed after #5 (`741b19eb`); rebase onto main. Thresholds, tolerance, and the floor are read from BASE_SHA (`git show $BASE_SHA:…`), never from the PR head or the pushed commit. Exact JSON schema; NaN-safe comparisons (`!(actual >= floor)`); schema failures are written to the log and step summary. A PR that lowers a min, turns off `overallMustNotDrop`, or widens the tolerance fails. PRs whose base is not the default branch fail closed. `pull_request` `edited` re-runs the gate (retarget). Empty / zero / unknown `github.event.before` **fails closed**. On `push` to main, BASE_SHA is `github.event.before`; the gate runs from `_base` with `--default-dir _base --default-sha "$BASE_SHA"`; empty `--base-ref` is empty (not `"true"`); the retarget check runs only on `pull_request`. A baseline may be lowered **ONLY for a documented change in measurement scope**, never to absorb a real coverage drop. Any lowering must be its own `[workflows]` PR with `perf/coverage-override.json` `{from, to, reason}` (applied only when that file differs from BASE_SHA; checked against the BASE_SHA floor and measured numbers) and sign-off from Code Reviewer, Tech Coordinator and Helms. A PR may raise the committed baseline to match measured coverage. A missing base SHA, merge-base, or `git show`/`git diff` error **fails closed**. Changed `src/` or `web/src` files with no coverage data count as 0% toward the diff gate (never skipped). Thresholds live in `perf/coverage-thresholds.json`.
 4. **compose-smoke:** `docker compose up -d --build` and the same `/health` + `/` + `/api/me` checks the deploy smoke test runs
 5. **secrets:** gitleaks over the branch history (`--log-opts=HEAD`)
@@ -1016,18 +1020,18 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review); follow-up #207: every main push gets its own CI run, only the tip deploys (in review); follow-up #321: every workflow job pinned to `ubuntu-24.04` before `ubuntu-latest` moves to Ubuntu 26 (in review) |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (merged as #173, `e5e26dd`); follow-up #207: every main push gets its own CI run, only the tip deploys (merged as #234, `66d4c22`); follow-up #321: every workflow job pinned to `ubuntu-24.04` before `ubuntu-latest` moves to Ubuntu 26 (merged as #400, `46f69be`) |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
-| GitHub Pages deploy (`[workflows]`) | #350 | In review: `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024); needs the bearer-auth PR merged first |
+| GitHub Pages deploy (`[workflows]`) | #350 | Merged (`599d5d1`): `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024) |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
 | 1 Data | #6 | Merged |
-| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165, in review); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), in review; follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), in review; follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (in review); follow-up #230: 401 response-time floor (in review); follow-up #306: the floor measured on the compose stack (in review); follow-up #396: a session without an account id is refused with 401, never keyed on the client address (#361, in review) |
-| GitHub Pages front end + bearer auth | #349 | In review: Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow follows in its own `[workflows]` PR |
+| 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165 step a, merged as `57c7cc9`); follow-up #367: per-client login key behind Render's private hops (#165 step b, merged as `a856d45`); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), merged as #172 (`825315c`); follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), merged as #292 (`7b8557c`); follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (merged as #218, `7c43da4`); follow-up #230: 401 response-time floor (merged as #279, `09a5b01`); follow-up #306: the floor measured on the compose stack (merged as #340, `c01c678`); follow-up #361: rate-limit partitions and the export gate keyed on the account id (#185, merged as `69450fb`); follow-up #396: a session without an account id is refused with 401, never keyed on the client address (merged as `dc2762a`); follow-up #362: sign-in refused for an account with no role (#275, merged as `cde36d4`); follow-up #366: single-use refresh tokens, a replayed one ends the session (#353, merged as `5458c4d`) |
+| GitHub Pages front end + bearer auth | #349 | Merged (`f8db7c2`): Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow is #350 |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
-| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #137/#139/#155/#256/#257: budgets and e2e job hardening (`[workflows]`, in review); follow-up #252: the bundle budget measures Brotli as the API streams it (in review) |
+| 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #137/#139/#155/#256/#257: budgets and e2e job hardening (`[workflows]`, in review); follow-up #252: the bundle budget measures Brotli as the API streams it (merged as #347, `5a2c3c8`) |
 | 5 Fund Performance | #144 | Merged |
-| 6 Insights Board | #339 | Merged; follow-up #357: insights source reads get their own per-user limiter partition (5 in flight, queue 15) so the P3 e2e is green under #174's cap (in review; supersedes #364) |
-| 7 Deal Explorer | phase-7/deal-explorer | In review: `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
+| 6 Insights Board | #339 | Merged; follow-up #357: insights source reads get their own per-user limiter partition (5 in flight, queue 15) so the P3 e2e is green under #174's cap (merged as #382, `929dcea`; supersedes #364) |
+| 7 Deal Explorer | #363 | Merged (`09b8344`): `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
 | 9 Hardening | n/a | Not started |
 | 10 Intraday overlay (stretch) | n/a | Not started |

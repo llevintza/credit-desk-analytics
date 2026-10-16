@@ -17,7 +17,7 @@ Area file for `src/Desk.Data/` (EF Core DbContexts and migrations, Dapper query 
 
 - Migrations run **before** the new app version starts (README §14.2), so each one must be backward compatible with the running app: expand → deploy → contract (README §14.4).
 - Use the `ef-migration-safety` skill (or the `ef-migration` role) for any schema change.
-- A change to the seeded schema also needs a `SeedVersion` bump (`src/Desk.Seeder/AGENTS.md`); otherwise production keeps the old data.
+- Bump `SeedVersion` (`src/Desk.Seeder/AGENTS.md`) only when the shape of the seeded data changes: a generator change, or a seeded table or column added, dropped, renamed or retyped. A constraint- or index-only migration that the existing data satisfies (#286) needs no bump. Without a needed bump, production keeps the old data.
 - Never run DDL from the app at start-up.
 - Long-form guidance: [ef-postgres-migrations.md](../../docs/agents/guidelines/ef-postgres-migrations.md), [sql-dapper.md](../../docs/agents/guidelines/sql-dapper.md).
 

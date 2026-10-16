@@ -37,15 +37,32 @@ public sealed class GridRepository(IDataSourceRegistry sources)
         return new GridBlock(columns, rowCount, summary, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
     }
 
-    /// <summary>Streams the export rows (README §6 CSV export): the caller writes each row as it arrives.</summary>
-    public async IAsyncEnumerable<DbDataReader> StreamAsync(GridQuery query, IReadOnlyCollection<ColumnDef> catalog,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    /// <summary>
+    /// Opens the export (README §6 CSV export): the capped count and the first row are read here, so the caller can
+    /// set its headers (truncation, timing) before its first byte; the rest stream from <see cref="GridExport.RowsAsync"/>.
+    /// </summary>
+    /// <param name="query">The export query; its <see cref="GridQuery.Limit"/> is the row cap.</param>
+    public async Task<GridExport> OpenExportAsync(GridQuery query, IReadOnlyCollection<ColumnDef> catalog, CancellationToken ct)
     {
         var sql = GridSqlBuilder.BuildExport(query, catalog);
-        await using var conn = await sources.OpenAsync(ConnectionStrings.Core, ct);
-        await using var reader = await conn.ExecuteReaderAsync(Command(sql, ct, CommandFlags.None));
-        while (await reader.ReadAsync(ct))
-            yield return reader;
+        var started = Stopwatch.GetTimestamp();
+        var conn = await sources.OpenAsync(ConnectionStrings.Core, ct);
+        DbDataReader? reader = null;
+        try
+        {
+            reader = await conn.ExecuteReaderAsync(Command(sql, ct, CommandFlags.None));
+            await reader.ReadAsync(ct);
+            var truncated = reader.GetInt64(0) > query.Limit;
+            await reader.NextResultAsync(ct);
+            var hasRow = await reader.ReadAsync(ct);
+            return new GridExport(conn, reader, truncated, hasRow, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
+        catch
+        {
+            if (reader is not null) await reader.DisposeAsync();
+            await conn.DisposeAsync();
+            throw;
+        }
     }
 
     private static CommandDefinition Command(GridSql sql, CancellationToken ct, CommandFlags flags = CommandFlags.Buffered)

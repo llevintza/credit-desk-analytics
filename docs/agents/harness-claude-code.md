@@ -27,7 +27,7 @@ Not allowed (D3, D5): `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/`, 
 
 ## Permissions and hooks: `.claude/settings.json`
 
-Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claude/settings.json`). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical--cursorclijson-gen) plus the **rev 10 lease deny**:
+Target file: `.claude/settings.json` (arrives with the harness build PR). It is the rev 9 list from [`adapters.md`](adapters.md#permissions-mapping-claudesettingsjson-canonical--cursorclijson-gen) plus the **rev 10 lease deny**:
 
 | Block | Entries | Enforces |
 |---|---|---|
@@ -36,7 +36,7 @@ Draft file: `tree/.claude/settings.json` in the drafts folder (repo path `.claud
 | deny, bare push (1; H11) | `Bash(git push)` | Bare push; Claude only, D10-exempt |
 | deny, admin + HTTP (28) | repo settings, admin `gh api` paths, `gh secret`/`gh variable`, workflow/run writes, `Bash(*curl*)`, `Bash(*wget*)` | TC-only actions; curl/wget denied (H16) |
 | deny, flag-before-verb (14) | `Bash(gh -*)`, `Bash(gh pr -*)` … `Bash(gh api -*)` | gh canonical form (H16) |
-| **deny, lease (1; rev 10)** | `Bash(git push *--force-*)` | Never force-push incl. `--force-with-lease`/`--force-if-includes` (PR #107). `MIN_DENY` 71, re-verified for rev 10 (`r10-verify.txt`). |
+| **deny, lease (1; rev 10)** | `Bash(git push *--force-*)` | Never force-push incl. `--force-with-lease`/`--force-if-includes` (PR #107). `MIN_DENY` 71, re-verified for rev 10 (rev 10 *verify* evidence). |
 | ask (7) | `Edit(./**/AGENTS.md)`, `Edit(./**/CLAUDE.md)`, `Edit(./.claude/**)`, `Edit(./.cursor/**)`, `Edit(./.github/**)`, `Edit(./docs/agents/**)`, `Edit(./scripts/agents/**)` | Prompt before steering edits |
 | allow (6) | `dotnet build *`, `dotnet test *`, `npm run lint`, `npm test *`, `git status`, `git diff *` | Common reads/tests without prompts |
 | hooks | `PreToolUse` `Bash\|Shell\|Read\|Edit\|Write\|MultiEdit\|mcp__.*` → `node scripts/agents/hooks/guard.mjs`; `PostToolUse` `Edit\|Write\|MultiEdit` → `format.mjs`; `Stop` → `quick-test.mjs` | Guard (defense in depth), format, quick tests. **Rev 10:** the MCP part of the matcher (`mcp__.*` for Claude) is generated per adapter; UNVERIFIED until U22 |
