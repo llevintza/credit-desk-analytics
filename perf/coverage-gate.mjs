@@ -225,6 +225,25 @@ export function expectedPercent(measured, floor, tol) {
   return r < floor && meetsFloorWithin(measured, floor, tol) ? floor : r;
 }
 
+/**
+ * Headroom at today's totals (#227), from the gate's own predicates. `lose`: covered lines or branches that
+ * can go before the no-drop check fails (negative: how many must be won back). `gain`: how many more covered
+ * make the committed baseline lag measured by more than `tol`, so a bump is due (0: due now; null: never).
+ */
+export function coverageSlack(hit, total, floor, committed, tol) {
+  if (!(total > 0)) return { lose: 0, gain: null };
+  const at = (h) => (100 * h) / total;
+  let lose = 0;
+  if (meetsFloorWithin(at(hit), floor, tol)) {
+    while (lose < hit && meetsFloorWithin(at(hit - lose - 1), floor, tol)) lose++;
+  } else {
+    while (hit - lose < total && !meetsFloorWithin(at(hit - lose), floor, tol)) lose--;
+  }
+  let gain = 0;
+  while (hit + gain <= total && meetsFloor(committed + tol, at(hit + gain))) gain++;
+  return { lose, gain: hit + gain > total ? null : gain };
+}
+
 export function round1(n) {
   return Math.round(Number(n) * 10) / 10;
 }
@@ -426,7 +445,7 @@ export function runGate(options = {}) {
         continue;
       }
       say(
-        `| ${name} | ${pct(m.line)}% | ${pct(m.branch)}% | ${diffPct(d.line)} | ${diffPct(d.branch)} | ${pct(f.line)}% | ${pct(f.branch)}% |`,
+        `| ${name} | ${pct(m.line)}% (${m.lineHit}/${m.lineTotal}) | ${pct(m.branch)}% (${m.branchHit}/${m.branchTotal}) | ${diffPct(d.line)} | ${diffPct(d.branch)} | ${pct(f.line)}% | ${pct(f.branch)}% |`,
       );
     }
     say("");
@@ -440,8 +459,31 @@ export function runGate(options = {}) {
         `- ${name} measured: line ${m.lineHit}/${m.lineTotal} (${m.line.toFixed(3)}%), branch ${m.branchHit}/${m.branchTotal} (${m.branch.toFixed(3)}%).`,
       );
     }
-    say("");
     const tol = thresholds.baselineMatchTolerancePercent;
+    // #227: how close each measured suite sits to the floor, and to a due baseline bump. Informational only.
+    for (const name of suites) {
+      const m = measured[name];
+      const parts = ["line", "branch"].map((kind) => {
+        const hit = m[`${kind}Hit`];
+        const total = m[`${kind}Total`];
+        const floor = round1(overallFloor[name][kind]);
+        const c = round1(committed[name][kind]);
+        const { lose, gain } = coverageSlack(hit, total, floor, c, tol);
+        const loss =
+          lose >= 0
+            ? `can lose ${lose} of ${hit} covered before it fails the ${pct(floor)}% floor`
+            : `is ${-lose} covered short of the ${pct(floor)}% floor`;
+        const bump =
+          gain === null
+            ? "no gain can make a baseline bump due"
+            : gain === 0
+              ? `a baseline bump is due now (over ${pct(c + tol)}%)`
+              : `${gain} more covered make a baseline bump due (over ${pct(c + tol)}%)`;
+        return `${loss}; ${bump}`;
+      });
+      say(`- ${name} slack (at these totals, ${tol}pp tolerance): line ${parts[0]}. Branch ${parts[1]}.`);
+    }
+    say("");
     say(`gate-path: ${decisionPath}`);
     say(`Base SHA: \`${baseSha}\`. Merge-base: \`${mergeBase}\`. Default branch: \`${defaultBranch}\`${defaultSha ? ` (\`${defaultSha}\`)` : ""}.`);
     const src = `\`${gatePath}\` from \`_base\` at BASE_SHA (\`${baseSha}\`)`;
