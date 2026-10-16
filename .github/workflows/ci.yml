@@ -100,7 +100,7 @@ jobs:
       # ghcr.io image: the same index digest as zricethezav/gitleaks on Docker Hub, without its pull limit (#332).
       - name: gitleaks (full history of this SHA)
         run: >
-          docker run --rm -v "$PWD":/repo
+          docker run --rm -v "$PWD":/repo:ro
           ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git /repo --config /repo/.gitleaks.toml --redact --no-banner -v --log-opts=HEAD
 
@@ -118,12 +118,12 @@ jobs:
       # Image pin tracked in deploy/ci-images/actionlint/Dockerfile for Dependabot.
       - name: actionlint
         run: >
-          docker run --rm -v "$PWD":/repo -w /repo
+          docker run --rm -v "$PWD":/repo:ro -w /repo
           rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
       # Image pin tracked in deploy/ci-images/shellcheck/Dockerfile for Dependabot.
       - name: shellcheck
         run: >
-          docker run --rm -v "$PWD":/repo -w /repo
+          docker run --rm -v "$PWD":/repo:ro -w /repo
           koalaman/shellcheck:stable@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
           --severity=warning
           deploy/start.sh perf/pipefail-demo.sh perf/ci-image-mirrors.sh
@@ -361,6 +361,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: CI/Deploy concurrency wiring tests (#207)
         run: node --test .github/scripts/concurrency-wiring.test.mjs
+      - name: Workflow hardening tests (#137, #139, #155, #256, #257)
+        run: node --test .github/scripts/workflow-hardening.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
@@ -383,7 +385,7 @@ jobs:
       - name: Generate a throwaway local password (never stored)
         run: |
           pw=$(openssl rand -hex 16)
-          echo "::add-mask::$pw"
+          echo "::add-mask::${pw//%/%25}"
           echo "POSTGRES_PASSWORD=$pw" > .env
       - env:
           APP_VERSION: ${{ github.sha }}
@@ -423,6 +425,9 @@ jobs:
     permissions:
       contents: read
     needs: [changes, api, web]
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
     if: >-
       ${{ !cancelled()
       && needs.changes.outputs.run_budgets != 'false'
@@ -441,7 +446,7 @@ jobs:
       - name: Generate a throwaway local password (never stored)
         run: |
           pw=$(openssl rand -hex 16)
-          echo "::add-mask::$pw"
+          echo "::add-mask::${pw//%/%25}"
           echo "POSTGRES_PASSWORD=$pw" > .env
       # k6 is one user sending hundreds of requests a minute (#135). The per-user limit is raised for this run's app
       # only, in a compose override under RUNNER_TEMP; render.yaml and the production defaults don't change.
@@ -461,20 +466,24 @@ jobs:
         run: |
           set -a; . ./.env; set +a
           export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
-          for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U desk -d creditdesk && break; sleep 2; done
           dbtools/efbundle
           dbtools/seeder/Desk.Seeder --force --scale 1.0
+      # Built here, outside the password capture, so restore/build output and errors stay visible (#137).
+      - name: Build the UserAdmin CLI (no secrets; output visible)
+        run: dotnet build -c Release src/Desk.UserAdmin --nologo
       - name: Payload budgets and the 18k+ last block
         run: |
           set -a; . ./.env; set +a
           export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
           # A throwaway viewer for this run; the CLI prints its generated password once, captured and masked here.
-          out=$(dotnet run -c Release --project src/Desk.UserAdmin -- add --email budgets@example.com --role viewer --expires 2099-12-31)
+          # stdout only is captured; stderr never carries the password and stays visible.
+          out=$(dotnet run -c Release --no-build --project src/Desk.UserAdmin -- add --email budgets@example.com --role viewer --expires 2099-12-31)
           DESK_PASSWORD=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
-          test -n "$DESK_PASSWORD" # fail loudly if the CLI's output format changes
-          echo "::add-mask::$DESK_PASSWORD"
+          unset out
+          if [ -z "$DESK_PASSWORD" ]; then echo "::error::Desk.UserAdmin printed no password line"; exit 1; fi
+          echo "::add-mask::${DESK_PASSWORD//%/%25}"
           echo "DESK_PASSWORD=$DESK_PASSWORD" >> "$GITHUB_ENV" # for the k6 step
-          for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
+          ok=; for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && { ok=1; break; }; sleep 2; done; [ -n "$ok" ] || { echo "::error::app /health never came up"; exit 1; }
           BASE_URL=http://localhost:8080 DESK_EMAIL=budgets@example.com DESK_PASSWORD="$DESK_PASSWORD" \
             node perf/payload-size.mjs | tee -a "$GITHUB_STEP_SUMMARY"
           # #43 AC4: exits 1 on any mismatch (pipefail keeps that through tee).
@@ -486,14 +495,18 @@ jobs:
       # check fails this step (k6 exits non-zero) and is marked OVER, but the job carries on. #87 removes
       # continue-on-error so that a breach fails the job.
       - name: API latency p95 (k6)
+        id: k6
         continue-on-error: true
         env:
           DESK_EMAIL: budgets@example.com
         run: |
           rc=0
+          # Only this directory goes into the container, never all of RUNNER_TEMP: it holds the runner's
+          # file commands (GITHUB_ENV, GITHUB_PATH), which a container must not write (#257).
+          mkdir -p "$RUNNER_TEMP/k6"
           # Image pin tracked in deploy/ci-images/k6/Dockerfile for Dependabot. Grafana's own ghcr.io image:
           # the same index digest as grafana/k6 on Docker Hub (#332).
-          docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP":/out \
+          docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP/k6":/out \
             -e BASE_URL=http://localhost:8080 -e DESK_EMAIL -e DESK_PASSWORD \
             ghcr.io/grafana/k6:1.3.0@sha256:3ddc8b1a33a2c3d8edc6e99b6a762ae36cba08788463458f5e6a7703e14eb77d \
             run --quiet --summary-export /out/k6.json - < perf/positions.js || rc=$?
@@ -502,7 +515,7 @@ jobs:
             echo
             echo "| Scenario | p50 ms | p95 ms | max ms | Budget p95 ms | Result |"
             echo "|---|---:|---:|---:|---:|---|"
-            if [ -s "$RUNNER_TEMP/k6.json" ]; then
+            if [ -s "$RUNNER_TEMP/k6/k6.json" ]; then
               jq -r '.metrics as $m
                 | ["MISS, Risk preset, whole book", "http_req_duration{scenario:miss}", 150],
                   ["HIT, Risk preset", "http_req_duration{scenario:hit}", 15],
@@ -512,21 +525,30 @@ jobs:
                 | def ms: if . == null then "n/a" else (. * 10 | round / 10 | tostring) end;
                   "| \($label) | \($t["p(50)"] | ms) | \($t["p(95)"] | ms) | \($t.max | ms) | \($budget) | \(
                     if $t["p(95)"] == null then "no data" elif $t["p(95)"] < $budget then "ok" else "OVER" end) |"' \
-                "$RUNNER_TEMP/k6.json"
+                "$RUNNER_TEMP/k6/k6.json"
               echo
               jq -r '.metrics.checks | "Checks: \(.passes) passed, \(.fails) failed (HIT asserts X-Cache: HIT; MISS asserts X-Cache: MISS and the whole book; the book is ≥ 19,000 rows)."' \
-                "$RUNNER_TEMP/k6.json"
+                "$RUNNER_TEMP/k6/k6.json"
             else
               echo "| k6 produced no summary | | | | | FAIL |"
             fi
             echo
-            echo "k6 exit code: $rc (non-zero: a threshold was crossed or a check failed). Non-blocking until #87."
+            if [ "$rc" -eq 0 ]; then
+              echo "k6 exit code: 0. Non-blocking until #87."
+            elif [ "$rc" -eq 99 ]; then
+              echo "k6 exit code: 99 (a threshold was crossed or a check failed). Non-blocking until #87."
+            else
+              echo "k6 exit code: $rc (k6 did not complete: 104 config, 107 script exception, 108 abort). Non-blocking until #87."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::k6 p95 budgets: a threshold was crossed or a check failed (exit $rc). See the step summary."
+          if [ "$rc" -eq 99 ]; then
+            echo "::error::k6 p95 budgets: a threshold was crossed or a check failed (exit 99). See the step summary."
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::k6 did not complete (exit $rc: config, script or setup error). See the compose logs below."
           fi
           exit "$rc"
-      - if: failure()
+      # continue-on-error keeps the job green on a k6 failure, so check the step's own outcome too.
+      - if: failure() || steps.k6.outcome == 'failure'
         run: docker compose logs
 
   e2e:
@@ -555,22 +577,26 @@ jobs:
       - name: Generate a throwaway local password (never stored)
         run: |
           pw=$(openssl rand -hex 16)
-          echo "::add-mask::$pw"
+          echo "::add-mask::${pw//%/%25}"
           echo "POSTGRES_PASSWORD=$pw" > .env
       - env:
           APP_VERSION: ${{ github.sha }}
         run: docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml up -d --build
+      # Built here, outside the password capture, so restore/build output and errors stay visible (#137).
+      - name: Build the UserAdmin CLI (no secrets; output visible)
+        run: dotnet build -c Release src/Desk.UserAdmin --nologo
       - name: Migrate, seed (scale 0.2) and create a throwaway viewer
         run: |
           set -a; . ./.env; set +a
           export DATABASE_URL="Host=localhost;Port=5432;Database=creditdesk;Username=desk;Password=$POSTGRES_PASSWORD"
-          for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U desk -d creditdesk && break; sleep 2; done
           dbtools/efbundle
           dbtools/seeder/Desk.Seeder --force --scale 0.2
-          out=$(dotnet run -c Release --project src/Desk.UserAdmin -- add --email e2e@example.com --role viewer --expires 2099-12-31)
+          # stdout only is captured; stderr never carries the password and stays visible.
+          out=$(dotnet run -c Release --no-build --project src/Desk.UserAdmin -- add --email e2e@example.com --role viewer --expires 2099-12-31)
           pw=$(printf '%s\n' "$out" | sed -n 's/^Password (shown once, share it out of band): //p')
-          test -n "$pw" # fail loudly if the CLI's output format changes
-          echo "::add-mask::$pw"
+          unset out
+          if [ -z "$pw" ]; then echo "::error::Desk.UserAdmin printed no password line"; exit 1; fi
+          echo "::add-mask::${pw//%/%25}"
           echo "DESK_PASSWORD=$pw" >> "$GITHUB_ENV"
       - name: Install Playwright
         working-directory: e2e
@@ -583,16 +609,18 @@ jobs:
           BASE_URL: http://localhost:8080
           DESK_EMAIL: e2e@example.com
         run: |
-          for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && break; sleep 2; done
+          ok=; for _ in $(seq 1 60); do curl -fsS --max-time 5 localhost:8080/health >/dev/null && { ok=1; break; }; sleep 2; done; [ -n "$ok" ] || { echo "::error::app /health never came up"; exit 1; }
           npx playwright test
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-report
+          # The repo is public, so the artifact is world-readable (#155). The raw per-test output directory stays
+          # out; the login setup records no trace (playwright.config.ts). Short retention bounds the report's traces.
           path: |
             e2e/playwright-report
-            e2e/test-results
             docs/screenshots
+          retention-days: 3
           if-no-files-found: ignore
       - if: failure()
         run: docker compose logs
