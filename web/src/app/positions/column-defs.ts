@@ -30,7 +30,7 @@ export function heat(value: unknown, base: unknown): Record<string, string> | nu
  * weighs prices by |MV| is labelled that way. Per-leg (long/short) totals are out of scope (#459).
  */
 export function totalLabel(catalog: readonly CatalogColumn[]): string {
-  return catalog.some((c) => c.aggregation === 'WeightedByCurrentFace') ? 'Total · px face-wtd · avgs |MV|-wtd' : 'Total · avgs |MV|-wtd';
+  return catalog.some((c) => c.aggregation === 'WeightedByCurrentFace') ? 'Total · face/|MV|-wtd' : 'Total · avgs |MV|-wtd';
 }
 
 export function totalNote(aggregation: Aggregation): string | null {

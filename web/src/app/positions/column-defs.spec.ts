@@ -65,7 +65,7 @@ describe('columnDefs', () => {
   });
 
   it('labels the Total row: SUM columns are net, prices are face-weighted, other averages are |MV|-weighted (#191, #459)', () => {
-    expect(totalLabel(catalog)).toBe('Total · px face-wtd · avgs |MV|-wtd');
+    expect(totalLabel(catalog)).toBe('Total · face/|MV|-wtd');
     // A catalog that still weighs prices by |MV| (before the catalog update) is labelled that way.
     expect(totalLabel(catalog.map((c) => (c.aggregation === 'WeightedByCurrentFace' ? { ...c, aggregation: 'WeightedByMarketValue' } : c)))).toBe('Total · avgs |MV|-wtd');
     expect(totalLabel([])).toBe('Total · avgs |MV|-wtd');

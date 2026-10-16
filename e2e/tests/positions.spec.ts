@@ -17,7 +17,7 @@ test.describe('P1 positions (README §6 acceptance)', () => {
 
     // The summary row is pinned to the bottom; its label sits in the pinned-left identity column and says prices are
     // face-weighted and the other averages gross |MV|-weighted (#191, #459; a freshly seeded catalog).
-    await expect(page.locator('.summary-row').getByText('Total · px face-wtd · avgs |MV|-wtd', { exact: true })).toBeVisible();
+    await expect(page.locator('.summary-row').getByText('Total · face/|MV|-wtd', { exact: true })).toBeVisible();
     await expect(page.locator('.summary-row .wavg').first()).toBeVisible(); // Risk shows weighted columns
     expect(errors).toEqual([]);
   });
