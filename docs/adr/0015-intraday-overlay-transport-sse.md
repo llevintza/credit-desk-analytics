@@ -50,14 +50,14 @@ What the numbers say:
 
 | Measure | Value |
 |---|---|
-| Time to `hello` (connect, auth, universe read) | 225.3 ms cold; 82.3 ms on the reconnect (universe cached) |
-| Body bytes per minute | 139.0 KB (matches the harness's SSE row) |
-| Marks per minute | 1,031, including 100 on connect |
-| Live mark latency p50 / p95 / max | −6 / 6 / 28 ms. The API runs in the colima VM, whose clock is a few ms off the host's, hence the negative p50 |
+| Time to `hello` (connect, auth, universe read) | 129.0 ms on a just-restarted API (meta and universe both cold); 39.6 ms on the reconnect (cached) |
+| Body bytes per minute | 133.6 KB (the harness's SSE row: 137.5 KB down, headers included) |
+| Marks per minute | 991, including 100 on connect |
+| Live mark latency p50 / p95 / max | −1 / 6 / 8 ms. The API runs in the colima VM, whose clock is a few ms off the host's, hence the negative p50 |
 | Marks at or below their bond's last seq | **0** |
-| Reconnect with `lastEventId`: marks replayed / stale among them | 93 / **0** (only bonds that changed in the gap) |
-| Overlay totals server time, MISS p50 / p95 (whole book, 20,001 positions) | 42.3 / 83.5 ms |
-| Overlay totals server time, HIT p50 / p95 | 0.1 / 0.6 ms |
+| Reconnect with `lastEventId`: marks replayed / stale among them | 70 / **0** (only bonds that changed in the gap) |
+| Overlay totals server time, MISS p50 / p95 (whole book, 20,001 positions) | 32.2 / 64.4 ms |
+| Overlay totals server time, HIT p50 / p95 | 0.1 / 0.2 ms |
 
 **Free tier, by construction.** These bounds are pinned by tests rather than measured:
 
@@ -66,7 +66,7 @@ What the numbers say:
 - **So an abandoned tab keeps traffic going for at most about 10 minutes** after the last input: 5 minutes idle plus at most one 5-minute stream. Then Render's own idle timer runs. The totals refresh stops with the stream.
 - **The stream never touches the database while streaming.** Its one read, the scoped universe, is cached until the next batch, so a live stream doesn't keep Neon awake. Only the totals refresh does, at most once per 15 s window per view, and only while the overlay is live.
 
-**How to reproduce:** Apple M5, 32 GB, macOS 27; the API in colima Docker; data `SEED=42 --scale 1.0`, as-of 2026-10-15.
+**How to reproduce:** Apple M5, 32 GB, macOS 27; the API in colima Docker; data `SEED=42 --scale 1.0`, as-of 2026-10-15. The machine was shared with other workers' stacks (load average 12–25), so the absolute times carry noise; the ratios between transports don't depend on it.
 
 ```
 dotnet run -c Release --project perf/MarksTransport -- --clients 50 --seconds 60 --token-bytes 1115
@@ -82,22 +82,22 @@ MarksTransport: 50 clients × 60 s per transport, 100 bonds, 1 s ticks, bearer t
 ```
 
 ```
-# local compose stack (docker compose -p <name> … up --build), migrated and seeded --scale 1.0, a throwaway viewer from Desk.UserAdmin
+# local compose stack (docker compose -p <name> … up --build, app restarted just before), migrated and seeded --scale 1.0, a throwaway viewer from Desk.UserAdmin
 BASE_URL=http://localhost:<port> DESK_EMAIL=… DESK_PASSWORD=… node perf/marks-stream.mjs 60
 
 Mark stream, 60 s, 100 bonds, 1000 ms ticks; access token 1115 chars
 
 | Measure | Value |
 |---|---|
-| Time to hello (connect, auth, universe) | 225.3 ms |
-| Body bytes per minute | 139.0 KB |
-| Marks per minute | 1031 (incl. 100 on connect) |
-| Live mark latency p50 / p95 / max | -6 / 6 / 28 ms |
+| Time to hello (connect, auth, universe) | 129.0 ms |
+| Body bytes per minute | 133.6 KB |
+| Marks per minute | 991 (incl. 100 on connect) |
+| Live mark latency p50 / p95 / max | -1 / 6 / 8 ms |
 | Marks at or below their bond's last seq | 0 |
-| Reconnect with lastEventId: time to hello | 82.3 ms |
-| Reconnect: marks replayed / stale among them | 93 / 0 |
-| Overlay totals server time, MISS p50 / p95 (n=20) | 42.3 / 83.5 ms |
-| Overlay totals server time, HIT p50 / p95 (n=20) | 0.1 / 0.6 ms |
+| Reconnect with lastEventId: time to hello | 39.6 ms |
+| Reconnect: marks replayed / stale among them | 70 / 0 |
+| Overlay totals server time, MISS p50 / p95 (n=20) | 32.2 / 64.4 ms |
+| Overlay totals server time, HIT p50 / p95 (n=20) | 0.1 / 0.2 ms |
 ```
 
 ## Decision
@@ -114,7 +114,7 @@ Mark stream, 60 s, 100 bonds, 1000 ms ticks; access token 1115 chars
 ## Consequences
 
 - **Easier.** Auth, refresh, logout, entitlements, rate limits and audit apply to the stream exactly as to every other `/api` call. Nothing needs a second credential path. The pipeline checks the session when the stream opens, so a logout or an expired account ends the overlay within one stream lifetime (at most 5 minutes). That is the same window a copied access token already has (ADR-0024). A stale mark can't reach the screen: the server never replays at or below `lastEventId`, and the client drops anything at or below its bond's last `seq`, both tested.
-- **Harder.** We own reconnect and resume, which `EventSource` would have given us; that is `MarksOverlay`, unit-tested. `HttpClient` hands over the body as one growing string. The 5-minute lifetime bounds it: about 140 KB a minute, so about 700 KB at most per stream.
+- **Harder.** We own reconnect and resume, which `EventSource` would have given us; that is `MarksOverlay`, unit-tested. `HttpClient` hands over the body as one growing string. The 5-minute lifetime bounds it: about 135 KB a minute, so about 700 KB at most per stream.
 - **Over HTTP/1.1** the stream holds one of the browser's six connections to the API origin. Locally that is 1 of 6; behind an HTTP/2 edge it is one multiplexed stream.
 - **The overlay moves quotes, not valuations.** Only `price` and `spread_bp` are marked. Market value, P&L, risk and the weights stay at the overnight batch. Filters and sorts run on the overnight values, like the rest of the grid.
 - **SSE costs about a third more bytes than WebSocket frames.** `text/event-stream` isn't in the response-compression MIME list. Compressing it would need a flush per event, so we left it out. Revisit if the overlay ever streams many more bonds.
