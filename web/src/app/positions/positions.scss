@@ -11,3 +11,8 @@
 // A gross |MV|-weighted average in the Total row (#191): the dotted underline marks the tooltip that says so.
 :host ::ng-deep .summary-row .wavg { text-decoration: underline dotted; text-underline-offset: 3px; }
 :host ::ng-deep .num, :host ::ng-deep .ag-header-cell { font-variant-numeric: tabular-nums; }
+// P6 intraday overlay (README §6 P6): the toggle shows its state, and the status line says whether marks flow.
+.live-toggle[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
+.live-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.live-status[data-status='live'] { color: var(--accent); }
+.live-status[data-status='error'] { color: var(--down); }

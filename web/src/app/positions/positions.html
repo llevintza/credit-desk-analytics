@@ -13,6 +13,13 @@
   }
   <input #quick class="quick" data-testid="quick-filter" type="search" placeholder="Quick filter  ( / )"
          aria-label="Quick filter (press / to focus)" (input)="onQuickInput($event)" />
+  <button type="button" data-testid="live-marks" class="live-toggle" [attr.aria-pressed]="overlay.enabled" [disabled]="!scope.isLatest()"
+          (click)="toggleOverlay()" title="Intraday marks on price and spread (latest as-of only; pauses when you're idle)">
+    Live marks
+  </button>
+  @if (overlay.status() !== 'off') {
+    <span class="live-status" data-testid="live-status" role="status" [attr.data-status]="overlay.status()">{{ liveLabel() }}</span>
+  }
   <span class="spacer"></span>
   @if (query.loading()) { <span class="muted" role="status">Loading…</span> }
   <button type="button" data-testid="export" (click)="exportCsv()" [disabled]="exporting()" aria-label="Export CSV (Ctrl+Shift+E)">

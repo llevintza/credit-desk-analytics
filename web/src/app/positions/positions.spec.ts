@@ -1,6 +1,6 @@
 import { Component, input, output } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { HttpEventType, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { AgGridAngular } from 'ag-grid-angular';
 import { throwError } from 'rxjs';
@@ -10,6 +10,7 @@ import { StatusService } from '../core/status.service';
 import { ThemeService } from '../core/theme.service';
 import { CatalogColumn, Preset } from '../data-access/api.types';
 import { DeskApi } from '../data-access/desk-api';
+import { MarksOverlay } from './marks-overlay';
 import { PositionsQuery } from './positions-query';
 import { Positions, firstRowsMark } from './positions';
 
@@ -50,6 +51,9 @@ function fakeGrid() {
     getDisplayedRowAtIndex: vi.fn((): unknown => ({ data: { dv01: 512.3 } })),
     getColumnState: vi.fn(() => [{ colId: 'dv01', hide: false }]),
     getFilterModel: vi.fn(() => ({})),
+    getRowNode: vi.fn<(id: string) => unknown>(() => undefined),
+    getPinnedBottomRow: vi.fn((): unknown => ({ id: 'total' })),
+    flashCells: vi.fn(),
   };
 }
 
@@ -222,6 +226,90 @@ describe('Positions page', () => {
     TestBed.inject(ThemeService).negatives.set('parens');
     await fixture.whenStable();
     expect(grid.refreshCells).toHaveBeenCalledWith({ force: true });
+  });
+
+  it('live marks: requests bond_id, puts each new mark on its rows, flashes them and the server totals, and stops off the latest as-of', async () => {
+    const { fixture, el, http, grid, query, ready } = await render();
+    await ready();
+    grid.getAllDisplayedColumns.mockReturnValue(['deal_name', 'price'].map((id) => ({ getColId: () => id })));
+    query.update({ columns: ['deal_name', 'price'] });
+    const overlay = fixture.debugElement.injector.get(MarksOverlay);
+    expect(overlay.totalsRequest()).toEqual(query.exportRequest()); // price is shown: totals are worth asking for
+    const toggle = el.querySelector('[data-testid=live-marks]') as HTMLButtonElement;
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    toggle.click();
+    await fixture.whenStable();
+    expect(query.view.overlay).toBe(true);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    const stream = http.expectOne((r) => r.url === '/api/marks/stream');
+
+    // A block loads: its rows carry bond_id and are remembered under it.
+    const success = vi.fn();
+    query.datasource.getRows({ startRow: 0, endRow: 200, sortModel: [], filterModel: {}, successCallback: success, failCallback: vi.fn() } as never);
+    const block = http.expectOne('/api/positions/query');
+    expect(block.request.body.columns).toEqual(['deal_name', 'price', 'bond_id']);
+    block.flush({ columns: ['position_id', 'bond_id', 'price'], data: [[1, 2], [7, 8], [99, 98]], rowCount: 2, summary: { price: 98.5 }, asOf: 'x', generatedAt: 'x' });
+    expect(success.mock.calls[0][0]).toEqual([{ position_id: 1, bond_id: 7, price: 99 }, { position_id: 2, bond_id: 8, price: 98 }]);
+
+    // A mark for bond 7 lands on row 1 as a new row object, and its price cell flashes.
+    const node = { data: { position_id: 1, bond_id: 7, price: 99 }, updateData: vi.fn() };
+    grid.getRowNode.mockImplementation((id: string) => (id === '1' ? node : undefined));
+    stream.event({ type: HttpEventType.DownloadProgress, loaded: 1, partialText:
+      'event: hello\ndata: {"asOf":"2026-10-06","bonds":2,"tickMs":1000,"endsAt":"x","seq":5}\n\n' +
+      'event: mark\ndata: {"bondId":7,"seq":5,"eventTs":"t","price":100.5,"spreadBp":200}\n\n' +
+      'event: mark\ndata: {"bondId":9,"seq":5,"eventTs":"t","price":90,"spreadBp":null}\n\n' });
+    await fixture.whenStable();
+    expect(node.updateData).toHaveBeenCalledWith({ position_id: 1, bond_id: 7, price: 100.5 });
+    expect(grid.flashCells).toHaveBeenCalledWith({ rowNodes: [node], columns: ['price'] });
+    expect(el.querySelector('[data-testid=live-status]')?.textContent).toContain('Live · 2 bonds');
+
+    // A block loaded after the mark shows it straight away.
+    query.datasource.getRows({ startRow: 200, endRow: 400, sortModel: [], filterModel: {}, successCallback: success, failCallback: vi.fn() } as never);
+    http.expectOne('/api/positions/query').flush({ columns: ['position_id', 'bond_id', 'price'], data: [[3], [7], [99]], rowCount: 3, summary: {}, asOf: 'x', generatedAt: 'x' });
+    expect(success.mock.calls[1][0]).toEqual([{ position_id: 3, bond_id: 7, price: 100.5 }]);
+
+    // Server totals replace the block's marked totals on the pinned row, and flash there.
+    grid.flashCells.mockClear();
+    overlay.totals.set({ asOf: '2026-10-06', seq: 30, eventTs: 't', rowCount: 2, summary: { price: 99.9 } });
+    await fixture.whenStable();
+    expect(grid.setGridOption).toHaveBeenLastCalledWith('pinnedBottomRowData', [expect.objectContaining({ price: 99.9 })]);
+    expect(grid.flashCells).toHaveBeenCalledWith({ rowNodes: [{ id: 'total' }], columns: ['price'] });
+
+    // Without a marked column on screen there is nothing to flash, nor any totals to ask for.
+    grid.flashCells.mockClear();
+    grid.getAllDisplayedColumns.mockReturnValue(['deal_name'].map((id) => ({ getColId: () => id })));
+    query.update({ columns: ['deal_name'] });
+    expect(overlay.totalsRequest()).toBeNull();
+    overlay.totals.set({ asOf: '2026-10-06', seq: 45, eventTs: 't', rowCount: 2, summary: { price: 99.8 } });
+    await fixture.whenStable();
+    expect(grid.flashCells).not.toHaveBeenCalled();
+
+    // A portfolio change restarts the stream for the new scope; an older as-of turns the overlay off.
+    TestBed.inject(ScopeService).selected.set([3]);
+    await fixture.whenStable();
+    expect(http.expectOne((r) => r.url === '/api/marks/stream').request.params.get('portfolioIds')).toBe('3');
+    TestBed.inject(ScopeService).asOf.set('2026-10-05');
+    await fixture.whenStable();
+    expect(overlay.status()).toBe('off');
+    expect(query.view.overlay).toBe(false);
+    expect(toggle.disabled).toBe(true);
+    expect(el.querySelector('[data-testid=live-status]')).toBeNull();
+  });
+
+  it('live marks: turning it off closes the stream and drops bond_id', async () => {
+    const { fixture, el, http, query, ready } = await render();
+    await ready();
+    const toggle = el.querySelector('[data-testid=live-marks]') as HTMLButtonElement;
+    toggle.click();
+    await fixture.whenStable();
+    const stream = http.expectOne((r) => r.url === '/api/marks/stream');
+    toggle.click();
+    await fixture.whenStable();
+    expect(stream.cancelled).toBe(true);
+    expect(query.view.overlay).toBe(false);
+    expect(query.request(query.view, 0, 1).columns).not.toContain('bond_id');
+    expect(fixture.debugElement.injector.get(MarksOverlay).status()).toBe('off');
   });
 
   it('shows loading and block errors from the query', async () => {

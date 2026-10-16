@@ -1,6 +1,6 @@
 import {
   CellStyleModule, ClientSideRowModelModule, ColumnApiModule, ColumnAutoSizeModule, DateFilterModule,
-  EventApiModule, InfiniteRowModelModule, ModuleRegistry, NumberFilterModule, PinnedRowModule, RenderApiModule,
+  EventApiModule, HighlightChangesModule, InfiniteRowModelModule, ModuleRegistry, NumberFilterModule, PinnedRowModule, RenderApiModule,
   RowApiModule, RowStyleModule, ScrollApiModule, TextFilterModule, TooltipModule, ValidationModule, themeQuartz,
   type Module,
 } from 'ag-grid-community';
@@ -14,7 +14,7 @@ export function gridModules(dev: boolean): Module[] {
   return [
     InfiniteRowModelModule, ClientSideRowModelModule, ColumnApiModule, RowApiModule, ScrollApiModule, RenderApiModule, EventApiModule,
     TextFilterModule, NumberFilterModule, DateFilterModule, TooltipModule, PinnedRowModule, CellStyleModule,
-    RowStyleModule, ColumnAutoSizeModule,
+    RowStyleModule, ColumnAutoSizeModule, HighlightChangesModule, // flashCells for the intraday overlay (README §6 P6)
     ...(dev ? [ValidationModule] : []),
   ];
 }
@@ -44,4 +44,6 @@ export const deskGridTheme = themeQuartz.withParams({
   headerHeight: 28,
   spacing: 4,
   wrapperBorderRadius: 0,
+  // A changed mark flashes in the accent colour (README §6 P6), readable on both themes.
+  valueChangeValueHighlightBackgroundColor: 'color-mix(in srgb, var(--accent) 35%, transparent)',
 });
