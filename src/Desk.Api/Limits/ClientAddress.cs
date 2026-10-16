@@ -84,9 +84,12 @@ public sealed class ClientAddress(bool behindProxy, IPNetwork[]? trustedHops = n
     /// </summary>
     public const int MinIPv4Prefix = 8, MinIPv6Prefix = 32;
 
+    private static readonly byte[] MappedBlock = IPAddress.Parse("::ffff:0.0.0.0").GetAddressBytes();
+
     /// <summary>
     /// Parses <c>CLIENT_ADDRESS_TRUSTED_HOPS</c>, and stops start-up on an entry that isn't a CIDR (a typo would trust
-    /// less than meant, silently) or is wider than <see cref="MinIPv4Prefix"/> / <see cref="MinIPv6Prefix"/>. The
+    /// less than meant, silently), is wider than <see cref="MinIPv4Prefix"/> / <see cref="MinIPv6Prefix"/>, or is
+    /// IPv4-mapped IPv6 (it would never match). The
     /// message names only the offending entry: the value isn't secret, and nothing else from configuration is shown.
     /// </summary>
     internal static IPNetwork[] ParseNetworks(string? value) =>
@@ -103,7 +106,25 @@ public sealed class ClientAddress(bool behindProxy, IPNetwork[]? trustedHops = n
         if (network.PrefixLength < min)
             throw new InvalidOperationException(
                 $"{TrustedHopsKey}: '{entry}' is wider than /{min}, the widest trusted hop allowed; list only the proxy's own range.");
+        // In() compares IPv4-mapped addresses as IPv4, so a range in (or holding) ::ffff:0:0/96 would never match.
+        if (OverlapsMappedBlock(network))
+            throw new InvalidOperationException(
+                $"{TrustedHopsKey}: '{entry}' is an IPv4-mapped IPv6 range, which never matches; use the IPv4 form.");
         return network;
+    }
+
+    // ::ffff:0:0/96 and the range share their first min(prefix, 96) bits. Not IPNetwork.Contains: it reports an
+    // IPv4-mapped address as inside unrelated IPv6 ranges (2001:db8::/32 among them), so it can't test for the block.
+    private static bool OverlapsMappedBlock(IPNetwork network)
+    {
+        if (network.BaseAddress.AddressFamily != AddressFamily.InterNetworkV6)
+            return false;
+        var bytes = network.BaseAddress.GetAddressBytes();
+        var bits = Math.Min(network.PrefixLength, 96);
+        for (var i = 0; i < bits; i++)
+            if (((bytes[i / 8] ^ MappedBlock[i / 8]) >> (7 - i % 8) & 1) != 0)
+                return false;
+        return true;
     }
 
     public string For(HttpContext http)

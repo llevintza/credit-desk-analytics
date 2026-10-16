@@ -156,6 +156,7 @@ public sealed class ClientAddressTests
     [InlineData("198.51.100.0/24 2001:db8:ffff::/48")] // space separated, mixed families
     [InlineData("2001:db8::/32")]                     // IPv6 at the cap
     [InlineData("198.51.100.7/32, 2001:db8::1/128")]  // single hosts
+    [InlineData("::fffe:0:0/96")]                     // next to the IPv4-mapped block, not in it
     public void Trusted_hops_at_or_narrower_than_the_cap_are_accepted(string value)
     {
         var parsed = ClientAddress.ParseNetworks(value);
@@ -189,6 +190,19 @@ public sealed class ClientAddressTests
         var e = Assert.Throws<InvalidOperationException>(() => ClientAddress.ParseNetworks($"203.0.113.0/24, {entry}"));
         Assert.Contains($"'{entry}'", e.Message);
         Assert.DoesNotContain("203.0.113.0/24", e.Message); // names only the offending entry
+    }
+
+    [Theory]
+    [InlineData("::ffff:0:0/96")]           // every IPv4 address, written as IPv6
+    [InlineData("::ffff:198.51.100.0/120")] // one IPv4 /24, written as IPv6
+    [InlineData("::/80")]                   // a range that holds the mapped block
+    public void Start_up_rejects_an_ipv4_mapped_trusted_hop(string entry)
+    {
+        // The resolver compares IPv4-mapped peers and hops as IPv4, so such a range would never match: refuse it
+        // rather than let the operator believe it is trusted.
+        var e = Assert.Throws<InvalidOperationException>(() => ClientAddress.ParseNetworks(entry));
+        Assert.Contains($"'{entry}'", e.Message);
+        Assert.Contains("IPv4 form", e.Message);
     }
 
     [Theory]
