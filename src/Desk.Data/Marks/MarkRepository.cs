@@ -19,18 +19,22 @@ public sealed class MarkRepository(IDataSourceRegistry sources)
     public static readonly IReadOnlyList<string> MarkedColumns = ["price", "spread_bp"];
 
     /// <summary>
-    /// The bonds held in <paramref name="portfolios"/> on <paramref name="asOf"/>, at most <paramref name="max"/>,
-    /// each with its overnight price and spread (from its lowest position id, so the pick is stable). The subset is
-    /// chosen by a hash of the id, not the lowest ids, so it spreads across deals and sectors.
+    /// The bonds held in the scope (<c>@portfolios</c>) on <c>@as_of</c>, at most <c>@max</c>, each with its overnight
+    /// price and spread (from its lowest position id, so the pick is stable). The bonds are taken in the order of their
+    /// first position, every 4th one: the grid's default order is position id, so its first screen always shows some
+    /// marked rows among unmarked ones, wherever the scope starts.
     /// </summary>
     public const string UniverseSql = """
-        SELECT bond_id AS BondId, price AS Price, spread_bp AS SpreadBp
+        SELECT BondId, Price, SpreadBp
         FROM (
-            SELECT DISTINCT ON (bond_id) bond_id, price, spread_bp
-            FROM core.position_snapshot
-            WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND price IS NOT NULL
-            ORDER BY bond_id, position_id) AS held
-        ORDER BY md5(bond_id::text), bond_id
+            SELECT bond_id AS BondId, price AS Price, spread_bp AS SpreadBp, row_number() OVER (ORDER BY position_id) AS rn
+            FROM (
+                SELECT DISTINCT ON (bond_id) bond_id, position_id, price, spread_bp
+                FROM core.position_snapshot
+                WHERE as_of_date = @as_of AND portfolio_id = ANY(@portfolios) AND price IS NOT NULL
+                ORDER BY bond_id, position_id) AS held) AS ranked
+        WHERE rn % 4 = 1
+        ORDER BY rn
         LIMIT @max
         """;
 

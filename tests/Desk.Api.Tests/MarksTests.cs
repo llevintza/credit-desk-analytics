@@ -121,7 +121,7 @@ public sealed class MarksTests(PostgresApiFactory api)
         Assert.Equal(api.Time.GetUtcNow().AddMinutes(5), info.GetProperty("endsAt").GetDateTimeOffset());
 
         var held = await HeldBondsAsync(P1);
-        Assert.Equal(Math.Min(100, held.Count), bonds); // a subset: MARKS_MAX_BONDS (100) of the portfolio's bonds
+        Assert.Equal(Math.Min(100, (held.Count + 3) / 4), bonds); // a subset: every 4th bond, at most MARKS_MAX_BONDS (100)
 
         var marks = (await stream.ReadAsync(bonds)).Select(Data).ToList();
         Assert.Equal(bonds, marks.Count);

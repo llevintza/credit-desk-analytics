@@ -79,7 +79,7 @@ public sealed class MarkTotalsSqlTests(MigratedDatabase db) : IClassFixture<Migr
     }
 
     [Fact]
-    public async Task The_universe_is_the_scoped_bonds_with_their_lowest_positions_values_capped()
+    public async Task The_universe_is_every_4th_scoped_bond_in_position_order_with_its_lowest_positions_values_capped()
     {
         await using var conn = await db.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(Ct);
@@ -91,20 +91,20 @@ public sealed class MarkTotalsSqlTests(MigratedDatabase db) : IClassFixture<Migr
             new { d = AsOf }, tx);
 
         var both = (await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 1, 2 }, max = 100 }, tx)).ToList();
-        Assert.Equal(20, both.Count); // bonds 1000..1019; the unpriced bond 5000 is left out
-        Assert.Equal(90, both.Single(b => b.BondId == 1000).Price); // position 100 (lower id), not 101
-        Assert.Equal(100, both.Single(b => b.BondId == 1000).SpreadBp);
+        // Bonds 1000..1019 in the order of their first position, every 4th one; the unpriced bond 5000 is left out.
+        Assert.Equal([1000, 1004, 1008, 1012, 1016], both.Select(b => b.BondId));
+        Assert.Equal(90, both[0].Price); // position 100 (the bond's lower id), not 101
+        Assert.Equal(100.0, both[0].SpreadBp);
 
         // Portfolio 2 alone holds the odd positions, which reach every bond too, but with their own values.
         var two = (await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 2 }, max = 100 }, tx)).ToList();
-        Assert.Equal(91, two.Single(b => b.BondId == 1000).Price);
+        Assert.Equal([1000, 1004, 1008, 1012, 1016], two.Select(b => b.BondId));
+        Assert.Equal(91, two[0].Price);
         Assert.Empty(await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 3 }, max = 100 }, tx));
 
-        // The cap keeps a stable, hash-ordered subset, not simply the lowest ids.
-        var capped = (await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 1, 2 }, max = 5 }, tx)).Select(b => b.BondId).ToList();
-        Assert.Equal(5, capped.Count);
-        Assert.Equal(capped, (await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 1, 2 }, max = 5 }, tx)).Select(b => b.BondId));
-        Assert.NotEqual(Enumerable.Range(1000, 5), capped);
+        // The cap keeps the first ones.
+        var capped = (await conn.QueryAsync<MarkedBond>(MarkRepository.UniverseSql, new { as_of = AsOf, portfolios = new[] { 1, 2 }, max = 2 }, tx)).Select(b => b.BondId);
+        Assert.Equal([1000, 1004], capped);
         await tx.RollbackAsync(Ct);
     }
 

@@ -490,7 +490,7 @@ How it's built (ADR-0015, #71/#72):
 - **Stream.** `GET /api/marks/stream` sends Server-Sent Events: `hello`, then a `mark` per changed bond (`bondId`, `seq`, `eventTs`, `price`, `spreadBp`; the SSE `id` is `seq`), then `bye`.
   - The marks are simulated (`MarkSimulator`): a pure function of the bond and a 1 s tick, so `seq` (the tick of the bond's last change) only grows, on any instance and across restarts.
   - On connect the stream sends each bond's current mark newer than `Last-Event-ID` (or `?lastEventId=`). A reconnect gets only what it missed.
-- **Scope.** The marked bonds are at most `MARKS_MAX_BONDS` (100) of the bonds the caller's portfolios hold on the latest as-of date (ADR-0021), cached until the batch.
+- **Scope.** The marked bonds are every 4th bond the caller's portfolios hold on the latest as-of date, in position order, at most `MARKS_MAX_BONDS` (100). They are scoped by ADR-0021 and cached until the batch, and the default view's first screen always has some.
 - **Auth.** The SPA reads the stream with `fetch` (`HttpClient`), not `EventSource`, so it sends the bearer token like any call (ADR-0024).
 - **Client.** The **Live marks** toggle (latest as-of only) adds `bond_id` to the block requests. It puts each new mark on its bond's loaded rows and flashes the `price` and `spread_bp` cells.
 - **Totals.** The pinned totals for those two columns come from `POST /api/marks/totals` every 30 s. The server computes them with the marks applied, once per 15 s window per view, and caches them.
