@@ -215,7 +215,7 @@ describe('Positions page', () => {
     query.lastBlock.set({ columns: [], data: [], rowCount: 42, summary: { dv01: 9 }, asOf: 'x', generatedAt: 'x' });
     query.lastInfo.set({ ms: 5, cache: 'HIT', bytes: 10, serverMs: 1 });
     await fixture.whenStable();
-    expect(grid.setGridOption).toHaveBeenCalledWith('pinnedBottomRowData', [{ position_id: -1, deal_name: 'Total', dv01: 9 }]);
+    expect(grid.setGridOption).toHaveBeenCalledWith('pinnedBottomRowData', [{ position_id: -1, deal_name: 'Total · avgs |MV|-wtd', dv01: 9 }]);
     expect(TestBed.inject(StatusService).totalRows()).toBe(42);
     expect(TestBed.inject(StatusService).lastRequest()?.cache).toBe('HIT');
 

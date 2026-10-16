@@ -1,6 +1,6 @@
 import type { ColDef } from 'ag-grid-community';
 import { CatalogColumn } from '../data-access/api.types';
-import { columnDefs, heat, isScenario } from './column-defs';
+import { columnDefs, heat, isScenario, totalLabel, totalNote } from './column-defs';
 
 const catalog: CatalogColumn[] = [
   { name: 'position_id', group: 'Keys', kind: 'Key', aggregation: 'None', header: 'Position' },
@@ -61,5 +61,31 @@ describe('columnDefs', () => {
     expect(heat(null, 100)).toBeNull();
     expect(heat(95, undefined)).toBeNull();
     expect(leaf('market_value').cellStyle).toBeUndefined();
+  });
+
+  it('labels the Total row: SUM columns are net, weighted averages are gross |MV|-weighted (#191)', () => {
+    expect(totalLabel).toBe('Total · avgs |MV|-wtd');
+    expect(totalNote('WeightedByMarketValue')).toBe('Total: gross |MV|-weighted average');
+    expect(totalNote('Sum')).toBe('Total: net (signed) sum');
+    expect(totalNote('None')).toBeNull();
+    expect(leaf('scn_rp100_sp50').headerTooltip).toBe('+100/+50 (scn_rp100_sp50). Total: gross |MV|-weighted average');
+    expect(leaf('market_value').headerTooltip).toBe('Market value (market_value). Total: net (signed) sum');
+    expect(leaf('deal_name').headerTooltip).toBe('Deal (deal_name)');
+
+    type Tip = (p: { value: unknown; node?: { rowPinned?: string | null } }) => string;
+    const avg = leaf('scn_rp100_sp50').tooltip as Tip;
+    const sum = leaf('market_value').tooltip as Tip;
+    const text = leaf('deal_name').tooltip as Tip;
+    expect(avg({ value: 97.25, node: { rowPinned: 'bottom' } })).toBe('97.25 (Total: gross |MV|-weighted average)');
+    expect(sum({ value: -12, node: { rowPinned: 'bottom' } })).toBe('-12 (Total: net (signed) sum)');
+    expect(avg({ value: null, node: { rowPinned: 'bottom' } })).toBe('Total: gross |MV|-weighted average');
+    expect(avg({ value: 97.25, node: { rowPinned: null } })).toBe('97.25');
+    expect(avg({ value: 97.25 })).toBe('97.25');
+    expect(text({ value: totalLabel, node: { rowPinned: 'bottom' } })).toBe(totalLabel);
+
+    const marked = leaf('scn_rp100_sp50').cellClassRules as Record<string, (p: { value: unknown; node?: { rowPinned?: string | null } }) => boolean>;
+    expect(marked['wavg']({ value: 1, node: { rowPinned: 'bottom' } })).toBe(true);
+    expect(marked['wavg']({ value: 1, node: { rowPinned: null } })).toBe(false);
+    expect((leaf('market_value').cellClassRules as Record<string, unknown>)['wavg']).toBeUndefined();
   });
 });

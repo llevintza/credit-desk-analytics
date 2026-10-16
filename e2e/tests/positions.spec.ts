@@ -15,8 +15,10 @@ test.describe('P1 positions (README §6 acceptance)', () => {
       await expect(page.locator(`[row-index="${total - 1}"]`).first()).toBeVisible({ timeout: 2_000 });
     }).toPass({ timeout: 30_000 });
 
-    // The summary row is pinned to the bottom; its label sits in the pinned-left identity column.
-    await expect(page.locator('.summary-row').getByText('Total', { exact: true })).toBeVisible();
+    // The summary row is pinned to the bottom; its label sits in the pinned-left identity column and says the
+    // averages are gross |MV|-weighted (#191).
+    await expect(page.locator('.summary-row').getByText('Total · avgs |MV|-wtd', { exact: true })).toBeVisible();
+    await expect(page.locator('.summary-row .wavg').first()).toBeVisible(); // Risk shows weighted columns
     expect(errors).toEqual([]);
   });
 
