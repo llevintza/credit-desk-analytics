@@ -258,6 +258,13 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         var insights = await client.GetAsync("/api/insights/core", Ct);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, insights.StatusCode);
         Assert.Equal("No data loaded", (await insights.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+
+        // README §6 P6: the mark stream and the overlay totals too, before any universe read.
+        var stream = await client.GetAsync("/api/marks/stream", HttpCompletionOption.ResponseHeadersRead, Ct);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, stream.StatusCode);
+        Assert.Equal("No data loaded", (await stream.Content.ReadFromJsonAsync<JsonElement>(Ct)).GetProperty("title").GetString());
+        var totals = await client.SendAsync(Send(HttpMethod.Post, "/api/marks/totals", new { columns = new[] { "price" } }), Ct);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, totals.StatusCode);
     }
 
     /// <summary>Captures log levels (the meta cache logs a count, never the names themselves).</summary>

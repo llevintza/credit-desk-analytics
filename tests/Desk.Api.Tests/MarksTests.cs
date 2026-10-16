@@ -7,7 +7,9 @@ using Desk.Api.Limits;
 using Desk.Api.Marks;
 using Desk.Api.Positions;
 using Desk.Data.Marks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -293,6 +295,24 @@ public sealed class MarksTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public void Only_the_routed_mark_stream_gets_the_mark_stream_partitions()
+    {
+        var unrouted = new DefaultHttpContext();
+        unrouted.Request.Path = "/api/marks/stream";
+        Assert.False(RateLimiting.IsMarkStream(unrouted)); // no endpoint matched: the path alone moves nothing
+
+        var stream = new DefaultHttpContext();
+        stream.SetEndpoint(new Endpoint(null, new EndpointMetadataCollection(MarkStreamEndpoint.Instance), "marks"));
+        Assert.True(RateLimiting.IsMarkStream(stream));
+        Assert.Equal($"marks:{RateLimiting.PartitionKey(stream, new ClientAddress(false))}", RateLimiting.MarkStreamPartitionKey(stream, new ClientAddress(false)));
+
+        // Of every endpoint the app maps, only GET /api/marks/stream carries the marker.
+        var marked = api.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Where(e => e.Metadata.GetMetadata<MarkStreamEndpoint>() is not null).Select(e => e.RoutePattern.RawText).ToList();
+        Assert.Equal(["/api/marks/stream"], marked);
+    }
+
+    [Fact]
     public async Task The_stream_needs_a_session()
     {
         var res = await PostgresApiFactory.NewClient(api).GetAsync("/api/marks/stream", Ct);
@@ -357,6 +377,32 @@ public sealed class MarksTests(PostgresApiFactory api)
         var again = await client.PostAsJsonAsync("/api/marks/totals", TotalsBody(), Ct);
         Assert.Equal("HIT", again.Headers.GetValues("X-Cache").Single());
         Assert.Equal(totals.GetRawText(), JsonDocument.Parse(await again.Content.ReadAsStringAsync(Ct)).RootElement.GetRawText());
+    }
+
+    [Fact]
+    public async Task Totals_refuse_a_filter_too_large_to_apply_like_the_grid_does()
+    {
+        var (client, _, _) = await api.SignedInAsync();
+        var values = Enumerable.Range(0, Desk.Data.Grid.GridQueryNormalizer.MaxSetValues + 1).Select(i => $"v{i}").ToArray();
+        var res = await client.PostAsJsonAsync("/api/marks/totals", new { columns = new[] { "price" }, filterModel = new { cusip = new { filterType = "set", values } } }, Ct);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("Filter can't be applied", JsonDocument.Parse(await res.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task A_lifetime_that_ends_between_ticks_ends_the_stream_on_time()
+    {
+        var (own, clock) = api.WithOwnClock();
+        await using var _ = own;
+        await using var host = Scoped(own, [P1], ("MARKS_STREAM_SECONDS", "0.5"));
+        var client = await SignInAsync(host);
+        await using var stream = await OpenAsync(client);
+        var bonds = Data((await stream.NextAsync())!.Value).GetProperty("bonds").GetInt32();
+        await stream.ReadAsync(bonds);
+        clock.Advance(TimeSpan.FromMilliseconds(500)); // half a tick: the lifetime, not the next tick, wakes it
+        var tail = new List<SseItem<string>>();
+        while (await stream.NextAsync() is { } e) tail.Add(e);
+        Assert.Equal(["bye"], tail.Select(e => e.EventType));
     }
 
     [Fact]

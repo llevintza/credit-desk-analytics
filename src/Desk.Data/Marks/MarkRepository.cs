@@ -48,16 +48,17 @@ public sealed class MarkRepository(IDataSourceRegistry sources)
         return rows.ToArray();
     }
 
+    /// <summary>The marked columns <paramref name="query"/> displays (and so totals): none means there is nothing to overlay.</summary>
+    public static ColumnDef[] MarkedIn(GridQuery query) =>
+        [.. query.Columns.Where(c => MarkedColumns.Contains(c.Name) && c.Aggregation == Aggregation.WeightedByMarketValue)];
+
     /// <summary>
-    /// The marked columns' totals for <paramref name="query"/>'s filter with <paramref name="marks"/> applied
-    /// (<see cref="GridSqlBuilder.BuildMarkTotals"/>). Only the marked columns the query displays are computed; with
-    /// none of them it reads nothing.
+    /// The <paramref name="marked"/> columns' totals for <paramref name="query"/>'s filter with <paramref name="marks"/>
+    /// applied (<see cref="GridSqlBuilder.BuildMarkTotals"/>).
     /// </summary>
-    public async Task<MarkTotals?> TotalsAsync(GridQuery query, IReadOnlyCollection<ColumnDef> catalog, IReadOnlyList<Mark> marks, CancellationToken ct)
+    public async Task<MarkTotals> TotalsAsync(GridQuery query, IReadOnlyCollection<ColumnDef> catalog, IReadOnlyList<ColumnDef> marked,
+        IReadOnlyList<Mark> marks, CancellationToken ct)
     {
-        var marked = query.Columns.Where(c => MarkedColumns.Contains(c.Name) && c.Aggregation == Aggregation.WeightedByMarketValue).ToArray();
-        if (marked.Length == 0)
-            return null;
         var sql = GridSqlBuilder.BuildMarkTotals(query, catalog, marked,
             [.. marks.Select(m => m.BondId)], [.. marks.Select(m => m.Price)], [.. marks.Select(m => m.SpreadBp)]);
         var p = new DynamicParameters();

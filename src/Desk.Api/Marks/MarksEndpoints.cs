@@ -184,7 +184,8 @@ public static class MarksEndpoints
         var tick = sim.TickAt(time.GetUtcNow());
         var at = tick - tick % windowTicks;
         // Nothing on screen to overlay: nothing to read.
-        if (!query.Columns.Any(c => MarkRepository.MarkedColumns.Contains(c.Name)))
+        var marked = MarkRepository.MarkedIn(query);
+        if (marked.Length == 0)
             return TypedResults.Ok(new MarkTotalsResponse(query.AsOf, at, sim.TimeOf(at), null, []));
         var key = $"mktot:{query.AsOf:yyyy-MM-dd}:{meta.DataVersion}:{PositionsEndpoints.Hash(query.SummaryKey)}:{at}";
         if (cache.Cache.TryGetValue(key, out MarkTotalsResponse? hit))
@@ -195,13 +196,13 @@ public static class MarksEndpoints
 
         var dbStarted = Stopwatch.GetTimestamp();
         var universe = await universes.GetAsync(meta, query.PortfolioIds, ct);
-        var totals = await marks.TotalsAsync(query, meta.Catalog, [.. universe.Bonds.Select(b => sim.MarkAt(b, at))], ct);
+        var totals = await marks.TotalsAsync(query, meta.Catalog, marked, [.. universe.Bonds.Select(b => sim.MarkAt(b, at))], ct);
         var dbMs = Stopwatch.GetElapsedTime(dbStarted).TotalMilliseconds;
-        var response = new MarkTotalsResponse(query.AsOf, at, sim.TimeOf(at), totals?.RowCount,
-            totals?.Values.ToDictionary(v => v.Column.Name, v => (double?)v.Value) ?? []);
+        var response = new MarkTotalsResponse(query.AsOf, at, sim.TimeOf(at), totals.RowCount,
+            totals.Values.ToDictionary(v => v.Column.Name, v => (double?)v.Value));
         cache.Cache.Set(key, response, new MemoryCacheEntryOptions { Size = 256, AbsoluteExpiration = sim.TimeOf(at + windowTicks) });
         PositionsEndpoints.SetTiming(http, "MISS", dbMs, 0, started);
-        if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = totals?.RowCount ?? 0;
+        if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = totals.RowCount;
         return TypedResults.Ok(response);
     }
 
