@@ -130,11 +130,11 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         }
 
         var atTheEnd = await RunAsync(null, new FakeTimeProvider(at), "list");
-        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\slocked\r?$", Line(atTheEnd.Out, ends.Email!));   // LockoutEnd == now
-        Assert.Matches($@"{Regex.Escape(disabledLockout.Email!)}.*\sactive\r?$", Line(atTheEnd.Out, disabledLockout.Email!)); // lockout off
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\slocked\s", Line(atTheEnd.Out, ends.Email!));   // LockoutEnd == now
+        Assert.Matches($@"{Regex.Escape(disabledLockout.Email!)}.*\sactive\s", Line(atTheEnd.Out, disabledLockout.Email!)); // lockout off
 
         var justAfter = await RunAsync(null, new FakeTimeProvider(at.AddTicks(1)), "list");
-        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\sactive\r?$", Line(justAfter.Out, ends.Email!)); // LockoutEnd == now - 1 tick
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\sactive\s", Line(justAfter.Out, ends.Email!)); // LockoutEnd == now - 1 tick
 
         static string Line(string output, string email) => output.Split('\n').Single(l => l.StartsWith(email, StringComparison.Ordinal));
     }
