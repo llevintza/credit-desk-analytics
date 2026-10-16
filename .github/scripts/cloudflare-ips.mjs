@@ -1,12 +1,12 @@
 // Compares ClientAddress.Cloudflare (src/Desk.Api) with Cloudflare's published IP ranges (#161).
 // A range Cloudflare adds that the app doesn't know keys every client behind it on the edge, which
 // brings back the shared login bucket (#116). Run weekly by .github/workflows/cloudflare-ips.yml;
-// exits 1 on drift (printing the added and removed ranges) and 2 when the list can't be read.
+// exits 1 on drift (printing the added and removed ranges) and 2 when either list can't be read.
 // The fetch belongs to that workflow only: agent sessions run the fixture tests, never this file.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-export const URL = "https://api.cloudflare.com/client/v4/ips";
+export const API_URL = "https://api.cloudflare.com/client/v4/ips";
 export const SOURCE = "src/Desk.Api/Limits/ClientAddress.cs";
 
 const CIDR = /^[0-9a-f.:]+\/\d{1,3}$/i;
@@ -47,7 +47,7 @@ export function report({ added, removed }, count) {
   if (added.length === 0 && removed.length === 0)
     return `ClientAddress.Cloudflare and ${SOURCE} match Cloudflare's published list (${count} ranges).`;
   return [
-    `ClientAddress.Cloudflare differs from ${URL}:`,
+    `ClientAddress.Cloudflare differs from ${API_URL}:`,
     ...added.map((r) => `+ ${r} (published, missing from ClientAddress.cs)`),
     ...removed.map((r) => `- ${r} (in ClientAddress.cs, no longer published)`),
     `Update ClientAddress.Cloudflare in ${SOURCE} (and its "checked" date) in an app PR.`,
@@ -61,16 +61,17 @@ export async function main({
   error = console.error,
   summary = process.env.GITHUB_STEP_SUMMARY ? (s) => appendFileSync(process.env.GITHUB_STEP_SUMMARY, s) : undefined,
 } = {}) {
-  let actual;
+  let expected, actual;
   try {
-    const res = await fetch(URL, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
-    if (!res.ok) throw new Error(`GET ${URL}: HTTP ${res.status}`);
+    expected = extractRanges(readSource());
+    const res = await fetch(API_URL, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) throw new Error(`GET ${API_URL}: HTTP ${res.status}`);
     actual = published(await res.json());
   } catch (e) {
     error(`::error::${e.message}`);
     return 2;
   }
-  const diff = compare(extractRanges(readSource()), actual);
+  const diff = compare(expected, actual);
   const text = report(diff, actual.length);
   log(text);
   summary?.(`## Cloudflare IP ranges (#161)\n\n\`\`\`\n${text}\n\`\`\`\n`);

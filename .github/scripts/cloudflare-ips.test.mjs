@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { compare, extractRanges, main, published, report, SOURCE, URL as API } from "./cloudflare-ips.mjs";
+import { API_URL as API, compare, extractRanges, main, published, report, SOURCE } from "./cloudflare-ips.mjs";
 
 // #161: the weekly cloudflare-ips workflow compares ClientAddress.Cloudflare with Cloudflare's published
 // list. These cover the comparison with a fixture; the network fetch runs only in that workflow.
@@ -111,6 +111,12 @@ test("main fails on an HTTP error or a bad body", async () => {
   const bad = await run({ fetch: fakeFetch({ success: false }) });
   assert.equal(bad.code, 2);
   assert.match(bad.err, /success=false/);
+});
+
+test("main reports a missing Cloudflare block as a read error (2), not as drift (1)", async () => {
+  const r = await run({ fetch: fakeFetch(FIXTURE), readSource: () => "class X {}" });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /^::error::Cloudflare = \[ … \] not found/);
 });
 
 test("main runs without a step summary (local, opt-in)", async () => {
