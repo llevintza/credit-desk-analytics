@@ -5,6 +5,7 @@
     <Project Path="perf/InsightsBenchmark/InsightsBenchmark.csproj" />
     <Project Path="perf/LastBlockCheck/LastBlockCheck.csproj" />
     <Project Path="perf/LoadBenchmark/LoadBenchmark.csproj" />
+    <Project Path="perf/MarksTransport/MarksTransport.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Desk.Api/Desk.Api.csproj" />

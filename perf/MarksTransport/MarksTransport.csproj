@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- ADR-0015: SSE vs polling vs WebSockets for the P6 intraday overlay, measured on one machine with the same
+       simulated marks (Desk.Data MarkSimulator). Local only: it starts its own server on 127.0.0.1. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Desk.Data/Desk.Data.csproj" />
+  </ItemGroup>
+</Project>
