@@ -317,9 +317,14 @@ public sealed class InsightsConcurrencyTests(PostgresApiFactory api)
     public async Task A_shared_DbContext_across_Task_WhenAll_throws()
     {
         await using var shared = api.NewContext();
-        var e = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => Task.WhenAll(
+        var e = await Record.ExceptionAsync(() => Task.WhenAll(
             Enumerable.Range(0, 8).Select(_ => shared.ColumnCatalog.AsNoTracking().Select(c => c.Name).ToListAsync(Ct))));
-        Assert.Contains("second operation", e.Message);
+        // EF's concurrency detector usually refuses the second query; when two queries race past it, Npgsql's own
+        // guard on the shared connection refuses one instead. Either way the shared context fails.
+        Assert.True(
+            e is InvalidOperationException { Message: var m } && m.Contains("second operation", StringComparison.Ordinal)
+                || e is Npgsql.NpgsqlOperationInProgressException,
+            $"Expected a concurrent-use refusal, got: {e}");
     }
 
     [Fact]
