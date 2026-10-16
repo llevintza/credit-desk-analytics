@@ -85,4 +85,20 @@ public sealed class MigrationTests
         Assert.Equal(SnapshotFiniteChecks.Columns.Count, down.Split("ADD CONSTRAINT").Length - 1);
         Assert.DoesNotContain("numeric", up);
     }
+
+    [Fact]
+    public void The_weight_column_migration_is_rerun_safe_and_matches_the_builder()
+    {
+        // #241: the stored weight is the builder's weight, under a name no catalog column can take.
+        var migration = new SnapshotWeightColumn();
+        var up = Assert.Single(migration.UpOperations.OfType<SqlOperation>()).Sql;
+        var down = Assert.Single(migration.DownOperations.OfType<SqlOperation>()).Sql;
+
+        Assert.Equal(GridSqlBuilder.WeightF8Column, SnapshotWeightColumn.Column);
+        Assert.Equal(GridSqlBuilder.WeightExpression, SnapshotWeightColumn.Expression);
+        Assert.Equal("ALTER TABLE core.position_snapshot ADD COLUMN IF NOT EXISTS weight_f8 double precision " +
+                     "GENERATED ALWAYS AS (abs(market_value)::float8) STORED;", up);
+        Assert.Equal("ALTER TABLE core.position_snapshot DROP COLUMN IF EXISTS weight_f8;", down);
+        Assert.DoesNotContain(ColumnCatalog.PositionSnapshot, c => c.Name == GridSqlBuilder.WeightF8Column);
+    }
 }
