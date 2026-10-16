@@ -1012,7 +1012,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | Phase | PR | State |
 |---|---|---|
 | Spec | #1 | Merged |
-| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review); follow-up #207: every main push gets its own CI run, only the tip deploys (in review) |
+| 0 Scaffold | #2 | Merged; follow-up #4: deploy-path safety (pipefail, main-only release, step-scoped DATABASE_URL); follow-up #91: restore linux-x64 + design-time DATABASE_URL before EF bundle/seeder publish; follow-up #5: coverage gates + CI hardening; follow-up #104: coverage gate reads from base on push; follow-up #99: gitleaks v8.30.1 image + CI pins; follow-up #169: CI runs only the jobs a change touches (in review); follow-up #207: every main push gets its own CI run, only the tip deploys (in review); follow-up #321: every workflow job pinned to `ubuntu-24.04` before `ubuntu-latest` moves to Ubuntu 26 (in review) |
 | API docs (Swagger UI) | #93 | Merged; follow-up #95: relative OpenAPI servers, fail-safe `SWAGGER_ENABLED`, `/swagger` 404 when off |
 | GitHub Pages deploy (`[workflows]`) | #350 | In review: `pages.yml` builds the SPA for `/credit-desk-analytics/` against `vars.APP_URL` and deploys to Pages (ADR-0024); needs the bearer-auth PR merged first |
 | Claude PR review | #3 | Merged; follow-up #7: advisory-only review + claude-review.yml hardening |
