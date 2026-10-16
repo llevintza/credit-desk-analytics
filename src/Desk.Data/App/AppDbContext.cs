@@ -22,6 +22,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ColumnCatalogEntry> ColumnCatalog => Set<ColumnCatalogEntry>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
     public DbSet<Preset> Presets => Set<Preset>();
+    public DbSet<PortfolioGrant> PortfolioGrants => Set<PortfolioGrant>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
 
@@ -79,6 +80,21 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             e.HasIndex(x => new { x.UserId, x.Page, x.Name }).IsUnique();
             // A deleted account takes its presets with it.
+            e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ADR-0021: per-user portfolio grants. The only FK is to auth.users; core.portfolio is truncated by the seeder
+        // and may move to another database.
+        b.Entity<PortfolioGrant>(e =>
+        {
+            e.ToTable("portfolio_grant");
+            e.HasKey(x => new { x.UserId, x.PortfolioId });
+            e.Property(x => x.UserId).HasColumnName("user_id");
+            e.Property(x => x.PortfolioId).HasColumnName("portfolio_id");
+            e.Property(x => x.GrantedAt).HasColumnName("granted_at");
+            e.Property(x => x.GrantedBy).HasColumnName("granted_by").HasMaxLength(256);
+            e.HasIndex(x => x.PortfolioId);
+            // A deleted account takes its grants with it.
             e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
