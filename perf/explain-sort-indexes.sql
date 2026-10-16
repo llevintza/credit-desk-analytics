@@ -5,6 +5,11 @@
 --   docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-sort-indexes.sql
 -- The query has the shape GridSqlBuilder.Build emits for the page (Risk preset columns, every portfolio, 200 rows), on
 -- the latest as-of date (the API's default). Each plan runs once to warm the cache, then once for the record.
+-- Guard addresses (#338): a unix socket (`docker exec` as above) has no server address; host psql through the
+-- published port reaches the container's Docker bridge address (measured 172.17.0.3 on the default bridge; compose
+-- networks take the next /16s of Docker's default pool, 172.18-172.31). 172.16.0.0/12 is there for Docker only and is
+-- kept whole because a /16 would refuse compose networks. It also matches any other RFC 1918 172.16-31 server, so the
+-- address alone doesn't prove the server is local; the database name check and the rule above still apply.
 \pset pager off
 \set ON_ERROR_STOP on
 DO $guard$

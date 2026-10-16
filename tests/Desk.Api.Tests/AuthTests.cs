@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -218,6 +219,40 @@ public sealed class AuthTests(PostgresApiFactory api)
 
         Assert.True((await users.SetLockoutEnabledAsync(tracked, false)).Succeeded);
         Assert.False(await users.IsLockedOutAsync(tracked));
+    }
+
+    [Fact]
+    public async Task Access_failed_keeps_identity_update_metrics_and_locks_on_the_injected_clock()
+    {
+        // #338: Identity 10's AccessFailedAsync records aspnetcore.identity.user.update.duration; the override must too.
+        var user = await api.CreateUserAsync();
+        await using var scope = api.Services.CreateAsyncScope();
+        var meters = api.Services.GetRequiredService<IMeterFactory>();
+        var updateTypes = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Scope == meters && instrument.Name == "aspnetcore.identity.user.update.duration")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<double>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+                if (tag.Key == "aspnetcore.identity.user.update_type")
+                    updateTypes.Enqueue(tag.Value as string);
+        });
+        listener.Start();
+
+        var users = Assert.IsType<DeskUserManager>(scope.ServiceProvider.GetRequiredService<UserManager<DeskUser>>());
+        var tracked = (await users.FindByIdAsync(user.Id.ToString()))!;
+        for (var i = 0; i < IdentityPolicy.MaxFailedAttempts; i++)
+            Assert.True((await users.AccessFailedAsync(tracked)).Succeeded);
+
+        Assert.Equal(Enumerable.Repeat<string?>("increment_access_failed", IdentityPolicy.MaxFailedAttempts), updateTypes);
+        await using var db = await api.Services.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContextAsync(Ct);
+        var stored = await db.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id, Ct);
+        Assert.Equal(0, stored.AccessFailedCount);
+        Assert.Equal(api.Time.GetUtcNow() + IdentityPolicy.LockoutDuration, stored.LockoutEnd);
     }
 
     [Fact]
