@@ -113,13 +113,13 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
   - It allocates 40–45% less than Dapper `dynamic`, and 5–20× less than EF.
   - It feeds the columnar serializer without boxing.
 - **The page and the summary go in one batch** for the first block of a view (README §6 "one round trip"). After that, the cached summary means only the page is read.
-- **The weight is cast once per row** through a non-flattenable LATERAL.
+- **The weight is cast once per row** through a non-flattenable LATERAL. Superseded by the #241 addendum: a stored generated column, which also lets the summary aggregate in parallel workers.
 - **EF Core stays for the stable model:** accounts, presets (`AsNoTracking` projections, `ExecuteUpdate`/`ExecuteDelete`), catalog and seed metadata.
 
 ## Consequences
 
 - SQL text is built by hand. The safety rests on `GridQueryNormalizer`: catalog-only identifiers, quoted, with every value a parameter. It has a dedicated unit test suite, including SQL snapshot tests and injection tests.
-- The SQL is close to ANSI. Two things are Postgres-specific: `ILIKE`, and `LATERAL … OFFSET 0`, which would become `CROSS APPLY` on SQL Server (README §16).
+- The SQL is close to ANSI. Two things are Postgres-specific: `ILIKE`, and `LATERAL … OFFSET 0`, which would become `CROSS APPLY` on SQL Server (README §16). Since #241 the weight is a stored generated column (a persisted computed column on SQL Server) instead of the LATERAL.
 - The summary still scans every filtered row: 33 ms (Risk) and 85 ms (All) of DB time locally for the first view of the whole book (k6 end-to-end, Risk: p95 71 ms). On Neon's fractional CPU expect several times that, still well under the 10 s guard.
 - Cache keys are the JSON form of the normalized query: values are escaped by the serializer, so a crafted filter can't collide with another query's key or ETag in the shared cache.
 - The reference data behind every key (catalog, as-of dates, data version) is re-read every 10 minutes while traffic continues, and every 30 seconds while the database is still empty. A reseed is therefore picked up without a restart. `POST /api/admin/cache/clear` drops everything at once.
@@ -142,3 +142,62 @@ The All-preset whole-book first view is **over the 150 ms budget** locally (p50 
 docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:18135 \
   -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:1.3.0 run - < perf/positions.js
 ```
+
+## Addendum (#241, 2026-10-16): the weight as a stored column, and a parallel summary
+
+**Problem.** The All preset's whole-book first view was over the 150 ms MISS budget: locally p95 188–273 ms (above), and on the CI runner p95 ≈ 249 ms (#256). Server-Timing put almost all of it in the database: the summary, `COUNT` plus 174 aggregates (23 `SUM`s, 151 weighted averages) over every row of the as-of date. Serialization was 2–3 ms.
+
+**Cause.** The `CROSS JOIN LATERAL (SELECT abs(market_value)::float8 AS weight_f8 OFFSET 0) w` that casts the weight once per row (above) has two costs. It adds a nested loop and a one-row subquery per row. And the planner can't aggregate below it, so the whole summary ran in the leader. With parallel plans made free, the plan was `Aggregate → Nested Loop → Gather → Parallel Seq Scan`: only the scan went to the workers, and all 174 aggregates stayed above the Gather.
+
+**Options considered.**
+1. **A stored generated column** `weight_f8 double precision GENERATED ALWAYS AS (abs(market_value)::float8) STORED` on `core.position_snapshot`, so the summary is a plain aggregate over the table (chosen).
+2. **A plain column the seeder writes.** Same plan, but a second write path that could drift from `market_value`. The generated column can't be written at all (SQLSTATE 428C9), and Postgres recomputes it on every insert and update.
+3. **Parallel settings, keeping the LATERAL.** Session `parallel_*` costs don't help: the fence keeps the aggregates in the leader whatever the costs (`WeightColumnTests` pins the new plan shape).
+4. **JIT** (`jit_above_cost = 0`) for the 174-aggregate expression. Slower: compiling cost more than it saved (280–1,600 ms against 140–430 ms without, on the same loaded machine).
+5. **Rescoping the budget** to the Risk preset (#241's other option). Not needed once the All preset is under budget.
+
+**Evaluation.** Seed 42, scale 1.0, 20,001 rows per as-of, Postgres 17.11 in Docker (colima, 4 vCPUs), Apple M5, on a laptop shared with other agents' workloads, so before and after always ran interleaved against the same database.
+
+`perf/explain-summary-weight.sql` (committed; output in `perf/evidence/explain-summary-weight-scale1.txt`): the All summary's execution time, 30 interleaved rounds after one warm-up:
+
+| Variant | Plan | min ms | p50 ms | p95 ms |
+|---|---|---:|---:|---:|
+| LATERAL weight (before) | Aggregate → Nested Loop → Seq Scan | 80.1 | 89.8 | 103.9 |
+| stored column, serial | Aggregate → Seq Scan | 64.8 | 71.4 | 88.6 |
+| **stored column, the planner's own plan (after)** | Finalize Aggregate → Gather (2 workers) → Partial Aggregate → Parallel Seq Scan | **28.8** | **32.6** | **44.8** |
+
+About a third of the gain (p50 89.8 → 71.4 ms) is dropping the nested loop. The rest is the two parallel workers the default settings (`max_parallel_workers_per_gather = 2`) already allow.
+
+k6 end to end (`perf/positions.js`, one VU, 30 s per scenario): the compose stack's app (main @91a8d7e) on one port and the branch image on another, both against the same migrated database, alternating main, branch, main, branch:
+
+| Run | Build | MISS Risk p50 / p95 ms | HIT p50 / p95 ms | MISS All p50 / p95 ms | All ≤ 150 ms? |
+|---|---|---:|---:|---:|---|
+| 1 | main | 36.8 / 58.4 | 1.0 / 1.5 | 106.1 / 154.4 | no |
+| 1 | **branch** | 15.7 / 27.8 | 1.0 / 1.7 | **53.8 / 82.6** | **yes** |
+| 2 | main | 36.4 / 45.5 | 1.0 / 1.6 | 99.5 / 115.6 | yes |
+| 2 | **branch** | 15.4 / 22.0 | 1.0 / 1.4 | **51.1 / 71.4** | **yes** |
+| 3 | main | 36.8 / 50.0 | 1.0 / 1.3 | 97.4 / 111.6 | yes |
+| 3 | **branch** | 15.1 / 19.5 | 1.0 / 1.4 | **50.1 / 60.7** | **yes** |
+
+The All whole-book MISS halves (p50 ~100 → ~52 ms; p95 112–154 → 61–83 ms), and the Risk MISS improves by about 2.4× too. Every check passed in all six runs. The machine was quieter for this round than for the earlier ones (load average 5–10, not 20–75), which is why main's own p95 is lower than in #135's table. The comparison holds because the two builds alternated.
+
+```
+# local stack only: compose -p wrk241 (own ports), seed 42 --scale 1.0, a throwaway viewer from Desk.UserAdmin,
+# RATE_LIMIT_PER_USER_PER_MIN/BURST raised in both apps' environments only
+docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-summary-weight.sql
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:<port> \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:2.3.0 run --quiet - < perf/positions.js
+```
+
+**A script fix that the faster MISS exposed.** At ~2.5× the MISS rate, the 30 s MISS phase stores more blocks than `POSITIONS_CACHE_MB` (64 MB) holds. The cache's compaction then evicts the HIT key that `setup()` warmed at t=0, so the first one or two HIT requests missed, and `checks: rate==1.0` failed (1–2 of ~50,000 checks in each branch run). `hit()` now warms the key once per VU before it measures, tagged `scenario: hit_warm` so the warm-up isn't in the HIT trend and has no check on it. No budget or threshold changed.
+
+**Decision.**
+- Migration `SnapshotWeightColumn` adds the stored generated column. `GridSqlBuilder` reads `weight_f8` from the table, with no LATERAL. The aggregate text and the NULL/zero rules (README §8) are unchanged.
+- `MigrationTests` pins the migration's frozen expression to `GridSqlBuilder.WeightExpression`. `WeightColumnTests` checks the stored values (shorts weigh by their size, zero stays zero, NULL stays NULL, an update recomputes) and that the All summary plans as a parallel partial aggregate (that test fails on the LATERAL builder).
+
+**Consequences.**
+- **Deploy:** expand only (README §14.4). The running app never names the column, and the seeder's COPY lists its columns, so both work before and after the migration. The `ALTER` rewrites the snapshot under an ACCESS EXCLUSIVE lock: 0.73 s at scale 1.0 on a quiet machine (1.8 s under load), which briefly blocks grid reads during the deploy's migrate step. Derived data is filled by the `ALTER` itself, so there's no `SeedVersion` bump. Down drops the column, and the old builder doesn't need it.
+- **Size:** `core.position_snapshot` measured 74 MB at scale 1.0 both before and after (`pg_total_relation_size`). The rewrite briefly needs a second copy of the table (~74 MB), well under the 512 MB reseed cap. Seeding is unchanged: the snapshot COPY took 2.1 s, and the whole scale-1.0 seed 9.5 s (budget < 90 s).
+- **Parallel workers share the CPU.** A first view now uses up to three processes for ~30 ms instead of one for ~90 ms. Under many concurrent MISSes, Postgres caps the workers (`max_parallel_workers`, default 8). A Gather that gets fewer workers, or none, does the rest in the leader, which is still the faster serial path without the LATERAL. On Neon's fractional CPU, the serial gain (no nested loop) applies whatever the worker count.
+- **SQL portability:** on SQL Server this would be a persisted computed column (README §16).
+- The CI `budgets` job measures the All preset on the hosted runner. This PR's budgets summary gives that number, and README §10 records it.
