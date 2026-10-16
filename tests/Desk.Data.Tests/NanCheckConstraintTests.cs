@@ -18,10 +18,13 @@ public sealed class MigratedDatabase : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         await _pg.StartAsync();
-        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
-            .UseNpgsql(_pg.GetConnectionString(), n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options);
+        await using var db = NewContext();
         await db.Database.MigrateAsync(TestContext.Current.CancellationToken);
     }
+
+    /// <summary>An app context on this database, e.g. to migrate it up or down to a named migration.</summary>
+    public AppDbContext NewContext() => new(new DbContextOptionsBuilder<AppDbContext>()
+        .UseNpgsql(_pg.GetConnectionString(), n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options);
 
     public async Task<NpgsqlConnection> OpenAsync()
     {

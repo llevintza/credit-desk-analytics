@@ -322,3 +322,22 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 - **The `ALTER` rewrites the snapshot** under an ACCESS EXCLUSIVE lock, as `SnapshotWeightColumn` did (0.73–1.8 s at scale 1.0), briefly blocking grid reads during the migrate step. It's the second such rewrite of the table: on Neon that is the whole ~77 MB snapshot, so seconds of blocked grid reads (queued, not failed) while production migrates. README §14.2's deploy notes are governed (`[workflows]`), so this note lives here until a `[workflows]` PR adds a line there. Derived data, filled by the `ALTER` itself, so no `SeedVersion` bump; Down drops the column.
 - **Size:** `core.position_snapshot` measured 77,709,312 bytes (74 MB, `pg_total_relation_size`) at scale 1.0 both with and without `face_weight_f8`, to the byte. The whole seeded database was 286 MB either way. Seeding is unchanged.
 - **SQL portability:** a second persisted computed column on SQL Server (README §16).
+
+## Addendum (#459 step 2, 2026-10-16): the catalog update
+
+**Step 2 is done.** With #473 live (`ec48776`), migration `CatalogFaceWeightedPrices` sets `app.column_catalog.aggregation = 'WeightedByCurrentFace'` for the 108 columns the code catalog marks face-weighted. That is one `UPDATE ... WHERE aggregation <> 'WeightedByCurrentFace' AND name IN (...)`, so a rerun, or a database migrated before it is seeded, writes no row. Down is the same statement with `'WeightedByMarketValue'`, the value every one of those rows had before #473. The migration does no DDL and no snapshot rewrite, and needs no `SeedVersion` bump: fresh seeds already write the code catalog. The name list is frozen in the migration (the named prices plus the scenario grid's shocks as of today), and `MigrationTests` pins it to `ColumnCatalog`, so a new price column fails the build until a new migration flips it. It is a data migration, not seed data: it inserts nothing and only corrects rows the seeder owns. Leo scoped #459 to that.
+
+**Measured** on a local Postgres 17 (Docker, trust auth, throwaway), seed 42 at scale 1.0, stepped back to production's state with `dotnet ef database update SnapshotFaceWeightColumn` (151 |MV|-weighted rows):
+
+| Step | Result |
+|---|---|
+| `EXPLAIN (ANALYZE, BUFFERS)` of the Up statement, in a rolled-back transaction | Seq Scan on `column_catalog` (202 rows), 108 updated, execution 0.75 ms, planning 0.96 ms |
+| `dotnet ef database update`, three runs | first applies the flip (108 face-weighted, 43 \|MV\|-weighted), the next two are no-ops; 1.7–2.4 s each, nearly all of it the tool's start-up |
+| `pg_relation_filenode` of `core.position_snapshot` / `app.column_catalog` | 17077 / 17124 before and after: neither table is rewritten |
+
+The grid isn't blocked: the `UPDATE` takes row locks on 108 catalog rows for under a millisecond, and readers never wait on row locks (MVCC).
+
+**Tests.** `CatalogMigrationTests` (Testcontainers) seeds a pre-#473 catalog and moves the migrator back over the migration and forward again. Before, the prices are |MV|-weighted; after Up, the catalog is the code catalog; Down restores the old rows; each step reruns as a no-op; and the snapshot keeps its filenode. `CatalogFlipTests` (API) puts the shared catalog in production's state and flips it under a host with its own clock. Until the meta snapshot is re-read, `/api/meta` and the blocks stay consistent. After `MetaCache.Revalidate`, with no cache clear, `/api/meta/columns` reports `WeightedByCurrentFace`, the Total row's prices match independent face-weighted SQL, the block is a MISS under a new ETag (an old `If-None-Match` gets a 200), and the other columns keep their totals. The Total-row label follows the served catalog in the SPA (`totalLabel`, `column-defs.spec.ts`), so it reads `Total · face/|MV|-wtd` from that load on.
+
+**Consequence.** Production's Total row shows face-weighted prices once this deploys: migrate runs the flip, the new app starts with a fresh meta cache, and the old app, still live during the deploy, switches within 10 minutes.
+
