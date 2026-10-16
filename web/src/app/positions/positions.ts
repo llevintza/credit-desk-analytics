@@ -45,6 +45,7 @@ export class Positions {
   protected readonly preset = signal<string>('');
   protected readonly ownPreset = computed(() => this.presets().find((p) => p.name === this.preset())?.builtIn === false);
   protected readonly columns = signal<ColGroupDef[] | null>(null);
+  private readonly totalRowLabel = signal(totalLabel([]));
   protected readonly loadError = signal<string | null>(null);
   protected readonly exporting = signal(false);
   protected readonly saving = signal(false);
@@ -74,6 +75,7 @@ export class Positions {
     forkJoin({ catalog: this.api.columns(), presets: this.api.presets(page) }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
       next: ({ catalog, presets }) => {
         this.columns.set(columnDefs(catalog, this.theme.negatives));
+        this.totalRowLabel.set(totalLabel(catalog));
         this.presets.set(presets);
         this.preset.set(initialPreset(presets, Positions.remembered()));
       },
@@ -101,7 +103,7 @@ export class Positions {
     effect(() => {
       const block = this.query.lastBlock();
       if (!block || !this.grid) return;
-      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: totalLabel, ...block.summary }]);
+      this.grid.setGridOption('pinnedBottomRowData', [{ position_id: -1, deal_name: this.totalRowLabel(), ...block.summary }]);
       this.status.totalRows.set(block.rowCount);
     });
     effect(() => this.status.lastRequest.set(this.query.lastInfo()));

@@ -6,7 +6,8 @@ namespace Desk.Data.Tests;
 
 /// <summary>
 /// #241: the summary's weight is a stored generated column (<see cref="GridSqlBuilder.WeightF8Column"/>), so the
-/// summary is a plain aggregate over the snapshot that Postgres can split across parallel workers.
+/// summary is a plain aggregate over the snapshot that Postgres can split across parallel workers. #459 adds the
+/// prices' weight, |current face|, the same way (<see cref="GridSqlBuilder.FaceWeightF8Column"/>).
 /// </summary>
 public sealed class WeightColumnTests(MigratedDatabase db) : IClassFixture<MigratedDatabase>
 {
@@ -27,6 +28,36 @@ public sealed class WeightColumnTests(MigratedDatabase db) : IClassFixture<Migra
         await ExecuteAsync(conn, tx, "UPDATE core.position_snapshot SET market_value = -market_value WHERE as_of_date = @d AND position_id = 1");
         Assert.Equal([100.25, 300.0, 0.0, null], await WeightsAsync(conn, tx));
         await tx.RollbackAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task The_stored_face_weight_is_the_size_of_the_holding_and_follows_every_write()
+    {
+        // #459: the price weight, |current face|, under the same rules as the |MV| weight.
+        await using var conn = await db.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await ExecuteAsync(conn, tx,
+            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, current_face) " +
+            "VALUES (@d, 1, 1, 1, 1, 1, 'TEST00001', 'Test deal', 'RMBS', 2500000.50), (@d, 2, 1, 1, 1, 1, 'TEST00002', 'Test deal', 'RMBS', -1000000), " +
+            "(@d, 3, 1, 1, 1, 1, 'TEST00003', 'Test deal', 'RMBS', 0), (@d, 4, 1, 1, 1, 1, 'TEST00004', 'Test deal', 'RMBS', NULL)");
+        Assert.Equal([2500000.5, 1000000.0, 0.0, null], await WeightsAsync(conn, tx, GridSqlBuilder.FaceWeightF8Column));
+
+        await ExecuteAsync(conn, tx, "UPDATE core.position_snapshot SET current_face = -current_face WHERE as_of_date = @d AND position_id = 1");
+        Assert.Equal([2500000.5, 1000000.0, 0.0, null], await WeightsAsync(conn, tx, GridSqlBuilder.FaceWeightF8Column));
+        await ExecuteAsync(conn, tx, "UPDATE core.position_snapshot SET current_face = 40 WHERE as_of_date = @d AND position_id = 4");
+        Assert.Equal([2500000.5, 1000000.0, 0.0, 40.0], await WeightsAsync(conn, tx, GridSqlBuilder.FaceWeightF8Column));
+        await tx.RollbackAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task The_stored_face_weight_cannot_be_written_directly()
+    {
+        await using var conn = await db.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(conn, tx,
+            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, current_face, face_weight_f8) " +
+            "VALUES (@d, 5, 1, 1, 1, 1, 'TEST00005', 'Test deal', 'RMBS', 10, 99)"));
+        Assert.Equal("428C9", ex.SqlState);
     }
 
     [Fact]
@@ -54,8 +85,8 @@ public sealed class WeightColumnTests(MigratedDatabase db) : IClassFixture<Migra
         await using var conn = await db.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync(TestContext.Current.CancellationToken);
         await ExecuteAsync(conn, tx,
-            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, market_value, spread_bp) " +
-            "SELECT @d, 100 + i, 1 + i % 3, 1, 1, 1, 'TEST00001', 'Test deal', 'RMBS', i, i FROM generate_series(1, 20000) AS i; " +
+            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, market_value, current_face, spread_bp, price) " +
+            "SELECT @d, 100 + i, 1 + i % 3, 1, 1, 1, 'TEST00001', 'Test deal', 'RMBS', i, i, i, i FROM generate_series(1, 20000) AS i; " +
             "ANALYZE core.position_snapshot; SET LOCAL parallel_setup_cost = 0; SET LOCAL min_parallel_table_scan_size = 0");
         await using var cmd = new NpgsqlCommand("EXPLAIN (COSTS OFF) " + summary, conn, tx);
         foreach (var (name, value) in sql.Parameters)
@@ -68,12 +99,13 @@ public sealed class WeightColumnTests(MigratedDatabase db) : IClassFixture<Migra
         Assert.True(plan[0] == "Finalize Aggregate", string.Join("\n", plan));
         Assert.Contains(plan, line => line.EndsWith("Partial Aggregate", StringComparison.Ordinal));
         Assert.DoesNotContain(plan, line => line.Contains("Nested Loop", StringComparison.Ordinal));
+        Assert.Contains(GridSqlBuilder.FaceWeightF8Column, summary); // #459: the second weight keeps the parallel plan
     }
 
-    private static async Task<double?[]> WeightsAsync(NpgsqlConnection conn, NpgsqlTransaction tx)
+    private static async Task<double?[]> WeightsAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string column = GridSqlBuilder.WeightF8Column)
     {
         await using var cmd = new NpgsqlCommand(
-            $"SELECT {GridSqlBuilder.WeightF8Column} FROM core.position_snapshot WHERE as_of_date = @d ORDER BY position_id", conn, tx);
+            $"SELECT {column} FROM core.position_snapshot WHERE as_of_date = @d ORDER BY position_id", conn, tx);
         cmd.Parameters.AddWithValue("d", AsOf);
         var weights = new List<double?>();
         await using var r = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
