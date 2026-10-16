@@ -52,7 +52,7 @@ jobs:
         && github.event.workflow_run.head_branch == 'main'
         && github.event.workflow_run.head_repository.full_name == github.repository
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -106,7 +106,7 @@ jobs:
   build:
     needs: gate
     if: needs.gate.outputs.allowed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -157,7 +157,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # Only this job can publish: Pages write and the OIDC token deploy-pages exchanges for it.
     permissions:
