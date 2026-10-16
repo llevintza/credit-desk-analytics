@@ -16,7 +16,7 @@ public static class CorsSetup
     /// <summary>Request headers the SPA sends: the token, JSON bodies, and the positions grid's conditional request.</summary>
     public static readonly string[] AllowedHeaders = ["Authorization", "Content-Type", "If-None-Match"];
     /// <summary>Response headers the SPA reads: the 429 wait, the status bar's cache and server time, the grid's ETag.</summary>
-    public static readonly string[] ExposedHeaders = ["Retry-After", "X-Cache", "Server-Timing", "ETag"];
+    public static readonly string[] ExposedHeaders = ["Retry-After", "X-Cache", "Server-Timing", "ETag", Positions.PositionsEndpoints.TruncatedHeader];
 
     /// <summary>
     /// The configured origins, normalised (no trailing slash, lower case). Anything that isn't an https origin is

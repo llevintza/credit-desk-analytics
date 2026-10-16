@@ -1,4 +1,5 @@
 using System.Globalization;
+using Desk.Api.Positions;
 
 namespace Desk.Api.Limits;
 
@@ -9,9 +10,11 @@ namespace Desk.Api.Limits;
 /// <param name="InsightsQueue">Insights source reads of one caller that wait for <paramref name="InsightsConcurrency"/> before a 429.</param>
 /// <param name="ExportSlots">Exports running at once across all users; kept below the database permits.</param>
 /// <param name="ExportTimeout">The overall deadline on one export stream.</param>
+/// <param name="ExportMaxRows">Rows in one export; may only lower the built-in <see cref="PositionsEndpoints.MaxExportRows"/>.</param>
 public sealed record LimitsOptions(
     int PerUserPerMinute, int PerUserBurst, int LoginPerIpPerMinute, int GlobalConcurrency, int GlobalQueue,
-    int PerUserConcurrency, int PerUserQueue, int InsightsConcurrency, int InsightsQueue, int ExportSlots, TimeSpan ExportTimeout)
+    int PerUserConcurrency, int PerUserQueue, int InsightsConcurrency, int InsightsQueue, int ExportSlots, TimeSpan ExportTimeout,
+    int ExportMaxRows = PositionsEndpoints.MaxExportRows)
 {
     public static LimitsOptions From(IConfiguration config) => new(
         PerUserPerMinute: Positive(config, "RATE_LIMIT_PER_USER_PER_MIN", 60),
@@ -28,7 +31,8 @@ public sealed record LimitsOptions(
         InsightsConcurrency: Positive(config, "RATE_LIMIT_PER_USER_INSIGHTS_CONCURRENCY", 5),
         InsightsQueue: Positive(config, "RATE_LIMIT_PER_USER_INSIGHTS_QUEUE", 15),
         ExportSlots: Positive(config, "EXPORT_GLOBAL_SLOTS", 2),
-        ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60, max: MaxExportTimeoutSeconds)));
+        ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60, max: MaxExportTimeoutSeconds)),
+        ExportMaxRows: Math.Min(Positive(config, "EXPORT_MAX_ROWS", PositionsEndpoints.MaxExportRows), PositionsEndpoints.MaxExportRows));
 
     /// <summary>An hour: far above any real export, and far below what a timer or a TimeSpan can hold.</summary>
     public const double MaxExportTimeoutSeconds = 3600;

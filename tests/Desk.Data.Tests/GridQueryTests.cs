@@ -450,12 +450,19 @@ public sealed class GridQueryTests
     }
 
     [Fact]
-    public void Export_sql_has_no_offset_and_no_summary()
+    public void Export_sql_counts_one_past_the_cap_then_reads_without_offset_or_summary()
     {
         var q = Normalize(new GridRequest(Columns: ["deal_name"])) with { Limit = 25_000 };
         var sql = GridSqlBuilder.BuildExport(q, ColumnCatalog.PositionSnapshot);
-        Assert.EndsWith("ORDER BY \"position_id\" ASC LIMIT @limit;", sql.Sql);
-        Assert.DoesNotContain("COUNT", sql.Sql);
+        var statements = sql.Sql.Split("; ");
+        Assert.Equal(2, statements.Length);
+        // #277: the truncation check stops one row past the cap and needs no sort.
+        Assert.StartsWith("SELECT count(*) FROM (SELECT 1 FROM ", statements[0]);
+        Assert.EndsWith(" LIMIT @limit + 1) AS capped", statements[0]);
+        Assert.DoesNotContain("ORDER BY", statements[0]);
+        Assert.EndsWith("ORDER BY \"position_id\" ASC LIMIT @limit;", statements[1]);
+        Assert.DoesNotContain("OFFSET", sql.Sql);
+        Assert.DoesNotContain("SUM(", sql.Sql);
         Assert.Equal(25_000, sql.Parameters.Single(p => p.Key == "limit").Value);
     }
 
