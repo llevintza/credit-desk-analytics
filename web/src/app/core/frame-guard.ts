@@ -20,3 +20,8 @@ export function refuseFraming(win: Window, doc: Document): boolean {
   doc.body.replaceChildren(notice);
   return true;
 }
+
+/** Runs start (the app's bootstrap) unless the page is framed, so main.ts itself has nothing to decide. */
+export function startUnlessFramed(win: Window, doc: Document, start: () => Promise<unknown>): Promise<unknown> {
+  return refuseFraming(win, doc) ? Promise.resolve() : start();
+}

@@ -1,4 +1,4 @@
-import { isFramed, refuseFraming } from './frame-guard';
+import { isFramed, refuseFraming, startUnlessFramed } from './frame-guard';
 
 /**
  * #66: the GitHub Pages copy can't send frame-ancestors or X-Frame-Options (a meta CSP ignores frame-ancestors,
@@ -41,5 +41,16 @@ describe('frame guard (#66)', () => {
     expect(doc.body.textContent).toBe('Credit Desk Analytics cannot be shown inside a frame. Open it in its own tab.');
     expect(doc.body.children).toHaveLength(1);
     expect(doc.body.firstElementChild?.tagName).toBe('P');
+  });
+
+  it('starts the app at top level and never when framed', async () => {
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = '<app-root></app-root>';
+    const start = vi.fn(() => Promise.resolve('started'));
+    await expect(startUnlessFramed({ self: top, top } as Window, doc, start)).resolves.toBe('started');
+    expect(start).toHaveBeenCalledTimes(1);
+    await expect(startUnlessFramed({ self: {} as Window, top } as Window, doc, start)).resolves.toBeUndefined();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(doc.querySelector('app-root')).toBeNull();
   });
 });
