@@ -41,6 +41,7 @@ public sealed partial class EntitlementClassificationTests(PostgresApiFactory ap
         ["/api/auth/logout"] = "ends the caller's own session",
         ["/api/me"] = "the caller's own email, roles and expiry",
         ["/api/admin/cache/clear"] = "admin action; returns no data",
+        ["/api/admin/usage"] = "audit counts per user, route templates and timings; no portfolio ids or positions (ADR-0021 amendment 2026-10-16)",
     };
 
     [GeneratedRegex(@"\{(\w+):[^}]+\}")]

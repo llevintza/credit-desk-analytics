@@ -1,7 +1,6 @@
 import { Routes } from '@angular/router';
 import { adminGuard, authGuard } from './core/auth.service';
 import { Login } from './login/login';
-import { Placeholder } from './placeholder/placeholder';
 import { Shell } from './shell/shell';
 
 export const routes: Routes = [
@@ -18,7 +17,7 @@ export const routes: Routes = [
       { path: 'insights', loadComponent: () => import('./insights/insights-board').then((m) => m.InsightsBoard), title: 'Insights · Credit Desk Analytics' },
       { path: 'deals', loadComponent: () => import('./deals/deal-explorer').then((m) => m.DealExplorer), title: 'Deals · Credit Desk Analytics' },
       { path: 'lab', loadComponent: () => import('./lab/performance-lab').then((m) => m.PerformanceLab), title: 'Performance Lab · Credit Desk Analytics' },
-      { path: 'usage', component: Placeholder, canActivate: [adminGuard], data: { title: 'Usage', phase: 'phase 9' }, title: 'Usage · Credit Desk Analytics' },
+      { path: 'usage', loadComponent: () => import('./usage/usage').then((m) => m.UsagePage), canActivate: [adminGuard], title: 'Usage · Credit Desk Analytics' },
     ],
   },
   { path: '**', redirectTo: '' },
