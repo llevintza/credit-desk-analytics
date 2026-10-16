@@ -110,6 +110,24 @@ public sealed class FreeTierGuardrailTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_cached_list_is_served_without_an_audit_row_to_mark()
+    {
+        // Outside the pipeline (no AuditMiddleware) there is no audit feature: the hit is still served and timed.
+        using var cache = new PositionsCache(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), TimeProvider.System);
+        var presets = new PresetListCache(cache);
+        var user = Guid.NewGuid();
+        presets.Store(user, "positions", "[]"u8.ToArray(), presets.Version(user, "positions"));
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+                [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, user.ToString())], "test")),
+        };
+        var result = await MetaEndpoints.ListPresetsAsync("positions", http, null!, presets, Ct);
+        Assert.Equal("[]"u8.ToArray(), Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.FileContentHttpResult>(result).FileContents.ToArray());
+        Assert.Equal("HIT", http.Response.Headers["X-Cache"].ToString());
+    }
+
+    [Fact]
     public async Task Meta_and_preset_reads_record_their_cache_status_in_the_audit()
     {
         // The Usage page's cache hit ratio (README §7.2) counts every cached read, not only the grid's.
