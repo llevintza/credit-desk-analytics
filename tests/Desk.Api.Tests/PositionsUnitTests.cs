@@ -208,9 +208,11 @@ public sealed class PositionsUnitTests
     public void Accept_negotiation_finds_messagepack_anywhere_in_the_header()
     {
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        Assert.False(PositionsEndpoints.WantsMsgPack(http.Request));
+        Assert.Equal(PositionsEndpoints.Representation.Json, PositionsEndpoints.Negotiate(http.Request));
         http.Request.Headers.Accept = "application/json, application/x-msgpack;q=0.9";
-        Assert.True(PositionsEndpoints.WantsMsgPack(http.Request));
+        Assert.Equal(PositionsEndpoints.Representation.MsgPack, PositionsEndpoints.Negotiate(http.Request));
+        http.Request.Headers.Accept = "application/vnd.desk.rows+json";
+        Assert.Equal(PositionsEndpoints.Representation.RowJson, PositionsEndpoints.Negotiate(http.Request));
     }
 
     [Fact]

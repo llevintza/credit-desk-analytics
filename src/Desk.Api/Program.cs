@@ -9,6 +9,7 @@ using Desk.Api.Funds;
 using Desk.Data.Funds;
 using Desk.Api.Hardening;
 using Desk.Api.Insights;
+using Desk.Api.Lab;
 using Desk.Data.Insights;
 using Desk.Api.Limits;
 using Desk.Api.Positions;
@@ -69,6 +70,8 @@ builder.Services.AddResponseCompression(o =>
     o.EnableForHttps = true;
     o.Providers.Add<BrotliCompressionProvider>();
     o.Providers.Add<GzipCompressionProvider>();
+    // Every grid format, not only the default list's application/json (ADR-0028: MessagePack went uncompressed).
+    o.MimeTypes = [.. ResponseCompressionDefaults.MimeTypes, ColumnarSerializer.MsgPackContentType, ColumnarSerializer.RowJsonContentType];
 });
 builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
 builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
@@ -85,6 +88,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 app.UseDeskCors();
 app.UseMiddleware<MaintenanceMode>();
+// The Performance Lab's forced encoding (dev knobs only; ADR-0028) must rewrite Accept-Encoding before compression.
+app.UseLabEncoding();
 app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
