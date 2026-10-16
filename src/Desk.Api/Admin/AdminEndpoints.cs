@@ -42,10 +42,8 @@ public static class AdminEndpoints
         if (window is < 1 or > MaxUsageDays)
             return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid days",
                 detail: $"days must be a whole number from 1 to {MaxUsageDays}.");
-        window = Math.Min(window, (int)retention.Window.TotalDays);
-
-        var today = DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime);
-        var report = await usage.ReadAsync(today.AddDays(1 - window), today, ct);
+        var (from, to) = UsageWindow(window, retention.Window, time.GetUtcNow());
+        var report = await usage.ReadAsync(from, to, ct);
         var dbMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
 
         var serStarted = Stopwatch.GetTimestamp();
@@ -54,6 +52,17 @@ public static class AdminEndpoints
         PositionsEndpoints.SetTiming(http, "MISS", dbMs, Stopwatch.GetElapsedTime(serStarted).TotalMilliseconds, started);
         if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = report.Users.Count + report.Slowest.Count;
         return Results.Bytes(bytes, "application/json");
+    }
+
+    /// <summary>
+    /// The last <paramref name="days"/> UTC days ending today, at most <paramref name="retention"/> of them. Every day
+    /// shown is whole (#70): a purge at any time t up to <paramref name="now"/> deletes only rows older than
+    /// t - retention, which falls on or before the day before the oldest one shown.
+    /// </summary>
+    internal static (DateOnly From, DateOnly To) UsageWindow(int days, TimeSpan retention, DateTimeOffset now)
+    {
+        var today = DateOnly.FromDateTime(now.UtcDateTime);
+        return (today.AddDays(1 - Math.Min(days, (int)retention.TotalDays)), today);
     }
 
     /// <summary>README §8: after a db-ops reseed the next request reloads the catalog, dates and data version.</summary>

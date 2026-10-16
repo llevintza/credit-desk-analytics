@@ -690,6 +690,21 @@ public sealed class LimitsTests(PostgresApiFactory api)
             Assert.Equal(TimeSpan.FromSeconds(60), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", bad))).ExportTimeout);
         Assert.Equal(TimeSpan.FromSeconds(0.5), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "0.5"))).ExportTimeout);
         Assert.Equal(TimeSpan.FromHours(1), LimitsOptions.From(Config(("EXPORT_TIMEOUT_SECONDS", "3600"))).ExportTimeout);
+        Assert.Equal(45, LimitsOptions.From(Config(("RATE_LIMIT_PER_USER_BURST", "45"))).PerUserBurst); // an explicit value is honoured
+    }
+
+    [Fact]
+    public async Task The_default_burst_admits_60_requests_in_a_row()
+    {
+        // ADR-0014 (#67): a fast tour of all four pages spends up to 42 tokens; the default bucket holds 60. The rate
+        // is held at 1/min so no token is refilled while the test runs.
+        await using var host = api.WithSettings(("RATE_LIMIT_PER_USER_BURST", ""), ("RATE_LIMIT_PER_USER_PER_MIN", "1"));
+        var client = PostgresApiFactory.NewClient(host);
+        await PostgresApiFactory.LoginAsync(client, (await api.CreateUserAsync()).Email!);
+
+        for (var i = 0; i < 60; i++)
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.GetAsync("/api/me", Ct)).StatusCode);
     }
 
     private static IConfiguration Config(params (string Key, string Value)[] pairs) =>
