@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.example.test">
+  <title>Pages fixture (untrusted scripts)</title>
+  <base href="/credit-desk-analytics/">
+  <link rel="modulepreload" href="https://cdn.example.test/preload.js">
+  <link rel="stylesheet" href="styles.css" media="print" onload="this.media='all'">
+</head>
+<body>
+  <a href="javascript:void(0)">x</a>
+<script src="https://cdn.example.test/tracker.js"></script>
+<script src="//cdn.example.test/protocol-relative.js"></script>
+<script src="/other-site/main.js"></script>
+<script src="missing.js"></script>
+<script>window.injected = true;</script>
+<script src="main.js" type="module"></script></body>
+</html>

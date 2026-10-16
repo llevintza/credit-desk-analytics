@@ -3,6 +3,7 @@
 // Local or CI stack only, never Render, Neon or production:
 //   BASE_URL=http://localhost:8080 DESK_EMAIL=… DESK_PASSWORD=… DATABASE_URL=… dotnet run -c Release --project perf/LastBlockCheck
 // Prints a markdown table; exits 1 if any check fails. The password is read from the environment and never printed.
+// This file does the HTTP and SQL; the comparison and the table are in LastBlockComparison.cs (#181, unit-tested).
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -10,11 +11,11 @@ using System.Text.RegularExpressions;
 using Desk.Data;
 using Desk.Data.Catalog;
 using Desk.Data.Grid;
+using LastBlockCheck;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 
 const int Block = GridQueryNormalizer.MaxBlockRows;
-const int MinRows = 18_000;
 
 var baseUrl = new Uri(Environment.GetEnvironmentVariable("BASE_URL") ?? "http://localhost:8080");
 var email = Environment.GetEnvironmentVariable("DESK_EMAIL");
@@ -92,8 +93,6 @@ async Task<object?> ScalarAsync(string sql)
     var value = await cmd.ExecuteScalarAsync(ct);
     return value is DBNull ? null : value;
 }
-static string Show(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "null";
-static decimal? Number(JsonElement e) => e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
 
 // The Risk preset's Sum columns. Names come from the compiled ColumnCatalog allowlist (compile-time constants, never
 // client input); the shape guard keeps them safe to quote in SQL.
@@ -101,17 +100,14 @@ var sumColumns = ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggr
 foreach (var column in sumColumns)
     if (!Regex.IsMatch(column.Name, "^[a-z][a-z0-9_]*$")) throw new InvalidOperationException(column.Name);
 
-var results = new List<(string Check, string Api, string Sql, bool Ok)>();
 var sqlCount = (long)(await ScalarAsync("SELECT count(*) FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios)"))!;
-results.Add(("rows ≥ 18,000", $"{rowCount:N0}", $"{sqlCount:N0}", rowCount >= MinRows && rowCount == sqlCount));
 
-// The checks below reuse the API's as-of; this row makes sure the API's default is the latest snapshot date.
+DateOnly? latest;
 await using (var maxCmd = db.CreateCommand("SELECT max(as_of_date) FROM core.position_snapshot"))
 await using (var maxReader = await maxCmd.ExecuteReaderAsync(ct))
 {
     await maxReader.ReadAsync(ct);
-    var latest = maxReader.IsDBNull(0) ? (DateOnly?)null : maxReader.GetFieldValue<DateOnly>(0);
-    results.Add(("as-of is the latest date", $"{asOf:yyyy-MM-dd}", latest?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "null", asOf == latest));
+    latest = maxReader.IsDBNull(0) ? null : maxReader.GetFieldValue<DateOnly>(0);
 }
 
 // The SQL tail, in the grid's order: the sort key, then position_id in the sort key's direction. It also reads every
@@ -132,52 +128,16 @@ await using (var cmd = db.CreateCommand($"SELECT position_id{tailColumns} FROM c
         sqlCells.Add([.. sumColumns.Select((_, i) => reader.IsDBNull(i + 1) ? (decimal?)null : reader.GetDecimal(i + 1))]);
     }
 }
-results.Add(($"last block ids (rows {lastStart + 1:N0}–{rowCount:N0})", $"{apiIds.Length} ids, last {apiIds.LastOrDefault()}",
-    $"{sqlIds.Count} ids, last {sqlIds.LastOrDefault()}", apiIds.SequenceEqual(sqlIds) && apiIds.Length == rowCount - lastStart));
-// The last block's Sum-column cells, at each column's index in the response's column order. A misaligned column in
-// the columnar serializer at a high offset fails here even when the ids match.
-var apiColumns = last.GetProperty("columns").EnumerateArray().Select(c => c.GetString()).ToList();
-var data = last.GetProperty("data");
-int cells = 0, cellMismatches = 0, missingColumns = 0;
-for (var j = 0; j < sumColumns.Length; j++)
-{
-    var index = apiColumns.IndexOf(sumColumns[j].Name);
-    if (index < 0) { missingColumns++; continue; }
-    var apiValues = data[index].EnumerateArray().Select(Number).ToArray();
-    for (var row = 0; row < Math.Max(apiValues.Length, sqlCells.Count); row++)
-    {
-        cells++;
-        var api = row < apiValues.Length ? apiValues[row] : null;
-        var sql = row < sqlCells.Count ? sqlCells[row][j] : null;
-        if (row >= apiValues.Length || row >= sqlCells.Count || api != sql) cellMismatches++;
-    }
-}
-results.Add(($"last block Sum-column cells ({sumColumns.Length} columns)", $"{cells - cellMismatches:N0} equal",
-    $"{cells:N0} cells, {cellMismatches:N0} differ, {missingColumns} columns missing",
-    cells > 0 && cellMismatches == 0 && missingColumns == 0));
-results.Add(($"aligned last block ids (rows {alignedStart + 1:N0}–{rowCount:N0})", $"{alignedIds.Length} ids, last {alignedIds.LastOrDefault()}",
-    $"{sqlIds.TakeLast(rowCount - alignedStart).Count()} ids, last {sqlIds.LastOrDefault()}",
-    alignedIds.Length == rowCount - alignedStart && alignedIds.SequenceEqual(sqlIds.TakeLast(alignedIds.Length))));
 
-// Every SUM in the summary against an independent SUM.
-var summary = first.GetProperty("summary");
+// An independent SUM per Sum column, compared with the summary in LastBlockComparison.
+var sqlSums = new List<decimal?>();
 foreach (var column in sumColumns)
-{
-    // A missing key or a JSON null is a FAIL row, not an exception.
-    decimal? api = summary.TryGetProperty(column.Name, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDecimal() : null;
-    var sql = (decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios)");
-    results.Add(($"SUM({column.Name})", Show(api), Show(sql), api is not null && api == sql));
-}
-// The loop above must not pass by comparing nothing: the Sum columns the API served equal the ones compared.
-var expected = sumColumns.Select(c => c.Name).ToHashSet();
-var served = summary.EnumerateObject().Select(p => p.Name)
-    .Where(n => ColumnCatalog.PositionSnapshot.Any(c => c.Name == n && c.Aggregation == Aggregation.Sum)).ToHashSet();
-results.Add(("SUM columns compared", $"{served.Count}", $"{expected.Count}", expected.Count > 0 && expected.SetEquals(served)));
+    sqlSums.Add((decimal?)await ScalarAsync($"SELECT sum(\"{column.Name}\") FROM core.position_snapshot WHERE as_of_date = @asof AND portfolio_id = ANY(@portfolios)"));
 
-Console.WriteLine($"### Last block and summary at {rowCount:N0} rows (as of {asOf:yyyy-MM-dd}, {portfolios.Length} entitled portfolios, Risk preset, market value desc)");
-Console.WriteLine();
-Console.WriteLine("| Check | API | Independent SQL | Result |");
-Console.WriteLine("|---|---:|---:|---|");
-foreach (var (check, api, sql, ok) in results)
-    Console.WriteLine($"| {check} | {api} | {sql} | {(ok ? "ok" : "FAIL")} |");
-return results.All(r => r.Ok) ? 0 : 1;
+var results = LastBlockComparison.Compare(
+    [.. sumColumns.Select(c => c.Name)],
+    new ApiBlocks(rowCount, asOf, first.GetProperty("summary"), lastStart, apiIds, last, alignedStart, alignedIds),
+    new SqlFacts(sqlCount, latest, sqlIds, sqlCells, sqlSums));
+foreach (var line in LastBlockComparison.Render(rowCount, asOf, portfolios.Length, results))
+    Console.WriteLine(line);
+return LastBlockComparison.ExitCode(results);

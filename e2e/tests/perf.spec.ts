@@ -107,3 +107,35 @@ test('first rows painted (warm) and memory: infinite row model vs loading every 
   console.log(JSON.stringify(result, null, 2));
   expect(median(paint)).toBeLessThan(1000); // README §10: first rows painted < 1.0 s warm
 });
+
+/**
+ * #338 / ADR-0005: the fund page's cold first paint under the per-user concurrency cap. Each round clears the API's
+ * caches (needs an admin account), then times navigation start → the first fund-grid row, read in the page on the
+ * frame it appears. Run it with RATE_LIMIT_PER_USER_CONCURRENCY at its default of 1, and raised, to compare.
+ */
+test('fund page first paint, cold API caches', async ({ page }) => {
+  test.setTimeout(300_000);
+  const fundRow = '[data-testid=fund-grid] .ag-row';
+  // Warm-up: HTTP cache and JIT (the API caches are cleared before every measured round).
+  await page.goto('/funds');
+  await expect(page.locator(fundRow).first()).toBeVisible();
+
+  const paint: number[] = [];
+  for (let i = 0; i < runs * 4; i++) {
+    const authorization = await bearer(page);
+    const cleared = await page.evaluate(async (auth) =>
+      (await fetch('/api/admin/cache/clear', { method: 'POST', headers: { authorization: auth } })).status, authorization);
+    expect(cleared, 'cache clear needs an admin account').toBe(204);
+    await page.goto('/funds');
+    const at = await page.waitForFunction((sel) => document.querySelector(sel) ? performance.now() : 0, fundRow, { polling: 'raf' });
+    paint.push(await at.jsonValue() as number);
+  }
+  const sorted = [...paint].sort((a, b) => a - b);
+  const result = {
+    runs: paint.length,
+    fundFirstPaintColdMs: { p50: Math.round(median(paint)), p95: Math.round(sorted[Math.ceil(0.95 * sorted.length) - 1]), max: Math.round(sorted[sorted.length - 1]), all: paint.map(Math.round) },
+  };
+  mkdirSync('results', { recursive: true });
+  writeFileSync('results/perf-funds.json', JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result, null, 2));
+});

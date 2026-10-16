@@ -151,6 +151,12 @@ jobs:
           grep -q '<base href="/credit-desk-analytics/">' index.html
           # Pages answers an unknown path with 404.html: the same shell, so the router opens deep links.
           cp index.html 404.html
+      # #355: every Pages site on the account shares this origin (ADR-0024), so what ships here must load no
+      # third-party or untrusted script. Checks the final files (CSP and 404.html in place); a finding fails the run
+      # before anything is uploaded.
+      - name: No untrusted scripts in the published site (#355)
+        working-directory: web/dist/web/browser
+        run: node --disable-warning=ExperimentalWarning --experimental-vm-modules "$GITHUB_WORKSPACE/.github/scripts/pages-script-check.mjs" . --base /credit-desk-analytics/
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: web/dist/web/browser

@@ -8,4 +8,6 @@
 .skeleton { flex: 1; margin: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); opacity: 0.6; }
 :host ::ng-deep .neg { color: var(--down); }
 :host ::ng-deep .summary-row { font-weight: 600; background: var(--surface-3); }
+// A gross |MV|-weighted average in the Total row (#191): the dotted underline marks the tooltip that says so.
+:host ::ng-deep .summary-row .wavg { text-decoration: underline dotted; text-underline-offset: 3px; }
 :host ::ng-deep .num, :host ::ng-deep .ag-header-cell { font-variant-numeric: tabular-nums; }
