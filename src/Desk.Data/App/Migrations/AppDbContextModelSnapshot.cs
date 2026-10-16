@@ -227,6 +227,42 @@ namespace Desk.Data.App.Migrations
                     b.ToTable("seed_metadata", "app");
                 });
 
+            modelBuilder.Entity("Desk.Data.Auth.AuthSession", b =>
+                {
+                    b.Property<string>("Sid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("sid");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("PreviousRid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("previous_rid");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("Rid")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("rid");
+
+                    b.Property<DateTimeOffset>("RotatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rotated_at");
+
+                    b.HasKey("Sid");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("sessions", "auth");
+                });
+
             modelBuilder.Entity("Desk.Data.Auth.DeskUser", b =>
                 {
                     b.Property<Guid>("Id")
