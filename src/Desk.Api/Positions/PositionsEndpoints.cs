@@ -179,13 +179,13 @@ public static class PositionsEndpoints
         return count;
     }
 
-    private sealed record Resolved(GridQuery? Query, IResult? Error);
+    internal sealed record Resolved(GridQuery? Query, IResult? Error);
 
     /// <summary>
     /// Validates the as-of date and whitelists the request. Null when there's no data or the date is unknown; an
     /// error result when a filter is too large to apply (dropping it would widen the result).
     /// </summary>
-    private static Resolved? Resolve(GridRequest request, MetaSnapshot meta, IPortfolioEntitlements entitlements, HttpContext http)
+    internal static Resolved? Resolve(GridRequest request, MetaSnapshot meta, IPortfolioEntitlements entitlements, HttpContext http)
     {
         if (!meta.HasData) return null;
         var asOf = request.AsOf ?? meta.AsOfDates[0];

@@ -11,6 +11,8 @@ using Desk.Api.Hardening;
 using Desk.Api.Insights;
 using Desk.Data.Insights;
 using Desk.Api.Limits;
+using Desk.Api.Marks;
+using Desk.Data.Marks;
 using Desk.Api.Positions;
 using Desk.Data.Grid;
 using Desk.Data;
@@ -32,7 +34,7 @@ builder.Services.AddDeskCors(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<DemoAccounts>();
 // Forwarded headers (host-wide): behind Render, X-Forwarded-Proto only; ClientAddress resolves the client IP (ADR-0005).
 builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, ClientAddress.ProtoOnly>();
-builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration));
+builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration), MarksOptions.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
 builder.Services.AddSingleton<DbHealthProbe>();
@@ -41,6 +43,8 @@ builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<FundRepository>();
 builder.Services.AddSingleton<DealRepository>();
+builder.Services.AddSingleton<MarkRepository>();
+builder.Services.AddSingleton<MarkUniverses>();
 builder.Services.AddSingleton(InsightsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<InsightsRepository>();
 // README §7.2 (#211): warns at start when the permits and the insights fan-out don't fit DB_MAX_POOL_SIZE.
@@ -115,6 +119,7 @@ api.MapPositionsEndpoints();
 api.MapFundEndpoints();
 api.MapInsightsEndpoints();
 api.MapDealEndpoints();
+api.MapMarksEndpoints();
 api.MapAdminEndpoints();
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 
