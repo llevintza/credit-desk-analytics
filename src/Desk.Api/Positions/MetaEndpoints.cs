@@ -87,7 +87,8 @@ public static class MetaEndpoints
         var started = Stopwatch.GetTimestamp();
         if (!Pages.Contains(page))
         {
-            PositionsEndpoints.SetTiming(http, "MISS", 0, 0, started);
+            // No cache was read: no X-Cache, like the other problem responses (#67).
+            PositionsEndpoints.SetServerTiming(http, 0, 0, started);
             return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Unknown page");
         }
         var user = UserId(http.User);

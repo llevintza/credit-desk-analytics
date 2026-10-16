@@ -245,8 +245,14 @@ public static class PositionsEndpoints
     /// <summary>README §8 observability: <c>Server-Timing</c> (db, serialize, total) and <c>X-Cache</c>.</summary>
     internal static void SetTiming(HttpContext http, string cache, double dbMs, double serializeMs, long started)
     {
-        var total = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         http.Response.Headers["X-Cache"] = cache;
+        SetServerTiming(http, dbMs, serializeMs, started);
+    }
+
+    /// <summary><c>Server-Timing</c> alone, for a response that read no cache (a problem response).</summary>
+    internal static void SetServerTiming(HttpContext http, double dbMs, double serializeMs, long started)
+    {
+        var total = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         http.Response.Headers["Server-Timing"] = string.Create(CultureInfo.InvariantCulture,
             $"db;dur={dbMs:0.0}, ser;dur={serializeMs:0.0}, total;dur={total:0.0}");
     }

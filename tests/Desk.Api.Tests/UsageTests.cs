@@ -32,7 +32,9 @@ public sealed class UsageTests(PostgresApiFactory api)
     }
 
     /// <summary>A migrated, empty database in the shared container, holding <paramref name="rows"/>.</summary>
-    private async Task<UsageRepository> IsolatedAsync(params AuditEntry[] rows)
+    private async Task<UsageRepository> IsolatedAsync(params AuditEntry[] rows) => new(new Contexts(await IsolatedOptionsAsync(rows)));
+
+    private async Task<DbContextOptions<AppDbContext>> IsolatedOptionsAsync(params AuditEntry[] rows)
     {
         var cs = new NpgsqlConnectionStringBuilder(api.ConnectionString) { Database = $"usage_{Guid.NewGuid():N}" }.ConnectionString;
         await using (var conn = new NpgsqlConnection(api.ConnectionString))
@@ -49,7 +51,7 @@ public sealed class UsageTests(PostgresApiFactory api)
             db.Audit.AddRange(rows);
             await db.SaveChangesAsync(Ct);
         }
-        return new UsageRepository(new Contexts(options));
+        return options;
     }
 
     [Fact]
@@ -190,6 +192,32 @@ public sealed class UsageTests(PostgresApiFactory api)
         // Its own audit row carries no cache status, so reading the page doesn't move the hit ratio.
         var mine = await api.WaitForAuditAsync(a => a.Endpoint == "GET /api/admin/usage" && a.Status == 200);
         Assert.All(mine, a => Assert.Null(a.Cache));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(31)]
+    public async Task At_full_retention_the_oldest_day_shown_is_whole(int retentionDays)
+    {
+        // #70: the purge cutoff is now - retention, not midnight. Purged at the last instant of today, the oldest day
+        // shown keeps its first row, and only the day before it (never shown) loses rows.
+        var now = new DateTimeOffset(Day2.ToDateTime(new TimeOnly(23, 59, 59, 999, 999)), TimeSpan.Zero);
+        var (from, to) = AdminEndpoints.UsageWindow(AdminEndpoints.MaxUsageDays, TimeSpan.FromDays(retentionDays), now);
+        Assert.Equal((Day2.AddDays(1 - retentionDays), Day2), (from, to));
+        var user = $"{Guid.NewGuid():N}@example.com";
+        var options = await IsolatedOptionsAsync(
+            Request(At(from, 0), user, 1),
+            Request(At(from, 23, 59, 59), user, 1),
+            Request(At(from.AddDays(-1), 0), user, 1));
+
+        var retention = AuditTests.Retention(retentionDays.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now));
+        await using (var db = new AppDbContext(options))
+            Assert.Equal(1, await retention.PurgeIfDueAsync(db, Ct));
+
+        var report = await new UsageRepository(new Contexts(options)).ReadAsync(from, to, Ct);
+        Assert.Equal(2, Assert.Single(report.Days, d => d.Day == from).Requests);
     }
 
     [Fact]
