@@ -367,6 +367,8 @@ jobs:
             --test-coverage-lines=80 --test-coverage-branches=80 \
             --test-coverage-include=perf/payload-size.mjs \
             perf/payload-size.test.mjs
+      - name: Seeder cap wiring tests (#224)
+        run: node --test .github/scripts/seed-cap-wiring.test.mjs
 
   compose-smoke:
     # The same checks the deploy smoke test runs against Render, here against the built image.
