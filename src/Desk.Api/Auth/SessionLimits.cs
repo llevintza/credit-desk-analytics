@@ -53,3 +53,82 @@ public sealed class SessionRevocations
 
     public int Count => _until.Count;
 }
+
+/// <summary>
+/// Single-use refresh tokens with reuse detection (#353, ADR-0024). Each token pair carries a refresh id
+/// (<see cref="AuthSetup.RefreshIdClaim"/>); this holds, per session, the one id whose refresh token may still be
+/// swapped. A refresh that presents any other id replays a token already swapped: a stolen copy, or the owner's own
+/// after a thief swapped it first. The caller then ends the whole session, for both holders.
+/// One exception, the grace window: for a short time after a swap, the id just swapped gets a pair for the current id
+/// without a new swap. A page reload can abort a refresh after the server swapped the token, and the reloaded page
+/// then sends the old token again; two racing refreshes with one token end up on one id the same way.
+/// Per process, like <see cref="SessionRevocations"/>: after a restart a session's first refresh is believed and its
+/// new id becomes the current one. Only ids and times are kept, never token values.
+/// </summary>
+public sealed class RefreshRotations(TimeSpan grace)
+{
+    /// <summary>The grace window when <see cref="GraceSecondsKey"/> is unset or not a positive number of seconds.</summary>
+    public static readonly TimeSpan DefaultGrace = TimeSpan.FromSeconds(30);
+    /// <summary>The longest grace window a setting can ask for; a larger value is clamped to it.</summary>
+    public static readonly TimeSpan MaxGrace = TimeSpan.FromSeconds(120);
+    public const string GraceSecondsKey = "AUTH_REFRESH_REUSE_GRACE_SECONDS";
+
+    private readonly ConcurrentDictionary<string, Entry> _current = new(StringComparer.Ordinal);
+
+    public TimeSpan Grace => grace;
+
+    /// <summary>
+    /// The grace window from <see cref="GraceSecondsKey"/>. As with LimitsOptions, a typo or 0 can't turn it off:
+    /// anything that isn't a positive number gives <see cref="DefaultGrace"/>. Above <see cref="MaxGrace"/> it's clamped,
+    /// so a typo can't stretch the window in which a racing thief goes unseen.
+    /// </summary>
+    public static TimeSpan GraceFrom(IConfiguration config) =>
+        double.TryParse(config[GraceSecondsKey], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0 && double.IsFinite(v)
+            ? TimeSpan.FromSeconds(Math.Min(v, MaxGrace.TotalSeconds))
+            : DefaultGrace;
+
+    /// <summary>A new sign-in: <paramref name="rid"/> is its current id until <paramref name="until"/> (its 24 h limit).</summary>
+    public void Issue(string sid, string rid, DateTimeOffset until, DateTimeOffset now)
+    {
+        // Every sign-in prunes, so the map holds at most the sessions started in the last 24 h.
+        foreach (var (key, entry) in _current)
+            if (entry.Until <= now) _current.TryRemove(key, out _);
+        _current[sid] = new Entry(rid, null, now, until);
+    }
+
+    /// <summary>
+    /// The refresh id the new token pair carries, or null for a replay (the caller ends the session):
+    /// <list type="bullet">
+    /// <item>the current id is swapped for <paramref name="next"/>, which is returned;</item>
+    /// <item>the id swapped last, within the grace window, gets the current id back and swaps nothing;</item>
+    /// <item>any other id, or the last one after the window, is a replay.</item>
+    /// </list>
+    /// Of concurrent refreshes with one token, exactly one swaps; the others get the id it swapped to.
+    /// </summary>
+    public string? Rotate(string sid, string? presented, string next, DateTimeOffset until, DateTimeOffset now)
+    {
+        while (true)
+        {
+            if (!_current.TryGetValue(sid, out var entry))
+            {
+                if (_current.TryAdd(sid, new Entry(next, presented, now, until)))
+                    return next;
+                continue;
+            }
+            if (string.Equals(entry.Rid, presented, StringComparison.Ordinal))
+            {
+                if (_current.TryUpdate(sid, new Entry(next, presented, now, until), entry))
+                    return next;
+                continue; // another refresh swapped it first: look again, this id is now the previous one
+            }
+            return presented is not null && string.Equals(entry.Previous, presented, StringComparison.Ordinal) && now - entry.RotatedAt < grace
+                ? entry.Rid
+                : null;
+        }
+    }
+
+    public int Count => _current.Count;
+
+    /// <summary>The id that may be swapped, the one swapped for it (and when), and the session's 24 h end.</summary>
+    private sealed record Entry(string Rid, string? Previous, DateTimeOffset RotatedAt, DateTimeOffset Until);
+}

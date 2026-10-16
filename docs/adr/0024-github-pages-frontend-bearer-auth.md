@@ -102,13 +102,15 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - `POST /api/auth/login` returns Identity's `AccessTokenResponse`: `tokenType` `Bearer`, `accessToken`, `expiresIn` 300, `refreshToken`. No cookie is set. Lockout, `ExpiresAt`, the timing guard and the login floor are unchanged.
 - The access token lasts **5 minutes**, the old stamp interval. It is checked without the database. On every authenticated request, `SessionLimits` also drops a token whose account expiry has passed (from the claim), whose sign-in is 24 h old, or whose session was logged out.
 - The refresh token lasts **8 hours**, and each refresh issues a new one. That is the old sliding limit.
-  - Refresh tokens are **not single-use**. They are stateless data-protected tickets, so the one a refresh replaces stays valid until its own 8 h run out. There is no reuse detection.
+  - Refresh tokens are **single-use** (#353). Each token pair carries a refresh id (`desk:rid`), and `RefreshRotations` keeps, in memory per session, the one id that may still be swapped. A refresh that presents a token already swapped is a replay: a stolen copy, or the owner's own after a thief swapped it first. The session is then revoked (as by a logout), so every token of that sign-in stops working for both holders.
+  - **Grace window** (amendment below, 2026-10-15): for `AUTH_REFRESH_REUSE_GRACE_SECONDS` (default 30 s, at most 120 s) after a swap, the token swapped last gets a pair for the session's *current* refresh id, and nothing is swapped. Of two concurrent refreshes with one token, exactly one swaps and both get a pair for the same id (tested).
   - The refresh endpoint is anonymous and has no policy of its own: it draws on the global limiter's per-client-IP token bucket (`ClientAddress`, 60/min, burst 20) and the shared concurrency limit, like any anonymous `/api` call (tested).
 - `POST /api/auth/refresh` (anonymous, keyed on the client IP by the rate limiter) renews both tokens only if all of these hold:
   - the refresh token unprotects and hasn't expired;
   - the session is under 24 h and not logged out;
   - the security stamp is unchanged, so a disable or reset by `Desk.UserAdmin` ends it;
-  - `CanSignInAsync` passes (not disabled, not expired, read from the database).
+  - `CanSignInAsync` passes (not disabled, not expired, read from the database);
+  - its refresh id is the session's current one. This is checked last, so a dead token (expired, logged out) is just refused and never counts as a replay.
 - The new tokens keep the original sign-in time (`desk:auth_time`) and session id (`desk:sid`) claims, so refreshing can't stretch the 24 h absolute limit.
 - Roles, account expiry and (once ADR-0021's grants exist) entitlement claims are re-read at every refresh: a change applies within 5 minutes, as with the cookie's stamp refresh.
 - Lockout doesn't end a live session. Failed passwords are something anyone can send, so it must not let a stranger sign a user out. That matches the cookie behaviour.
@@ -142,7 +144,7 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 
 - **The front end deploys on its own**, to a CDN, and stays up while the API sleeps. The login page paints at once on a cold start.
 - **XSS exposure (accepted, the main cost):**
-  - A script injected into the SPA can read the access token from memory and the refresh token from `sessionStorage`. It can then use them from anywhere until the refresh token's 8 h (at most 24 h) runs out, or until a disable or reset.
+  - A script injected into the SPA can read the access token from memory and the refresh token from `sessionStorage`. It can then use them from anywhere until the owner's next refresh ends the session as a replay (#353), or until a disable or reset.
   - With `HttpOnly` cookies, XSS could act only inside the open page.
   - Mitigations: Angular's template escaping; no `innerHTML` with API data; `script-src 'self'` and no inline scripts; access tokens that last 5 minutes; refresh tokens in `sessionStorage`, not `localStorage` (gone when the tab closes, never shared across tabs); and `Desk.UserAdmin disable` / `reset` to end a stolen session at its next refresh.
 - **One origin for every Pages site on the account (accepted by Leo, 2026-10-11):**
@@ -160,9 +162,12 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
   - A meta CSP can't set `frame-ancestors`, so the Pages copy can be framed (clickjacking). The risk is low: there are no state-changing one-click actions, and the token never goes into a frame's URL.
   - The API-served copy keeps the full header set (README §7.3).
 - **A stolen refresh token:**
-  - Whoever holds it can keep refreshing until the session's 24 h cap from sign-in. Each refresh renews the 8 h idle limit, and rotation doesn't kill the stolen copy.
-  - What ends it sooner: a logout from the session it belongs to (on the running instance only; see below), or `Desk.UserAdmin disable` or `reset`, which rotate the security stamp and end every session of that account at its next refresh.
-  - Reuse detection (one-time refresh tokens, revoking the whole session when an old one comes back) would need server-side token state. It is left out for the same reason as a revocation table, and should be revisited together with it.
+  - Each refresh token works once (#353). If the thief refreshes first, the owner's next refresh presents a swapped token, and the whole session ends for both. If the owner refreshes first, the thief's copy is the replay and ends it. Either way a stolen token buys at most the time until the owner's next refresh (5 min of activity), not the rest of the 24 h.
+  - What else ends it: a logout from the session it belongs to (on the running instance only; see below), or `Desk.UserAdmin disable` or `reset`, which rotate the security stamp and end every session of that account at its next refresh.
+  - Limits of the detection: `RefreshRotations` is per process, like the revocation list. After a restart, a redeploy or a free-tier spin-down, a session's first refresh is believed and becomes the current one, so a thief who refreshes first after a restart is caught only when the owner refreshes. A second instance would need the state in the database (see Revisit).
+  - The grace window (amendment below) is not detected: a thief who presents the token swapped last within 30 s of the owner's refresh gets a working pair. The replay is still caught at the session's next swap, when one of the two holders presents a swapped token after the window.
+  - The cost to a real user: a refresh whose response is lost (a reload aborts it, or the network drops after the server swapped the token) is covered by the grace window if the tab refreshes again within 30 s, which a reload does at once. Later than that, the tab holds a dead token, its next refresh ends the session and the user signs in again. The same happens to a duplicated browser tab, which copies `sessionStorage` and so shares one refresh token with the original, once the two tabs refresh more than 30 s apart. The SPA's own concurrent 401s already share one refresh call.
+  - The e2e run restores one saved session in every test, so it writes each renewed refresh token back to `.auth/session.json` (`e2e/tests/session.ts`).
 - **Logout limits:**
   - The revocation list is per process. A restart, a redeploy, or a free-tier spin-down after about 15 min idle forgets it. A logged-out token copied elsewhere then works again until it expires: up to 5 min for an access token, up to 8 h (and never past 24 h from sign-in) for a refresh token.
   - The SPA always forgets the tokens locally, so the browser that signed out is signed out.
@@ -178,4 +183,24 @@ The API's cold start itself is unchanged: the first API call still waits for Ren
 - **Perf and e2e tooling sends bearer tokens:**
   - `payload-size.mjs`, `LastBlockCheck` and the k6 scripts finish well inside the 5-minute access token.
   - The e2e setup saves the tab's `sessionStorage` next to Playwright's storage state, and a fixture restores it in every test.
-- **Revisit** if the project gets a custom domain (option 1 then gives back `HttpOnly` with a same-site cookie), if the API ever runs more than one instance (move revocation to the database), or if SSO is added (README §16).
+- **Revisit** if the project gets a custom domain (option 1 then gives back `HttpOnly` with a same-site cookie), if the API ever runs more than one instance (move revocation and the refresh-token rotation state to the database), or if SSO is added (README §16).
+
+## Amendment 2026-10-15: a grace window for the token swapped last (#353, PR #366)
+
+- **Status:** Accepted (2026-10-15, decided by Leo).
+- **Context:** with strict single-use tokens the e2e suite failed on a real user path. A page reload aborts an in-flight `POST /api/auth/refresh` after the server has already swapped the token. The reloaded page still has the old token in `sessionStorage` and sends it again. That is a replay, so the session ended (401) and the user landed on `/login`. A lost response on a flaky network, or two tabs of one session refreshing together, end the same way.
+- **Options:**
+  1. Keep strict reuse detection and make the client survive it (for example, write the token before the request). The client can't: the new token exists only in the response the reload threw away.
+  2. Drop reuse detection (back to stateless tokens). That gives up #353.
+  3. **Grace window (chosen):** for a short time after a swap, accept the token swapped last and answer with the session's current generation, without a new swap.
+- **Decision:**
+  - `RefreshRotations` keeps, per session id, the current refresh id, the id swapped for it and when. That's all: ids and times, never token values (and the log line on a replay names only the user id).
+  - A refresh that presents the current id swaps it for a new one. The previous id, within `AUTH_REFRESH_REUSE_GRACE_SECONDS` of that swap, gets a new pair carrying the *current* id: nothing is swapped, so the answer is idempotent and two racing refreshes converge on one id. Any older id, or the previous one once the window is over, is a replay and revokes the session, as before.
+  - The pair is freshly signed rather than byte-identical to the one the lost response held, because that would mean keeping token values. It is the same generation: it carries the same refresh id, so the two are interchangeable, and only one of them can be swapped.
+  - The swap is a compare-and-swap on a `ConcurrentDictionary` entry. Of concurrent refreshes with one token exactly one swaps; the others see the id they hold as the previous one and get the id it swapped to (tested with 4 threads released together, 200 rounds, for a known and for a forgotten session).
+  - `AUTH_REFRESH_REUSE_GRACE_SECONDS`: default **30**. A missing, zero, negative or unparseable value falls back to 30, as in `LimitsOptions` (a typo can't turn the window off). Above **120** it is clamped to 120, so a typo can't stretch the undetected window either. Fractions are allowed.
+- **Threat model trade-off:**
+  - Not detected: a thief holding the token swapped last who refreshes within 30 s of the owner's refresh. Both then hold tokens of the current generation.
+  - Why that is acceptable here: the thief has to have the token *and* hit a 30 s window that opens only when the owner refreshes (every 5 minutes of activity), so a stolen token alone still dies at the owner's next refresh. And the race isn't forgiven, only deferred: at the next swap, whichever holder comes second presents a swapped token, almost always outside the window, and the session ends for both. The theft can last one more access-token period (5 minutes) than under strict detection, and never past 24 h from sign-in. A script injected into the page (the main threat in this ADR) reads the current token anyway, so the window adds nothing for it.
+  - Against that, strict detection signs real users out on every reload that lands during a refresh: a bug users would hit, for an attack the window delays by minutes.
+- **Consequences:** the e2e specs need no waits around reloads. The per-process limits above still apply: the window, like the rotation state, is forgotten on a restart. Tests: the previous token within the window gets the current generation and the session goes on; at the window's end it revokes; a token two swaps old revokes inside the window; concurrent refreshes converge; the setting falls back and clamps.

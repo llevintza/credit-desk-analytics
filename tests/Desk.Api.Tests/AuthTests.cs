@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using Desk.Api.Auth;
 using Desk.Data.App;
 using Desk.Data.Auth;
 using Microsoft.AspNetCore.Authentication.BearerToken;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -455,6 +457,93 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     [Fact]
+    public async Task A_refresh_token_works_once_and_its_reuse_ends_the_session()
+    {
+        // #353: a swapped refresh token that comes back is a stolen copy (or the owner's, after the thief swapped it).
+        // Either way the session ends for both holders: every token of that sign-in stops working. Past the grace
+        // window, even the token swapped last counts.
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var (client, tokens, user) = await SignedInWithUserAsync(host);
+        var other = PostgresApiFactory.NewClient(host);
+        var otherTokens = await PostgresApiFactory.LoginAsync(other, user.Email!);
+        var renewed = await RefreshAsync(client, tokens.RefreshToken);
+
+        clock.Advance(RefreshRotations.DefaultGrace);
+        var replay = await PostgresApiFactory.PostRefreshAsync(PostgresApiFactory.NewClient(host), tokens.RefreshToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal(AuthEndpoints.RefreshFailedDetail, (await replay.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, renewed.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        // Another sign-in of the same account is a different session and goes on.
+        Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(other, otherTokens.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_token_swapped_last_gets_the_current_pair_within_the_grace_window()
+    {
+        // A reload aborts a refresh after the server swapped the token, and the reloaded page sends the old one again.
+        var (host, clock) = api.WithOwnClock();
+        await using var _ = host;
+        var (client, tokens) = await SignedInAsync(host);
+        var renewed = await RefreshAsync(client, tokens.RefreshToken);
+
+        clock.Advance(RefreshRotations.DefaultGrace - TimeSpan.FromTicks(1));
+        var reloaded = PostgresApiFactory.NewClient(host);
+        var again = await RefreshAsync(reloaded, tokens.RefreshToken);
+
+        // Same refresh id as the current token, so nothing was swapped: either copy can go on, once.
+        Assert.Equal(RefreshId(host, renewed.RefreshToken), RefreshId(host, again.RefreshToken));
+        Assert.NotEqual(RefreshId(host, tokens.RefreshToken), RefreshId(host, again.RefreshToken));
+        Assert.Equal(HttpStatusCode.OK, (await reloaded.GetAsync("/api/me", Ct)).StatusCode);
+        var next = await RefreshAsync(reloaded, again.RefreshToken);
+        Assert.Equal(HttpStatusCode.OK, (await reloaded.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostgresApiFactory.PostRefreshAsync(reloaded, next.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_token_two_swaps_old_ends_the_session_even_within_the_grace_window()
+    {
+        var (client, tokens, _) = await api.SignedInAsync();
+        var first = await RefreshAsync(client, tokens.RefreshToken);
+        var second = await RefreshAsync(client, first.RefreshToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(api.NewClient(), tokens.RefreshToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/me", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await PostgresApiFactory.PostRefreshAsync(client, second.RefreshToken)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Two_concurrent_refreshes_with_one_token_swap_it_once_and_converge()
+    {
+        var (_, tokens, _) = await api.SignedInAsync();
+        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => PostgresApiFactory.PostRefreshAsync(api.NewClient(), tokens.RefreshToken)));
+        Assert.All(results, r => Assert.Equal(HttpStatusCode.OK, r.StatusCode));
+        var pairs = await Task.WhenAll(results.Select(r => r.Content.ReadFromJsonAsync<AccessTokenResponse>(Ct)));
+        Assert.Single(pairs.Select(p => RefreshId(api, p!.RefreshToken)).Distinct());
+    }
+
+    [Fact]
+    public async Task The_grace_window_comes_from_the_environment()
+    {
+        await using var host = api.WithSettings((RefreshRotations.GraceSecondsKey, "5"));
+        Assert.Equal(TimeSpan.FromSeconds(5), host.Services.GetRequiredService<RefreshRotations>().Grace);
+        Assert.Equal(RefreshRotations.DefaultGrace, api.Services.GetRequiredService<RefreshRotations>().Grace);
+    }
+
+    [Fact]
+    public async Task Each_refresh_token_of_a_chain_works_once_in_turn()
+    {
+        var (client, tokens, _) = await api.SignedInAsync();
+        var refresh = tokens.RefreshToken;
+        for (var i = 0; i < 3; i++)
+            refresh = (await RefreshAsync(client, refresh)).RefreshToken;
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/me", Ct)).StatusCode);
+    }
+
+    [Fact]
     public async Task Logout_needs_a_token()
     {
         Assert.Equal(HttpStatusCode.Unauthorized, (await api.NewClient().PostAsync("/api/auth/logout", null, Ct)).StatusCode);
@@ -587,6 +676,11 @@ public sealed class AuthTests(PostgresApiFactory api)
     }
 
     /// <summary>Refreshes, asserts success, and sends the new access token from <paramref name="client"/> from now on.</summary>
+    /// <summary>The refresh id (<see cref="AuthSetup.RefreshIdClaim"/>) inside a refresh token, read with the host's own keys.</summary>
+    private static string RefreshId(WebApplicationFactory<Program> host, string refreshToken) =>
+        host.Services.GetRequiredService<IOptionsMonitor<BearerTokenOptions>>().Get(AuthSetup.Scheme)
+            .RefreshTokenProtector.Unprotect(refreshToken)!.Principal.FindFirstValue(AuthSetup.RefreshIdClaim)!;
+
     private static async Task<AccessTokenResponse> RefreshAsync(HttpClient client, string refreshToken)
     {
         var res = await PostgresApiFactory.PostRefreshAsync(client, refreshToken);
