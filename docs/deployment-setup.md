@@ -163,9 +163,9 @@ To resume (Leo, on or after 2026-11-01, once the credit is back): GitHub repo â†
 **The Claude review is advisory.** Its `blocking=<n>` is the model's own count, and any workflow running as `github-actions[bot]` can post the marker, so it never decides a merge.
 
 The review gate (Tech Coordinator plus Code Reviewer; Claude's review is advisory only):
-1. Every suite (API xUnit, web Vitest, compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
+1. Every suite (.NET xUnit: Desk.Api.Tests, Desk.Data.Tests, Desk.Seeder.Tests; web Vitest; the gate-script `node --test` suites in the `gate-tests` job; compose smoke) passes in CI on the PR head, with nothing skipped, disabled or weakened.
 2. coverlet and Vitest coverage are collected and published in CI, with the numbers in the PR summary; â‰¥80% on new or changed code; main never drops. Missing coverage means REQUEST CHANGES.
-3. Any workflow, action, Dockerfile, render.yaml, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
+3. Any workflow, action, Dockerfile, render.yaml, `.github/dependabot.yml`, `perf/coverage-*`, `tests/testconfig.json`, or `.gitleaks.toml` change gets governance review: SHA-pinned actions, least-privilege permissions, secrets only in the `production` environment (sole exception: the capped Claude key in `claude-review`), no unsafe `pull_request_target`, gitleaks stays on, nothing removed or loosened.
 
 Tech Coordinator merges and starts the next phase.
 
