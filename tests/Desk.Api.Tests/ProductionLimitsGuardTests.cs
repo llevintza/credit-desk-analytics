@@ -16,7 +16,7 @@ public sealed partial class ProductionLimitsGuardTests
     private static readonly LimitsOptions Defaults = new(
         PerUserPerMinute: 60, PerUserBurst: 20, LoginPerIpPerMinute: 5, GlobalConcurrency: 8, GlobalQueue: 32,
         PerUserConcurrency: 1, PerUserQueue: 8, InsightsConcurrency: 5, InsightsQueue: 15, ExportSlots: 2,
-        ExportTimeout: TimeSpan.FromSeconds(60));
+        ExportTimeout: TimeSpan.FromSeconds(60), ExportMaxRows: 25_000);
 
     /// <summary>Every key <see cref="LimitsOptions.From"/> reads, with the largest value a production path may carry.</summary>
     private static readonly IReadOnlyDictionary<string, double> Ceilings = new Dictionary<string, double>
@@ -32,7 +32,14 @@ public sealed partial class ProductionLimitsGuardTests
         ["RATE_LIMIT_PER_USER_INSIGHTS_QUEUE"] = Defaults.InsightsQueue,
         ["EXPORT_GLOBAL_SLOTS"] = Defaults.ExportSlots,
         ["EXPORT_TIMEOUT_SECONDS"] = Defaults.ExportTimeout.TotalSeconds,
+        ["EXPORT_MAX_ROWS"] = Defaults.ExportMaxRows,
     };
+
+    /// <summary>
+    /// Fields no setting can raise (#277): <c>EXPORT_MAX_ROWS</c> may only lower the built-in cap, so a raised value is
+    /// clamped and leaves the field unchanged. The scan still flags one above the cap; the coverage check lowers it.
+    /// </summary>
+    private static readonly HashSet<string> LowerOnly = [nameof(LimitsOptions.ExportMaxRows)];
 
     [Fact]
     public void Defaults_are_the_readme_limits()
@@ -48,9 +55,15 @@ public sealed partial class ProductionLimitsGuardTests
             Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, (c.Value + 1).ToString(CultureInfo.InvariantCulture)))).Build();
         var options = LimitsOptions.From(raised);
         var unchanged = typeof(LimitsOptions).GetProperties()
-            .Where(p => Equals(p.GetValue(options), p.GetValue(Defaults)))
+            .Where(p => !LowerOnly.Contains(p.Name) && Equals(p.GetValue(options), p.GetValue(Defaults)))
             .Select(p => p.Name);
         Assert.Empty(unchanged);
+
+        // A lower-only field is read from its key all the same: lowering it changes it.
+        var lowered = LimitsOptions.From(new ConfigurationBuilder().AddInMemoryCollection(
+            Ceilings.Select(c => new KeyValuePair<string, string?>(c.Key, "1"))).Build());
+        Assert.All(LowerOnly, name => Assert.NotEqual(
+            typeof(LimitsOptions).GetProperty(name)!.GetValue(Defaults), typeof(LimitsOptions).GetProperty(name)!.GetValue(lowered)));
     }
 
     [Fact]
@@ -100,6 +113,7 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("EXPORT_GLOBAL_SLOTS=3")]
     [InlineData("RATE_LIMIT_PER_USER_PER_MIN=6000 # temporary")] // a comment doesn't hide a raised value
     [InlineData("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE=16")]
+    [InlineData("EXPORT_MAX_ROWS=100000")] // clamped to 25,000 anyway, but not a production setting
     public void A_seeded_regression_is_caught(string text)
     {
         Assert.NotEmpty(RaisedLimits(text));
