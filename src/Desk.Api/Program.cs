@@ -14,6 +14,7 @@ using Desk.Api.Limits;
 using Desk.Api.Positions;
 using Desk.Data.Grid;
 using Desk.Data;
+using Desk.Data.App;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Options;
 
@@ -41,6 +42,7 @@ builder.Services.AddHostedService<AuditPurgeTimer>();
 builder.Services.AddSingleton<GridRepository>();
 builder.Services.AddSingleton<FundRepository>();
 builder.Services.AddSingleton<DealRepository>();
+builder.Services.AddSingleton<UsageRepository>();
 builder.Services.AddSingleton(InsightsOptions.From(builder.Configuration));
 builder.Services.AddSingleton<InsightsRepository>();
 // README §7.2 (#211): warns at start when the permits and the insights fan-out don't fit DB_MAX_POOL_SIZE.

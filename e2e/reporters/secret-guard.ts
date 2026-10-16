@@ -1,27 +1,31 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
-import type { FullConfig, FullResult, Reporter, TestCase, TestResult, TestStep } from '@playwright/test/reporter';
+import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult, TestStep } from '@playwright/test/reporter';
 
 /**
  * #155: the e2e-report artifact is public, so the throwaway viewer's password must not be in it. Listed after the
  * html reporter, whose onEnd has written the report by the time this one's runs, and fails the run if any step title,
  * error or file under the report or output folders (including the report's embedded zip and trace zips) holds the
- * password.
+ * password. It fails closed: a run that logs in (any project but the guard's own checks) fails when DESK_PASSWORD is empty
+ * or shorter than the app's minimum, since the scan would then pass without looking for anything.
  */
 export default class SecretGuard implements Reporter {
   private readonly secrets: string[];
   private readonly dirs: string[];
   private root = process.cwd();
   private readonly leaks: string[] = [];
+  private weakSecret = false;
 
   constructor(options: { dirs?: string[]; secrets?: string[] } = {}) {
     this.secrets = options.secrets ?? [process.env.DESK_PASSWORD ?? ''];
     this.dirs = options.dirs ?? ['playwright-report', 'test-results'];
   }
 
-  onBegin(config: FullConfig): void {
+  onBegin(config: FullConfig, suite?: Suite): void {
     if (config.configFile) this.root = dirname(config.configFile);
+    const logsIn = suite?.allTests().some((t) => t.parent.project()?.name !== selfCheckProject) ?? false;
+    this.weakSecret = logsIn && this.secrets.some((s) => s.length < minSecretLength);
   }
 
   onStepEnd(test: TestCase, _result: TestResult, step: TestStep): void {
@@ -37,6 +41,11 @@ export default class SecretGuard implements Reporter {
 
   async onEnd(): Promise<{ status?: FullResult['status'] } | void> {
     for (const dir of this.dirs) this.leaks.push(...scanDir(resolve(this.root, dir), this.secrets));
+    if (this.weakSecret) {
+      // Never print the value or its length.
+      console.error(`\nsecret-guard (#155): DESK_PASSWORD is empty or shorter than ${minSecretLength} characters, so the leak check can't run. Set it to the Desk.UserAdmin password.`);
+      return { status: 'failed' };
+    }
     if (!this.leaks.length) return;
     console.error(`\nsecret-guard (#155): DESK_PASSWORD is in the run's output: ${this.leaks.join(', ')}`);
     return { status: 'failed' };
@@ -46,6 +55,12 @@ export default class SecretGuard implements Reporter {
     return false;
   }
 }
+
+/** The project that runs the guard's own checks (playwright.config.ts): it needs no password. */
+const selfCheckProject = 'guard';
+
+/** Identity's minimum (IdentityPolicy.MinPasswordLength); Desk.UserAdmin's generated passwords are longer. */
+const minSecretLength = 14;
 
 /** The forms a secret can take once written into a report: as typed, JSON-escaped, URL-encoded. */
 function needles(secrets: string[]): Buffer[] {

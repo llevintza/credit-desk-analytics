@@ -5,7 +5,7 @@ Area file for `tests/` (xUnit v3 + Microsoft.Testing.Platform, Testcontainers Po
 ## Projects
 
 - `tests/Desk.Api.Tests` (Mvc.Testing 10.0.12, TimeProvider.Testing, Testcontainers.PostgreSql 4.15.0)
-- `tests/Desk.Data.Tests`
+- `tests/Desk.Data.Tests`: also references the `perf/LastBlockCheck` console project (an `Exe`), so building it builds the perf tool too. `LastBlockComparisonTests` cover the tool's pure comparison (#181); that assembly is outside the `[Desk.*]` coverage scope.
 - `tests/Desk.Seeder.Tests`
 - Shared `tests/Directory.Build.props`: xunit.v3 4.0.1, coverlet.MTP 10.1.0, `OutputType Exe`. `global.json` sets runner `Microsoft.Testing.Platform`.
 
