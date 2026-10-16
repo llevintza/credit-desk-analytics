@@ -58,13 +58,20 @@ public static class ConnectionStrings
         return b.ConnectionString;
     }
 
-    internal static SslMode ParseSslMode(string value)
+    // The libpq names and Npgsql's enum names, exactly (case-insensitive). Not Enum.TryParse, which also takes
+    // numbers, signs, surrounding whitespace and comma-joined flags ("allow,prefer" is 1|2 = Require) (#110).
+    private static readonly Dictionary<string, SslMode> SslModes = new(StringComparer.OrdinalIgnoreCase)
     {
-        var token = value.Replace("-", "", StringComparison.Ordinal);
-        // Enum.TryParse accepts numeric tokens ("3" → Require). Reject those.
-        if (token.Length == 0 || token.All(char.IsDigit) ||
-            !Enum.TryParse<SslMode>(token, ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
-            throw new ArgumentException($"Unknown sslmode '{value}'.");
-        return mode;
-    }
+        ["disable"] = SslMode.Disable,
+        ["allow"] = SslMode.Allow,
+        ["prefer"] = SslMode.Prefer,
+        ["require"] = SslMode.Require,
+        ["verify-ca"] = SslMode.VerifyCA,
+        ["verifyca"] = SslMode.VerifyCA,
+        ["verify-full"] = SslMode.VerifyFull,
+        ["verifyfull"] = SslMode.VerifyFull,
+    };
+
+    internal static SslMode ParseSslMode(string value) =>
+        SslModes.TryGetValue(value, out var mode) ? mode : throw new ArgumentException($"Unknown sslmode '{value}'.");
 }

@@ -68,6 +68,61 @@ public sealed class ConnectionStringsTests
         Assert.Contains("sslmode", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    // #110 R3-N3: only the libpq names and Npgsql's enum names, exactly. Enum.TryParse would take a sign,
+    // surrounding whitespace, hex-free numbers and comma-joined flags ("allow,prefer" is 1|2 = Require).
+    [Theory]
+    [InlineData("+3")]
+    [InlineData(" 0")]
+    [InlineData("0 ")]
+    [InlineData("-3")]
+    [InlineData("+0")]
+    [InlineData("\t3")]
+    [InlineData("3\n")]
+    [InlineData("１")]
+    [InlineData(" require")]
+    [InlineData("require ")]
+    [InlineData("\trequire")]
+    [InlineData("allow,prefer")]
+    [InlineData("Allow, Prefer")]
+    [InlineData("disable,require")]
+    [InlineData("re-quire")]
+    [InlineData("-require")]
+    [InlineData("verify--full")]
+    [InlineData("verify_full")]
+    [InlineData("verifyfull-")]
+    [InlineData("-")]
+    [InlineData("")]
+    public void ParseSslMode_rejects_signed_padded_flag_and_misplaced_hyphen_forms(string sslmode)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => ConnectionStrings.ParseSslMode(sslmode));
+        Assert.Contains("sslmode", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("+3")]
+    [InlineData(" 0")]
+    [InlineData("allow,prefer")]
+    [InlineData(" require")]
+    public void Normalize_rejects_malformed_sslmode_from_an_escaped_uri(string sslmode)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ConnectionStrings.Normalize($"postgres://desk@localhost/db?sslmode={Uri.EscapeDataString(sslmode)}"));
+        Assert.Contains("sslmode", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("disable", SslMode.Disable)]
+    [InlineData("ALLOW", SslMode.Allow)]
+    [InlineData("Prefer", SslMode.Prefer)]
+    [InlineData("require", SslMode.Require)]
+    [InlineData("verify-ca", SslMode.VerifyCA)]
+    [InlineData("VERIFY-CA", SslMode.VerifyCA)]
+    [InlineData("verifyca", SslMode.VerifyCA)]
+    [InlineData("verify-full", SslMode.VerifyFull)]
+    [InlineData("verifyFull", SslMode.VerifyFull)]
+    public void ParseSslMode_accepts_every_libpq_and_npgsql_name(string sslmode, SslMode expected) =>
+        Assert.Equal(expected, ConnectionStrings.ParseSslMode(sslmode));
+
     [Fact]
     public void Normalize_uri_without_userinfo_and_query_flag_without_value()
     {

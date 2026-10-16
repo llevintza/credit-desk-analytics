@@ -377,6 +377,8 @@ jobs:
             perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
+      - name: Deploy Swagger/OpenAPI exposure smoke tests (#110)
+        run: node --test .github/scripts/swagger-exposure-smoke.test.mjs
       - name: Cloudflare IP range check, fixture only (#161, ≥80% line/branch)
         run: |
           node --test --experimental-test-coverage \
