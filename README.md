@@ -99,7 +99,7 @@ flowchart LR
   API -- "per-source queries in parallel" --> MKT & SURV & PRC & REF
 ```
 
-Rendered diagrams for readers without repo access: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png) (SVG sources alongside, in `docs/architecture/`).
+Rendered diagrams, for sharing outside GitHub: [service architecture](docs/architecture/service-architecture.png) and [deployment and CI/CD](docs/architecture/deployment.png). The SVG sources sit alongside in `docs/architecture/`; re-render the PNGs after editing one with `node docs/architecture/render.mjs` (Playwright Chromium from `e2e/`, 2×).
 
 **Key decisions (each one gets an ADR, see §15):**
 
