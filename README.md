@@ -1081,5 +1081,5 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 6 Insights Board | #339 | Merged; follow-up #227: the coverage summary shows covered/total counts and slack (`[workflows]`, merged as #429, `1033bc1`); follow-up #357: insights source reads get their own per-user limiter partition (5 in flight, queue 15) so the P3 e2e is green under #174's cap (merged as #382, `929dcea`; supersedes #364) |
 | 7 Deal Explorer | #363 | Merged (`09b8344`): `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | n/a | Not started |
-| 9 Hardening | n/a | In progress: #241, the All-preset whole-book MISS p95 (stored weight column, parallel summary; ADR-0006 addendum): local 61–83 ms, hosted CI 155.5 ms (was ≈ 249), in review |
+| 9 Hardening | n/a | In progress: #241, the All-preset whole-book MISS p95: stored weight column and parallel summary merged as #460 (`ef2efff`; local 61–83 ms, hosted CI 155.5 ms, was ≈ 249); a first view's page and totals on two connections with a spare database permit (ADR-0006 addendum), in review |
 | 10 Intraday overlay (stretch) | n/a | Not started |
