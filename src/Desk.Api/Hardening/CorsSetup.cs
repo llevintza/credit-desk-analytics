@@ -13,10 +13,17 @@ public static class CorsSetup
 {
     public const string ConfigKey = "CORS_ALLOWED_ORIGINS";
 
-    /// <summary>Request headers the SPA sends: the token, JSON bodies, and the positions grid's conditional request.</summary>
-    public static readonly string[] AllowedHeaders = ["Authorization", "Content-Type", "If-None-Match"];
-    /// <summary>Response headers the SPA reads: the 429 wait, the status bar's cache and server time, the grid's ETag.</summary>
-    public static readonly string[] ExposedHeaders = ["Retry-After", "X-Cache", "Server-Timing", "ETag", Positions.PositionsEndpoints.TruncatedHeader];
+    /// <summary>
+    /// Request headers the SPA sends: the token, JSON bodies, the positions grid's conditional request, and the
+    /// Performance Lab's switches (ADR-0028).
+    /// </summary>
+    public static readonly string[] AllowedHeaders = ["Authorization", "Content-Type", "If-None-Match", Lab.LabSwitches.CacheHeader, Lab.LabSwitches.EncodingHeader];
+    /// <summary>
+    /// Response headers the SPA reads: the 429 wait, the status bar's cache and server time, the grid's ETag, the
+    /// export's truncation, and the encoding a lab run forced.
+    /// </summary>
+    public static readonly string[] ExposedHeaders =
+        ["Retry-After", "X-Cache", "Server-Timing", "ETag", Positions.PositionsEndpoints.TruncatedHeader, Lab.LabSwitches.EncodingHeader];
 
     /// <summary>
     /// The configured origins, normalised (no trailing slash, lower case). Anything that isn't an https origin is

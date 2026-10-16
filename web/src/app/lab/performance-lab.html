@@ -1,0 +1,104 @@
+<section class="toolbar" aria-label="Performance Lab toggles">
+  <div class="group" role="group" aria-label="Query">
+    <span class="name">Query</span>
+    @for (c of targets; track c.value) {
+      <button type="button" [attr.data-testid]="'target-' + c.value" [class.active]="settings().target === c.value"
+              [attr.aria-pressed]="settings().target === c.value" (click)="set('target', c.value)">{{ c.label }}</button>
+    }
+  </div>
+
+  @if (settings().target === 'p1') {
+    <div class="group" role="group" aria-label="Payload format">
+      <span class="name">Payload</span>
+      @for (c of formats; track c.value) {
+        <button type="button" [attr.data-testid]="'format-' + c.value" [class.active]="settings().format === c.value"
+                [attr.aria-pressed]="settings().format === c.value" (click)="set('format', c.value)">{{ c.label }}</button>
+      }
+    </div>
+    <div class="group" role="group" aria-label="Block size">
+      <span class="name">Block</span>
+      @for (c of sizes; track c.value) {
+        <button type="button" [attr.data-testid]="'block-' + c.value" [class.active]="settings().blockSize === c.value"
+                [attr.aria-pressed]="settings().blockSize === c.value" (click)="set('blockSize', c.value)">{{ c.label }}</button>
+      }
+    </div>
+    <div class="group" role="group" aria-label="Columns">
+      <span class="name">Columns</span>
+      @for (c of columnSets; track c.value) {
+        <button type="button" [attr.data-testid]="'columns-' + c.value" [class.active]="settings().columns === c.value"
+                [attr.aria-pressed]="settings().columns === c.value" (click)="set('columns', c.value)">{{ c.label }}</button>
+      }
+      <span class="hint" data-testid="column-count">{{ requested().length }} requested</span>
+    </div>
+  } @else {
+    <div class="group" role="group" aria-label="Insights calls">
+      <span class="name">Calls</span>
+      @for (c of p3Modes; track c.value) {
+        <button type="button" [attr.data-testid]="'p3-' + c.value" [class.active]="settings().p3 === c.value"
+                [attr.aria-pressed]="settings().p3 === c.value" (click)="set('p3', c.value)">{{ c.label }}</button>
+      }
+    </div>
+  }
+
+  <div class="group" role="group" aria-label="Server cache">
+    <span class="name">Cache</span>
+    <button type="button" data-testid="cache-on" [class.active]="!settings().cacheOff" [attr.aria-pressed]="!settings().cacheOff"
+            (click)="set('cacheOff', false)">On</button>
+    <button type="button" data-testid="cache-off" [class.active]="settings().cacheOff" [attr.aria-pressed]="settings().cacheOff"
+            [disabled]="!isAdmin()" [title]="isAdmin() ? 'Skip the server cache for this run' : 'Admin only'"
+            (click)="set('cacheOff', true)">Off</button>
+    <span class="hint">admin only</span>
+  </div>
+  <div class="group" role="group" aria-label="Compression">
+    <span class="name">Compression</span>
+    @for (c of encodings; track c.value) {
+      <button type="button" [attr.data-testid]="'encoding-' + c.value" [class.active]="settings().encoding === c.value"
+              [attr.aria-pressed]="settings().encoding === c.value" (click)="set('encoding', c.value)">{{ c.label }}</button>
+    }
+    <span class="hint" title="Forced by the server only in development; the Encoding column shows what was applied.">dev only</span>
+  </div>
+</section>
+
+<section class="actions" aria-label="Runs">
+  <button type="button" class="primary" data-testid="run" [disabled]="running() || !ready()" (click)="run()">
+    {{ running() ? 'Running…' : 'Run' }}
+  </button>
+  <button type="button" data-testid="copy" [disabled]="runs().length === 0" (click)="copy()">Copy as markdown</button>
+  <button type="button" data-testid="clear" [disabled]="runs().length === 0 || running()" (click)="clear()">Clear</button>
+  <span class="hint">Last {{ maxRuns }} runs, newest first. KB = 1024 bytes. n/a = not reported by the browser or not applicable.</span>
+  @if (copied(); as c) { <span class="ok" role="status" data-testid="copied">{{ c }}</span> }
+</section>
+
+@if (error(); as e) { <div class="error-tile" role="alert" data-testid="error">{{ e }}</div> }
+@if (fallback(); as md) {
+  <label class="fallback">
+    <span>The clipboard is unavailable here: select and copy the markdown.</span>
+    <textarea readonly rows="6" data-testid="markdown" [value]="md"></textarea>
+  </label>
+}
+
+<div class="results" role="region" aria-label="Results" tabindex="0">
+  <table data-testid="results">
+    <thead>
+      <tr>
+        @for (h of headers; track h) { <th scope="col">{{ h }}</th> }
+      </tr>
+    </thead>
+    <tbody>
+      @for (r of table(); track r.id) {
+        <tr [attr.data-testid]="'run-' + r.id">
+          @for (c of r.cells; track $index) { <td [class.text]="textColumns.has($index)">{{ c }}</td> }
+        </tr>
+      } @empty {
+        <tr><td class="empty" [attr.colspan]="headers.length">No runs yet. Pick the toggles and press Run.</td></tr>
+      }
+    </tbody>
+  </table>
+</div>
+
+<p class="caption">
+  P1 renders its block in the grid below (render = rows handed to the grid until the next painted frame). P3 sends
+  the board's reads at once: TTFB is the first response's first byte and Total the last response's end, from the run's
+  start; bytes, parse and server times are summed over the calls.
+</p>
+<ag-grid-angular class="grid" data-testid="lab-grid" [gridOptions]="gridOptions" />
