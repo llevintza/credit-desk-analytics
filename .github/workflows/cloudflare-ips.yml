@@ -1,0 +1,34 @@
+name: Cloudflare IP ranges
+
+# Weekly check that ClientAddress.Cloudflare (src/Desk.Api/Limits/ClientAddress.cs) matches
+# Cloudflare's published ranges (#161, ADR-0005). A range Cloudflare adds that the app doesn't know
+# keys every client behind it on the edge: the shared login bucket of #116. Fails on drift and prints
+# the added and removed ranges. Dispatch-able. Read-only: no secrets, no writes, no issue creation.
+# The comparison is tested with a fixture in gate-tests (.github/scripts/cloudflare-ips.test.mjs).
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cloudflare-ips:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Compare ClientAddress.Cloudflare with api.cloudflare.com/client/v4/ips
+        run: node .github/scripts/cloudflare-ips.mjs
