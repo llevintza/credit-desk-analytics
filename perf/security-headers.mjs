@@ -7,7 +7,8 @@
 //                    reported for the record and never fail the run.
 //
 // Usage: node perf/security-headers.mjs --api http://localhost:8080 [--pages http://localhost:4300/credit-desk-analytics/]
-// Agents run it against a local stack only; the live-site check is run and recorded by a human (#66).
+// Local stacks only: it refuses any host but loopback and the compose service names (README §7.3). The live-site
+// check is Leo's alone, from a plain terminal, with --live (#66); agents never pass --live.
 // Prints a Markdown table. Exit 1 when a check fails, 2 when a page can't be fetched or isn't a 200.
 import { pathToFileURL } from 'node:url';
 
@@ -107,10 +108,20 @@ export function table(rows) {
     ...rows.map((r) => `| ${cell(r.target)} | ${cell(r.check)} | \`${cell(r.got)}\` | ${mark(r.ok)} |`)].join('\n');
 }
 
+/** The hosts a local stack answers on: loopback, and the docker-compose.yml service names. */
+export const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'app', 'postgres']);
+
+/** Whether a URL hostname (as `new URL` gives it, so IPv6 in brackets) is a local stack. */
+export const isLocalHost = (hostname) => LOCAL_HOSTS.has(hostname.toLowerCase());
+
 export function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
+    if (k === '--live') {
+      out.live = true;
+      continue;
+    }
     if (k !== '--api' && k !== '--pages') throw new Error(`unknown argument ${k}`);
     const v = argv[++i];
     if (!v || !/^https?:\/\//.test(v)) throw new Error(`${k} needs an http(s) URL`);
@@ -118,6 +129,12 @@ export function parseArgs(argv) {
   }
   if (!out.api) throw new Error('--api <origin> is required');
   out.api = new URL(out.api).origin;
+  for (const k of ['api', 'pages']) {
+    const url = out[k] && new URL(out[k]);
+    if (url && !out.live && !isLocalHost(url.hostname))
+      throw new Error(`refusing --${k} ${url.origin}: local stacks only (localhost, 127.0.0.1, [::1] or a compose service); ` +
+        'the live-site check is a human run with --live (README §7.3)');
+  }
   return out;
 }
 
