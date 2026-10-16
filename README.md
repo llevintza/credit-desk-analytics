@@ -514,11 +514,21 @@ The **website is public** (anyone can reach the login page). The **data is not**
   dotnet run --project src/Desk.UserAdmin -- list
   dotnet run --project src/Desk.UserAdmin -- disable --email reviewer@example.com
   dotnet run --project src/Desk.UserAdmin -- reset   --email reviewer@example.com
+  dotnet run --project src/Desk.UserAdmin -- grant   --email reviewer@example.com --portfolio 3,7
+  dotnet run --project src/Desk.UserAdmin -- revoke  --email reviewer@example.com --portfolio 7
   ```
 
-  It generates a strong random password, **prints it once** to stdout, stores only the hash, and **never logs it**. Against production it runs locally with `ConnectionStrings__App` pointed at Neon. Credentials are shared out of band and are **never** committed or put in issues or PRs.
+  It generates a strong random password, **prints it once** to stdout, stores only the hash, and **never logs it**. `grant` and `revoke` change the account's portfolio grants without rotating the security stamp (nobody is signed out); `list` shows each account's grants (`none`, the ids, or `all (admin)`). Against production it runs locally with `ConnectionStrings__App` pointed at Neon. Credentials are shared out of band and are **never** committed or put in issues or PRs.
+- **Portfolio entitlements (ADR-0021, model B):** `ENTITLEMENTS_MODE` picks who sees which portfolios.
+  - `all` (the default): every account sees every portfolio.
+  - `grants`: an admin sees every portfolio; anyone else sees only the portfolios granted to them in `app.portfolio_grant` (`Desk.UserAdmin grant`). **No grants means no portfolios** (fail closed). A request for portfolios outside the grant silently returns the granted subset or 0 rows, never 403. Grants for portfolios that a reseed removed drop out.
+  - Any other value fails startup. Rollback is setting it back to `all`; no migration is needed.
+  - Grants are read into the sign-in claims at login and at every refresh, never per request: a grant or revoke applies at the user's next refresh, within 5 minutes, and doesn't sign them out (the accepted lag, ADR-0021 E5).
+  - Every endpoint that returns portfolio-owned data (positions, export, `/api/meta/portfolios`, fund performance, insights, deal holdings) resolves its scope through `IPortfolioEntitlements` and applies it in SQL; cache keys and ETags carry the portfolio set. A test fails for any `/api` path that isn't classified as scoped or exempt.
+  - Rollout (ADR-0021): deploy with `all`, load viewer grants with the CLI and the demo `portfolios`, check them with `list` and a single-portfolio test account, then set `ENTITLEMENTS_MODE=grants` in the Render environment.
 - **Optional seeded demo accounts:** read from the `DEMO_ACCOUNTS_JSON` env var (secret, set in the Render dashboard). Absent means none.
-  - An entry is applied **only when its account is first created**, on that email's first login attempt. Changing an entry's password, role or expiry later does not touch the existing account; manage that account with the UserAdmin CLI (`reset` for a new password, `disable` to stop it).
+  - An entry is applied **only when its account is first created**, on that email's first login attempt. Changing an entry's password, role, expiry or portfolios later does not touch the existing account; manage that account with the UserAdmin CLI (`reset` for a new password, `disable` to stop it, `grant`/`revoke` for portfolios).
+  - An optional `portfolios` array (portfolio ids) becomes the account's grants, saved with its role; an entry without it gets none, so in `grants` mode it sees no portfolios.
   - An account that can't be given its role is removed again and the login is refused, so the next attempt retries the creation. An account without a role is never signed in; if its removal fails, the error codes (never the password) are logged as an error; disable that account with the UserAdmin CLI.
   - When two first logins race, the one that loses is refused until the winner's account has its role; its retry signs in.
 
@@ -558,7 +568,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   |---|---|---|
   | POST | `/api/auth/login`, `/api/auth/logout` | Session |
   | GET | `/api/me` | Current user, roles, expiry |
-  | GET | `/api/meta/as-of`, `/api/meta/columns`, `/api/meta/portfolios` | As-of dates, column catalog (drives the UI), entitlements |
+  | GET | `/api/meta/as-of`, `/api/meta/columns`, `/api/meta/portfolios` | As-of dates, column catalog (drives the UI), the portfolios the user is entitled to (ADR-0021) |
   | GET/PUT/DELETE | `/api/presets/{page}` | User column presets (EF) |
   | POST | `/api/positions/query` | P1 block + summary |
   | POST | `/api/positions/export` | P1 CSV stream |
@@ -1031,6 +1041,7 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | CI image pin agreement (`[workflows]`) | #255 | In review: `gate-tests` fails when a workflow image isn't digest-pinned, has no tracked Dockerfile (or compose image), or disagrees with it in tag or digest |
 | 1 Data | #6 | Merged; follow-up #224: deploy and db-ops reseed pass the seeder's `--cap-mb` (`SEED_CAP_MB` / `cap_mb`, default 512, validated) (`[workflows]`, in review) |
 | 2 Auth and limits | #105 | Merged; follow-up #106: Render forwarded headers; follow-up #119: shell label, deterministic coverage; follow-up #160: client IP behind Cloudflare (#116); follow-up #175: client-address diagnostics (#165 step a, merged as `57c7cc9`); follow-up #367: per-client login key behind Render's private hops (#165 step b, merged as `a856d45`); follow-up #114: audit retention (90-day default, `AUDIT_RETENTION_DAYS`, ADR-0022), merged as #172 (`825315c`); follow-up #193: idle-period audit purge on a timer (`AUDIT_PURGE_CHECK_MINUTES`, ADR-0022), merged as #292 (`7b8557c`); follow-up #118: one password hash per failed login, `__Host-` antiforgery cookie behind the proxy, demo-account fixes (merged as #218, `7c43da4`); follow-up #230: 401 response-time floor (merged as #279, `09a5b01`); follow-up #306: the floor measured on the compose stack (merged as #340, `c01c678`); follow-up #361: rate-limit partitions and the export gate keyed on the account id (#185, merged as `69450fb`); follow-up #396: a session without an account id is refused with 401, never keyed on the client address (merged as `dc2762a`); follow-up #362: sign-in refused for an account with no role (#275, merged as `cde36d4`); follow-up #366: single-use refresh tokens, a replayed one ends the session (#353, merged as `5458c4d`) |
+| Portfolio entitlements (per-user grants) | feat/122-portfolio-grants | In review: `app.portfolio_grant`, `desk:portfolio` claims re-read at every refresh, `GrantedPortfolios` behind `ENTITLEMENTS_MODE=all\|grants` (default `all`), demo-account portfolios, UserAdmin `grant`/`revoke`, scoped/exempt guard on every `/api` path (#122, ADR-0021) |
 | GitHub Pages front end + bearer auth | #349 | Merged (`f8db7c2`): Identity bearer tokens, refresh, CORS, build-time API origin (ADR-0024); the Pages deploy workflow is #350 |
 | 3 Positions API | #121 | Merged; follow-up #125: CI budgets job |
 | 4 Shell + Positions UI | #140 | Merged; follow-up #141: CI e2e job; follow-up #252: the bundle budget measures Brotli as the API streams it (merged as #347, `5a2c3c8`) |
