@@ -363,6 +363,12 @@ jobs:
         run: node --test .github/scripts/concurrency-wiring.test.mjs
       - name: k6 handleSummary and the budgets jq (#271)
         run: node --test .github/scripts/k6-summary.test.mjs
+      - name: Payload-size check tests (#136, ≥80% line/branch)
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include=perf/payload-size.mjs \
+            perf/payload-size.test.mjs
       - name: Seeder cap wiring tests (#224)
         run: node --test .github/scripts/seed-cap-wiring.test.mjs
 
@@ -497,9 +503,11 @@ jobs:
           rc=0
           # Image pin tracked in deploy/ci-images/k6/Dockerfile for Dependabot. Grafana's own ghcr.io image:
           # the same index digest as grafana/k6 on Docker Hub (#332).
+          # Log the pinned image's version (#270): the summary numbers belong to this k6.
+          docker run --rm ghcr.io/grafana/k6:2.3.0@sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34 version
           docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$RUNNER_TEMP":/out \
             -e BASE_URL=http://localhost:8080 -e DESK_EMAIL -e DESK_PASSWORD -e SUMMARY_JSON=/out/k6.json \
-            ghcr.io/grafana/k6:1.3.0@sha256:3ddc8b1a33a2c3d8edc6e99b6a762ae36cba08788463458f5e6a7703e14eb77d \
+            ghcr.io/grafana/k6:2.3.0@sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34 \
             run --quiet - < perf/positions.js || rc=$?
           {
             echo "### API latency p95 (k6: scale 1.0, 1 VU, 30 s per scenario)"
