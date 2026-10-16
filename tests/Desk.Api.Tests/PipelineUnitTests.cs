@@ -304,6 +304,27 @@ public sealed class PipelineUnitTests
     }
 
     [Fact]
+    public async Task The_limiter_still_refuses_a_principal_without_an_account_id_by_itself()
+    {
+        // SessionLimits answers such a token first (#399); the #361 refusal stays behind it as its own defence.
+        var services = new ServiceCollection().AddLogging().AddProblemDetails()
+            .AddDeskRateLimiting(LimitsOptions.From(new ConfigurationBuilder().Build()), new ClientAddress(false))
+            .BuildServiceProvider();
+        var options = services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>>().Value;
+        var http = new DefaultHttpContext { User = SignedIn(), RequestServices = services };
+        http.Request.Path = "/api/me";
+        http.Response.Body = new MemoryStream();
+
+        using var lease = await options.GlobalLimiter!.AcquireAsync(http, 1, TestContext.Current.CancellationToken);
+        Assert.False(lease.IsAcquired);
+        await options.OnRejected!(new Microsoft.AspNetCore.RateLimiting.OnRejectedContext { HttpContext = http, Lease = lease }, TestContext.Current.CancellationToken);
+        Assert.Equal(StatusCodes.Status401Unauthorized, http.Response.StatusCode);
+        Assert.False(http.Response.Headers.ContainsKey("Retry-After"));
+        http.Response.Body.Position = 0;
+        Assert.Contains(Desk.Api.Auth.PrincipalExtensions.NoAccountIdTitle, await new StreamReader(http.Response.Body).ReadToEndAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public void Only_a_signed_in_principal_with_a_non_empty_id_has_an_account_id()
     {
         var withId = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "42")], "test"));
