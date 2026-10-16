@@ -14,6 +14,9 @@ on:
       scale:
         description: Seed scale (reseed only)
         default: "1.0"
+      cap_mb:
+        description: Reseed peak cap in MB (reseed only; refused with exit 2 above it, README §10)
+        default: "512"
       confirm:
         description: Type RESEED-PRODUCTION to allow a reseed
         default: ""
@@ -80,6 +83,7 @@ jobs:
       # Inputs go through env, never interpolated into scripts (script injection).
       OPERATION: ${{ inputs.operation }}
       SCALE: ${{ inputs.scale }}
+      CAP_MB: ${{ inputs.cap_mb }}
       CONFIRM: ${{ inputs.confirm }}
     steps:
       - name: Confirm SHA is still the tip of main
@@ -109,6 +113,10 @@ jobs:
             echo "::error::scale must be a non-negative number (e.g. 1 or 0.1), not '$SCALE'"
             exit 1
           fi
+          if [[ ! $CAP_MB =~ ^[1-9][0-9]{0,5}$ ]]; then
+            echo "::error::cap_mb must be a positive whole number of MB (1-999999), not '$CAP_MB'"
+            exit 1
+          fi
           if [ "$OPERATION" = "reseed" ] && [ "$CONFIRM" != "RESEED-PRODUCTION" ]; then
             echo "::error::reseed requires confirm=RESEED-PRODUCTION"; exit 1
           fi
@@ -125,7 +133,7 @@ jobs:
         run: |
           case "$OPERATION" in
             migrate)     ./dbtools/efbundle ;;
-            reseed)      ./dbtools/seeder/Desk.Seeder --force --scale "$SCALE" ;;
+            reseed)      ./dbtools/seeder/Desk.Seeder --force --scale "$SCALE" --cap-mb "$CAP_MB" ;;
             size-report) ./dbtools/seeder/Desk.Seeder --size-report ;;
             *) echo "::error::unknown operation: $OPERATION"; exit 1 ;;
           esac | tee out.txt

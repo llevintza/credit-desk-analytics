@@ -182,7 +182,15 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           SEED_SCALE: ${{ vars.SEED_SCALE || '1.0' }}
-        run: ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" | tee seed.txt
+          # Reseed peak cap (#224, README §10): a run that would TRUNCATE is refused (exit 2) above it.
+          # An --if-changed skip never checks it. 512 until Leo confirms the Neon cap.
+          SEED_CAP_MB: ${{ vars.SEED_CAP_MB || '512' }}
+        run: |
+          if [[ ! $SEED_CAP_MB =~ ^[1-9][0-9]{0,5}$ ]]; then
+            echo "::error::vars.SEED_CAP_MB must be a positive whole number of MB (1-999999), not '$SEED_CAP_MB' (README §14.2)"
+            exit 1
+          fi
+          ./dbtools/seeder/Desk.Seeder --if-changed --scale "$SEED_SCALE" --cap-mb "$SEED_CAP_MB" | tee seed.txt
 
       - name: Trigger Render deploy of this commit
         if: steps.tip.outputs.allowed == 'true'
