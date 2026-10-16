@@ -90,4 +90,14 @@ describe('Performance Lab client (README §6 P5)', () => {
     timings.add([entry(second.request.url)]);
     expect((await next).entry).not.toBeNull();
   });
+
+  it('cancels an in-flight request when the page is destroyed', async () => {
+    const { client, http } = setup();
+    const sent = client.send('POST', '/api/positions/query', {}, { endRow: 100 });
+    const req = http.expectOne((r) => r.url.startsWith('/api/positions/query?lab='));
+    const settled = expect(sent).rejects.toThrow();
+    TestBed.resetTestingModule();
+    expect(req.cancelled).toBe(true);
+    await settled;
+  });
 });
