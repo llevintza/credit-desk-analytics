@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 // #207: main CI must never drop a push, and only the tip of main deploys.
 // These assert the concurrency wiring in ci.yml, deploy.yml and db-ops.yml, so a
@@ -77,4 +77,21 @@ test("deploy.yml: the gate runs outside the group, has no secrets, and a non-tip
 
 test("db-ops.yml: keeps the workflow-level non-cancelling production group shared with deploy", () => {
   assert.match(DB_OPS, /^concurrency:\n {2}group: production\n {2}cancel-in-progress: false$/m);
+});
+
+// #321: every job runs on the pinned ubuntu-24.04 image, never a moving label. Moving to a
+// newer image is a deliberate [workflows] PR after a verification run (README §14).
+test("every workflow job runs on the pinned ubuntu-24.04 runner", () => {
+  const files = readdirSync(new URL("../workflows/", import.meta.url)).filter((f) => /\.ya?ml$/.test(f));
+  assert.ok(files.length > 0, "no workflow files found");
+  let jobs = 0;
+  for (const name of files) {
+    const yml = read(name);
+    assert.doesNotMatch(yml, /ubuntu-latest/, `${name} uses the moving ubuntu-latest label`);
+    for (const id of jobIds(yml)) {
+      jobs++;
+      assert.match(jobBlock(yml.slice(yml.indexOf("\njobs:")), id), /^ {4}runs-on: ubuntu-24\.04$/m, `${name} job ${id} runs on ubuntu-24.04`);
+    }
+  }
+  assert.ok(jobs >= 21, `found ${jobs} jobs; the job parser missed some`);
 });
