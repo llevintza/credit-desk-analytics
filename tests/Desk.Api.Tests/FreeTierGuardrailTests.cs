@@ -109,6 +109,65 @@ public sealed class FreeTierGuardrailTests(PostgresApiFactory api)
         Assert.True(presets.TryGet(user, "positions", out _));
     }
 
+    /// <summary>Eviction callbacks run on the thread pool: wait for the version count to settle.</summary>
+    private static async Task WaitForVersionsAsync(PresetListCache presets, int expected)
+    {
+        for (var i = 0; i < 100 && presets.Versions != expected; i++)
+            await Task.Delay(50, Ct);
+        Assert.Equal(expected, presets.Versions);
+    }
+
+    [Fact]
+    public async Task A_version_ends_with_its_entry_so_the_map_tracks_cached_lists_only()
+    {
+        // #67: one version per (user, page) ever listed would grow until restart; it now leaves with its entry.
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(PostgresApiFactory.Start);
+        using var cache = new PositionsCache(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), time);
+        var presets = new PresetListCache(cache);
+        var (idle, cleared) = (Guid.NewGuid(), Guid.NewGuid());
+        presets.Store(idle, "positions", [1], presets.Version(idle, "positions"));
+        var racing = presets.Version(idle, "positions"); // a read in flight while the entry goes idle
+        Assert.Equal(1, presets.Versions);
+
+        time.Advance(PresetListCache.Idle + TimeSpan.FromSeconds(1));
+        presets.Store(cleared, "positions", [2], presets.Version(cleared, "positions"));
+        Assert.False(presets.TryGet(idle, "positions", out _)); // the idle entry expires on this read
+        await WaitForVersionsAsync(presets, 1);
+        presets.Store(idle, "positions", [3], racing); // its version ended with the entry: not kept
+        Assert.False(presets.TryGet(idle, "positions", out _));
+
+        cache.Clear(); // the admin cache clear (README §8)
+        await WaitForVersionsAsync(presets, 0);
+
+        presets.Store(idle, "positions", [4], presets.Version(idle, "positions"));
+        presets.Store(idle, "positions", [5], presets.Version(idle, "positions")); // replaced: the version lives on
+        await Task.Delay(200, Ct);
+        Assert.Equal(1, presets.Versions);
+        presets.Invalidate(idle, "positions");
+        Assert.False(presets.TryGet(idle, "positions", out _));
+        await WaitForVersionsAsync(presets, 0);
+    }
+
+    [Fact]
+    public void Versions_left_without_an_entry_are_capped()
+    {
+        // A read that fails before storing leaves a version with no entry to end it: past the cap, all of them end.
+        using var cache = new PositionsCache(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), TimeProvider.System);
+        var presets = new PresetListCache(cache);
+        var first = Guid.NewGuid();
+        presets.Store(first, "positions", [1], presets.Version(first, "positions"));
+        for (var i = 1; i < PresetListCache.MaxVersions; i++)
+            presets.Version(Guid.NewGuid(), "positions");
+        Assert.Equal(PresetListCache.MaxVersions, presets.Versions);
+        presets.Version(first, "positions"); // an existing version is reused, not counted again
+        Assert.Equal(PresetListCache.MaxVersions, presets.Versions);
+        Assert.True(presets.TryGet(first, "positions", out _));
+
+        presets.Version(Guid.NewGuid(), "positions");
+        Assert.Equal(1, presets.Versions);
+        Assert.False(presets.TryGet(first, "positions", out _)); // ending a version early costs a MISS, never a stale list
+    }
+
     [Fact]
     public async Task A_cached_list_is_served_without_an_audit_row_to_mark()
     {
