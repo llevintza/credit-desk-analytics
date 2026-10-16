@@ -118,4 +118,37 @@ public sealed class MigrationTests
         Assert.Equal("ALTER TABLE core.position_snapshot DROP COLUMN IF EXISTS face_weight_f8;", down);
         Assert.DoesNotContain(ColumnCatalog.PositionSnapshot, c => c.Name == GridSqlBuilder.FaceWeightF8Column);
     }
+
+    [Fact]
+    public void The_catalog_flip_names_exactly_the_face_weighted_columns()
+    {
+        // #459 step 2: the frozen list is the code catalog's face-weighted columns, so the served catalog and the code
+        // can't drift. A new price column fails this until a new migration flips it (this list must not change).
+        Assert.Equal(
+            ColumnCatalog.PositionSnapshot.Where(c => c.Aggregation == Aggregation.WeightedByCurrentFace).Select(c => c.Name).Order(),
+            CatalogFaceWeightedPrices.Columns.Order());
+        Assert.Equal(CatalogFaceWeightedPrices.Columns.Count, CatalogFaceWeightedPrices.Columns.Distinct().Count());
+        Assert.All(ColumnCatalog.PositionSnapshot.Where(c => CatalogFaceWeightedPrices.Columns.Contains(c.Name)),
+            c => Assert.Equal(ColumnKind.Price, c.Kind));
+        Assert.Equal(nameof(Aggregation.WeightedByCurrentFace), CatalogFaceWeightedPrices.FaceWeighted);
+        Assert.Equal(nameof(Aggregation.WeightedByMarketValue), CatalogFaceWeightedPrices.MarketValueWeighted);
+    }
+
+    [Fact]
+    public void The_catalog_flip_is_a_guarded_update_both_ways_with_no_DDL()
+    {
+        var migration = new CatalogFaceWeightedPrices();
+        var up = Assert.IsType<SqlOperation>(Assert.Single(migration.UpOperations)).Sql;
+        var down = Assert.IsType<SqlOperation>(Assert.Single(migration.DownOperations)).Sql;
+        var names = string.Join(", ", CatalogFaceWeightedPrices.Columns.Select(c => $"'{c}'"));
+
+        Assert.Equal($"UPDATE app.column_catalog SET aggregation = 'WeightedByCurrentFace' WHERE aggregation <> 'WeightedByCurrentFace' AND name IN ({names});", up);
+        Assert.Equal($"UPDATE app.column_catalog SET aggregation = 'WeightedByMarketValue' WHERE aggregation <> 'WeightedByMarketValue' AND name IN ({names});", down);
+        Assert.All(new[] { up, down }, sql =>
+        {
+            Assert.DoesNotContain("ALTER", sql);
+            Assert.DoesNotContain("position_snapshot", sql);
+            Assert.Single(sql.Split(';', StringSplitOptions.RemoveEmptyEntries));
+        });
+    }
 }
