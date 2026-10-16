@@ -125,7 +125,10 @@ public sealed class PositionsUnitTests
     [InlineData("0", 64)]
     [InlineData("lots", 64)]
     [InlineData("8", 8)]
-    public void Positions_cache_size_defaults_to_64_mb(string? value, int expectedMb)
+    [InlineData("96", 96)]
+    [InlineData("97", 96)] // capped: at 128 MB a full cache under k6 load peaked at 422 of the instance's 512 MiB (ADR-0014)
+    [InlineData("100000", 96)]
+    public void Positions_cache_size_defaults_to_64_mb_and_is_capped_at_96(string? value, int expectedMb)
     {
         using var cache = new PositionsCache(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { [PositionsCache.SizeConfigKey] = value }).Build(), TimeProvider.System);
