@@ -1,0 +1,32 @@
+:host { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.windows { display: flex; gap: 4px; }
+.windows button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.spacer { flex: 1; }
+.note { color: var(--muted); }
+.note.bad { color: var(--down); }
+.field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.body { overflow: auto; min-height: 0; flex: 1; }
+.caption { margin: 8px; color: var(--muted); }
+.kpis { display: flex; gap: 8px; padding: 0 8px; flex-wrap: wrap; }
+.kpi { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; min-width: 140px; display: flex; flex-direction: column; }
+.kpi .label { font-size: 11px; color: var(--muted); }
+.kpi .value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 8px; padding: 8px; align-content: start; }
+.tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-width: 0; }
+.tile.wide { grid-column: 1 / -1; }
+.tile header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.tile h3 { flex: 1; margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { padding: 2px 4px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+thead th { color: var(--muted); font-weight: 500; text-align: left; vertical-align: bottom; }
+tbody th { text-align: left; font-weight: 500; }
+tbody tr:nth-child(even) { background: var(--zebra); }
+.num { text-align: right; }
+thead th.num { text-align: right; }
+.neg { color: var(--down); }
+.endpoint { font-family: ui-monospace, monospace; }
+.empty { color: var(--muted); margin: 8px 0; }
+.error-tile { margin: 8px; padding: 8px 12px; border: 1px solid var(--down); color: var(--down); background: var(--surface-2); display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.skeleton { height: 160px; margin: 8px; background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2)); opacity: 0.6; border-radius: 2px; }

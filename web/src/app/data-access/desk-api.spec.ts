@@ -31,6 +31,8 @@ describe('DeskApi', () => {
       [firstValueFrom(api.deals(null, [])), 'GET', '/api/deals'],
       [firstValueFrom(api.deals('2026-10-05', [2, 3])), 'GET', '/api/deals?asOf=2026-10-05&portfolioIds=2,3'],
       [firstValueFrom(api.deal(42, '2026-10-06', [1])), 'GET', '/api/deals/42?asOf=2026-10-06&portfolioIds=1'],
+      [firstValueFrom(api.usage(30)), 'GET', '/api/admin/usage?days=30'],
+      [firstValueFrom(api.clearCache(), { defaultValue: null }), 'POST', '/api/admin/cache/clear'],
     ];
     for (const [, method, url] of calls) {
       const req = http.expectOne((r) => r.urlWithParams === url && r.method === method);
