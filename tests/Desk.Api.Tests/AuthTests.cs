@@ -469,7 +469,7 @@ public sealed class AuthTests(PostgresApiFactory api)
         var otherTokens = await PostgresApiFactory.LoginAsync(other, user.Email!);
         var renewed = await RefreshAsync(client, tokens.RefreshToken);
 
-        clock.Advance(RefreshRotations.DefaultGrace);
+        clock.Advance(SessionStore.DefaultGrace);
         var replay = await PostgresApiFactory.PostRefreshAsync(PostgresApiFactory.NewClient(host), tokens.RefreshToken);
         Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
         Assert.Equal(AuthEndpoints.RefreshFailedDetail, (await replay.Content.ReadFromJsonAsync<ProblemDetails>(Ct))!.Detail);
@@ -490,7 +490,7 @@ public sealed class AuthTests(PostgresApiFactory api)
         var (client, tokens) = await SignedInAsync(host);
         var renewed = await RefreshAsync(client, tokens.RefreshToken);
 
-        clock.Advance(RefreshRotations.DefaultGrace - TimeSpan.FromTicks(1));
+        clock.Advance(SessionStore.DefaultGrace - TimeSpan.FromTicks(1));
         var reloaded = PostgresApiFactory.NewClient(host);
         var again = await RefreshAsync(reloaded, tokens.RefreshToken);
 
@@ -528,9 +528,9 @@ public sealed class AuthTests(PostgresApiFactory api)
     [Fact]
     public async Task The_grace_window_comes_from_the_environment()
     {
-        await using var host = api.WithSettings((RefreshRotations.GraceSecondsKey, "5"));
-        Assert.Equal(TimeSpan.FromSeconds(5), host.Services.GetRequiredService<RefreshRotations>().Grace);
-        Assert.Equal(RefreshRotations.DefaultGrace, api.Services.GetRequiredService<RefreshRotations>().Grace);
+        await using var host = api.WithSettings((SessionStore.GraceSecondsKey, "5"));
+        Assert.Equal(TimeSpan.FromSeconds(5), host.Services.GetRequiredService<SessionStore>().Grace);
+        Assert.Equal(SessionStore.DefaultGrace, api.Services.GetRequiredService<SessionStore>().Grace);
     }
 
     [Fact]
