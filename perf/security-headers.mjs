@@ -36,10 +36,13 @@ export function cspRows(target, text, { frameAncestors, connect = [] }) {
     row(target, "CSP script-src 'self' only", csp.get('script-src')?.join(' '), has('script-src', ["'self'"])),
     row(target, "CSP object-src 'none'", csp.get('object-src')?.join(' '), has('object-src', ["'none'"])),
     row(target, "CSP base-uri 'self'", csp.get('base-uri')?.join(' '), has('base-uri', ["'self'"])),
-    row(target, 'CSP has no unsafe-eval', text ?? undefined, !!text && !text.includes("'unsafe-eval'")),
-    row(target, "CSP 'unsafe-inline' only in style-src", text ?? undefined,
-      !!text && [...csp].every(([d, s]) => d === 'style-src' || !s.includes("'unsafe-inline'"))),
   ];
+  // The two policy-wide checks name what they found rather than repeat the whole policy.
+  const evalIn = [...csp].filter(([, s]) => s.includes("'unsafe-eval'")).map(([d]) => d);
+  const inlineIn = [...csp].filter(([, s]) => s.includes("'unsafe-inline'")).map(([d]) => d);
+  const list = (ds) => (text ? ds.join(', ') || 'none' : undefined);
+  rows.push(row(target, 'CSP has no unsafe-eval', list(evalIn), !!text && evalIn.length === 0));
+  rows.push(row(target, "CSP 'unsafe-inline' only in style-src", list(inlineIn), !!text && inlineIn.every((d) => d === 'style-src')));
   const conn = csp.get('connect-src');
   rows.push(row(target, `CSP connect-src 'self'${connect.map((c) => ` ${c}`).join('')}`, conn?.join(' '),
     !!conn && same(conn, ["'self'", ...connect])));

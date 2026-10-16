@@ -61,6 +61,10 @@ test('cspRows: a loosened policy fails the directive it loosens', () => {
     ["CSP script-src 'self' only", "CSP 'unsafe-inline' only in style-src"]);
   assert.deepEqual(loose("style-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' 'unsafe-eval'"), ['CSP has no unsafe-eval']);
   assert.deepEqual(loose("frame-ancestors 'none'", "frame-ancestors 'self'"), ["CSP frame-ancestors 'none'"]);
+  const rows = cspRows('t', APP_CSP.replace("img-src 'self'", "img-src 'self' 'unsafe-inline' 'unsafe-eval'"), { frameAncestors: true });
+  assert.equal(rows.find((r) => r.check === 'CSP has no unsafe-eval').got, 'img-src');
+  assert.equal(rows.find((r) => r.check.includes("'unsafe-inline' only")).got, 'style-src, img-src');
+  assert.equal(cspRows('t', APP_CSP, { frameAncestors: true }).find((r) => r.check === 'CSP has no unsafe-eval').got, 'none');
   assert.deepEqual(loose("connect-src 'self'", "connect-src 'self' https:"), ["CSP connect-src 'self'"]);
   assert.deepEqual(loose("object-src 'none'", "object-src 'self'"), ["CSP object-src 'none'"]);
 });
