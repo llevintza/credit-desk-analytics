@@ -569,6 +569,7 @@ The **website is public** (anyone can reach the login page). The **data is not**
   - HSTS (one year, `max-age=31536000`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `Permissions-Policy` minimal.
   - The GitHub Pages copy can't send headers (ADR-0024). It carries a meta CSP and `<meta name="referrer" content="same-origin">`, and since a meta CSP ignores `frame-ancestors`, the app refuses to start inside a frame (#66).
   - Check a deployment with `node perf/security-headers.mjs --api <origin> [--pages <url>]`: exit 1 on a missing or loosened header.
+  - The check runs against a local stack only: it refuses any host but `localhost`, `127.0.0.1`, `[::1]` and the compose service names (exit 2). The live-site check is Leo's, run from a plain terminal with the explicit opt-in `--live` (`node perf/security-headers.mjs --live --api <Render origin> --pages <Pages URL>`); agents never pass `--live` (#66).
 - **Errors:** ProblemDetails everywhere, with no stack traces outside Development.
 - **Logs:** structured, with no secrets and no full connection strings.
 - Dependabot for NuGet, npm, GitHub Actions and Docker. It covers every manifest: npm `/web`, `/perf` and `/e2e` (#197); NuGet `/`, including the dotnet-ef tool manifest at `.config/dotnet-tools.json`, the path the NuGet updater discovers (#197); Docker `deploy/` and `deploy/ci-images/*`; and compose. A `perf-deps` CI job installs `perf/` and round-trips `@msgpack/msgpack`, so a `/perf` bump is exercised (#198).
