@@ -43,10 +43,10 @@ public sealed class MarkTotalsSqlTests(MigratedDatabase db) : IClassFixture<Migr
         // Bond 10 is held twice in portfolio 1 (one short), bond 11 once; bond 12 in portfolio 2 (out of scope);
         // bond 13 in portfolio 1 but another sector (filtered out).
         await conn.ExecuteAsync(
-            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, market_value, price, spread_bp) VALUES " +
-            "(@d, 1, 1, 1, 10, 1, 'TEST00001', 'Deal A', 'CLO', 100, 98, 200), (@d, 2, 1, 1, 10, 1, 'TEST00001', 'Deal A', 'CLO', -300, 98, 200), " +
-            "(@d, 3, 1, 1, 11, 1, 'TEST00002', 'Deal A', 'CLO', 600, 95, NULL), (@d, 4, 2, 1, 12, 1, 'TEST00003', 'Deal A', 'CLO', 1000, 50, 900), " +
-            "(@d, 5, 1, 1, 13, 1, 'TEST00004', 'Deal B', 'RMBS', 1000, 60, 800)",
+            "INSERT INTO core.position_snapshot (as_of_date, position_id, portfolio_id, fund_id, bond_id, deal_id, cusip, deal_name, sector, market_value, current_face, price, spread_bp) VALUES " +
+            "(@d, 1, 1, 1, 10, 1, 'TEST00001', 'Deal A', 'CLO', 100, 200, 98, 200), (@d, 2, 1, 1, 10, 1, 'TEST00001', 'Deal A', 'CLO', -300, -100, 98, 200), " +
+            "(@d, 3, 1, 1, 11, 1, 'TEST00002', 'Deal A', 'CLO', 600, 700, 95, NULL), (@d, 4, 2, 1, 12, 1, 'TEST00003', 'Deal A', 'CLO', 1000, 1000, 50, 900), " +
+            "(@d, 5, 1, 1, 13, 1, 'TEST00004', 'Deal B', 'RMBS', 1000, 1000, 60, 800)",
             new { d = AsOf }, tx);
 
         var marks = new[] { new Mark(10, 5, DateTimeOffset.UnixEpoch, 100, 180), new Mark(12, 5, DateTimeOffset.UnixEpoch, 1, 1) };
@@ -55,8 +55,9 @@ public sealed class MarkTotalsSqlTests(MigratedDatabase db) : IClassFixture<Migr
         var row = await QueryRowAsync(conn, tx, sql);
 
         Assert.Equal(3, row.Count);
-        // price: (100·100 + 100·300 + 95·600) / 1000; spread: bond 11 has none, so its weight drops out: 180.
-        Assert.Equal((100.0 * 100 + 100 * 300 + 95 * 600) / 1000, row.Price!.Value, 9);
+        // price is weighted by |current face| like the grid's Total row (#473): (100·200 + 100·100 + 95·700) / 1000.
+        // spread by |market value|: bond 11 has none, so its weight drops out: 180.
+        Assert.Equal((100.0 * 200 + 100 * 100 + 95 * 700) / 1000, row.Price!.Value, 9);
         Assert.Equal(180, row.Spread!.Value, 9);
 
         // No marks: exactly the grid's own summary for the same view.

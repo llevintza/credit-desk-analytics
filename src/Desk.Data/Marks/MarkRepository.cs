@@ -50,7 +50,7 @@ public sealed class MarkRepository(IDataSourceRegistry sources)
 
     /// <summary>The marked columns <paramref name="query"/> displays (and so totals): none means there is nothing to overlay.</summary>
     public static ColumnDef[] MarkedIn(GridQuery query) =>
-        [.. query.Columns.Where(c => MarkedColumns.Contains(c.Name) && c.Aggregation == Aggregation.WeightedByMarketValue)];
+        [.. query.Columns.Where(c => MarkedColumns.Contains(c.Name) && c.Aggregation is Aggregation.WeightedByMarketValue or Aggregation.WeightedByCurrentFace)];
 
     /// <summary>
     /// The <paramref name="marked"/> columns' totals for <paramref name="query"/>'s filter with <paramref name="marks"/>

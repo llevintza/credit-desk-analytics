@@ -317,4 +317,56 @@ public sealed class MetaAndPresetsTests(PostgresApiFactory api)
         Assert.Equal(503, problem.StatusCode);
         Assert.Equal("Column catalog invalid", problem.ProblemDetails.Title);
     }
+
+    /// <summary>Captures the repository's warnings.</summary>
+    private sealed class RepoLog : Microsoft.Extensions.Logging.ILogger<MetaRepository>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Fact]
+    public async Task An_aggregation_this_build_does_not_know_falls_back_to_the_MV_weighted_average()
+    {
+        // #459: a catalog changed by a newer seed or data migration, while this app version still serves, must not
+        // fail every meta load. A separate database, so the seeded catalog is untouched.
+        var other = new NpgsqlConnectionStringBuilder(api.ConnectionString) { Database = $"catalog_{Guid.NewGuid():N}" }.ConnectionString;
+        await using (var conn = new NpgsqlConnection(api.ConnectionString))
+        {
+            await conn.OpenAsync(Ct);
+            await using var cmd = new NpgsqlCommand($"CREATE DATABASE \"{new NpgsqlConnectionStringBuilder(other).Database}\"", conn);
+            await cmd.ExecuteNonQueryAsync(Ct);
+        }
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(other, n => n.MigrationsHistoryTable("__ef_migrations_history", AppDbContext.Schema)).Options;
+        await using (var db = new AppDbContext(options))
+        {
+            await db.Database.MigrateAsync(Ct);
+            db.ColumnCatalog.AddRange(
+                new ColumnCatalogEntry { Name = "position_id", Ordinal = 1, Group = "keys", Kind = "Key", Aggregation = "None", Header = "Position" },
+                new ColumnCatalogEntry { Name = "price", Ordinal = 2, Group = "px", Kind = "Price", Aggregation = "WeightedByCurrentFace", Header = "Price" },
+                new ColumnCatalogEntry { Name = "yield", Ordinal = 3, Group = "px", Kind = "Pct", Aggregation = "WeightedByNextThing", Header = "Yield" },
+                // Only exact names: Enum.Parse would also take a number or another casing.
+                new ColumnCatalogEntry { Name = "dv01", Ordinal = 4, Group = "risk", Kind = "Money", Aggregation = "1", Header = "DV01" },
+                new ColumnCatalogEntry { Name = "cs01", Ordinal = 5, Group = "risk", Kind = "Money", Aggregation = "sum", Header = "CS01" });
+            await db.SaveChangesAsync(Ct);
+        }
+        var log = new RepoLog();
+        var repo = new MetaRepository(
+            new Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory<AppDbContext>(options),
+            new Desk.Data.Sources.DataSourceRegistry(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DATABASE_URL"] = other }).Build(), new Desk.Data.DbConnectionCounter()),
+            log);
+
+        var catalog = await repo.CatalogAsync(Ct);
+
+        Assert.Equal(
+            [Aggregation.None, Aggregation.WeightedByCurrentFace, Aggregation.WeightedByMarketValue, Aggregation.WeightedByMarketValue, Aggregation.WeightedByMarketValue],
+            catalog.Select(c => c.Aggregation));
+        var (level, message) = Assert.Single(log.Entries);
+        Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, level);
+        Assert.Contains("has 3 aggregations", message);
+    }
 }

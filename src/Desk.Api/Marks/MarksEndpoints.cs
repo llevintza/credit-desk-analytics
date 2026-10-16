@@ -73,7 +73,7 @@ public static class MarksEndpoints
 
         marks.MapPost("/totals", TotalsAsync)
             .WithName("MarkTotals")
-            .WithSummary("The positions view's price and spread totals (|market value|-weighted) with the intraday marks applied, as of the "
+            .WithSummary("The positions view's price and spread totals (weighted like the Total row: price by |current face|, spread by |market value|) with the intraday marks applied, as of the "
                 + "start of the current MARKS_TOTALS_SECONDS window. Same body as POST /api/positions/query; latest as-of only.")
             .Produces<MarkTotalsResponse>()
             .ProducesProblem(StatusCodes.Status400BadRequest)

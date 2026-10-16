@@ -351,7 +351,7 @@ public sealed class MarksTests(PostgresApiFactory api)
         {
             await conn.OpenAsync(Ct);
             await using var cmd = new NpgsqlCommand(
-                "SELECT bond_id, price, spread_bp, abs(market_value)::float8 FROM core.position_snapshot " +
+                "SELECT bond_id, price, spread_bp, abs(market_value)::float8, abs(current_face)::float8 FROM core.position_snapshot " +
                 "WHERE as_of_date = @d AND portfolio_id = @p AND sector IN ('CLO', 'RMBS')", conn);
             cmd.Parameters.AddWithValue("d", PostgresApiFactory.AsOf);
             cmd.Parameters.AddWithValue("p", P1);
@@ -359,13 +359,12 @@ public sealed class MarksTests(PostgresApiFactory api)
             while (await r.ReadAsync(Ct))
             {
                 rows++;
-                if (r.IsDBNull(3)) continue;
-                var weight = r.GetDouble(3);
                 marks.TryGetValue(r.GetInt32(0), out var mark);
                 double? price = mark?.Price ?? (r.IsDBNull(1) ? null : r.GetDouble(1));
                 double? spread = mark is not null ? mark.SpreadBp : r.IsDBNull(2) ? null : r.GetDouble(2);
-                if (price is { } p) { wp += p * weight; w += weight; }
-                if (spread is { } s) { ws += s * weight; wsd += weight; }
+                // Weighted like the grid's Total row: price by |current face| (#473), spread by |market value|.
+                if (price is { } p && !r.IsDBNull(4)) { wp += p * r.GetDouble(4); w += r.GetDouble(4); }
+                if (spread is { } s && !r.IsDBNull(3)) { ws += s * r.GetDouble(3); wsd += r.GetDouble(3); }
             }
         }
         Assert.True(universe.Bonds.Count > 0 && rows > 0);

@@ -267,3 +267,58 @@ docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http
 - On Neon (`DB_MAX_POOL_SIZE` 20, a fractional CPU) the pool budget is unchanged. The page read is index-driven and small, so the second backend adds little CPU next to the summary's scan.
 - Tests: `DatabasePermitsTests` (a spare leaves one permit free, none with a single permit, none while a request is queued, one shared count); `ConcurrentSummaryTests` (two connections at once with the same block and totals as the batch; portfolio scope in SQL, an empty scope gives 0 rows; a failing page or summary surfaces its own error with both connections returned; a cancelled caller cancels both; the endpoint uses two connections for a first view and one for a later block; with one permit it uses one; six simultaneous first views on three permits all finish and never hold more than three connections).
 - **Hosted CI runner** (`budgets` job, run 38942923656 on PR #470 @7ec525e, ubuntu-24.04): MISS All p50 / p95 / max **120.2 / 134.9 / 171.8 ms** (after #460: 143.0 / 155.5 / 186.3 ms), MISS Risk 40.5 / 53.2 ms (was 45.5 / 57.2 ms), HIT 1.4 / 2.0 ms, 39,970 checks passed and 0 failed, all thresholds passed. The All whole-book MISS was within the 150 ms p95 budget on the hosted runner in both runs, with no budget or threshold changed. A second run on the docs-only head (run 38944173331 @cc00da6) measured MISS All p50 / p95 / max 93.4 / 101.7 / 150.0 ms, MISS Risk p95 42.4 ms, HIT p95 1.5 ms, 52,705 checks passed and 0 failed. Hosted runs have varied by about ±20 ms between runs, so whether two runs are enough to close #241 is Leo's call. The hosted gain (~20 ms at p95) is larger than the local one (~6–10 ms), as expected: on the slower runner the page read that now overlaps the summary is longer too.
+
+## Addendum (#459, 2026-10-16): a second stored weight for face-weighted prices
+
+**Problem.** Every summary average was |MV|-weighted, so the Total row's price was Σp·|MV| / Σ|MV|, which for a bond priced per 100 face is Σp²f / Σpf: not the par-weighted price a desk quotes. Leo's scope decision (2026-10-16) on #459: build only the face-weighted average for price-like columns, `Aggregation.WeightedByCurrentFace`, weighting by `abs(current_face)::float8` with the same NULL/zero rules. Per-leg (long/short, gross/net MV) footers are out of scope.
+
+**Options considered.**
+1. **A second stored generated column** `face_weight_f8 double precision GENERATED ALWAYS AS (abs(current_face)::float8) STORED`, read like `weight_f8` (chosen).
+2. **An inline cast** `abs(current_face)::float8` inside each price aggregate. It repeats the numeric→float8 cast per aggregate per row, the cost #241's first addendum measured at 2.4 s for 151 averages; the All preset has 108 price columns.
+3. **A `CROSS JOIN LATERAL (… OFFSET 0)`** computing both weights once per row. It brings back the nested loop that kept every aggregate in the leader (#241), which `WeightColumnTests` now fails on.
+
+**Which columns.** Every `ColumnKind.Price` column: `price`, `book_price`, the `price_chg_1d/1w/1m` changes, the 100 `scn_*` scenario prices, `worst_case_price`, `best_case_price` and `scenario_range` (108 of the 151 averages). Leo's list names price, book price and the scenario, worst and best prices; the price changes and the range go with them so the Total row stays consistent (Total best − Total worst = Total range, and the Total price change is a change of the Total price, when no value is NULL). `GridQueryTests` pins the rule: every Price-kind average is face-weighted, every other average |MV|-weighted.
+
+**Evaluation.** Seed 42, scale 1.0, 20,001 rows per as-of, Postgres 17 in Docker (colima, 4 vCPUs), Apple M5, on a laptop shared with other agents' workloads (load average 10–50 during the runs), so before and after always ran interleaved.
+
+`perf/explain-summary-face-weight.sql` (committed; output in `perf/evidence/explain-summary-face-weight-scale1.txt`): the All summary (23 `SUM`s, 43 |MV|-weighted and 108 face-weighted averages) with one weight for every average (before) and with the prices' second weight (after), 30 interleaved rounds after one warm-up, the planner's own plan:
+
+| Run | Variant | Plan | min ms | p50 ms | p95 ms |
+|---|---|---|---:|---:|---:|
+| 1 (load ≈ 45) | \|MV\| weight only (before) | Finalize Aggregate → Gather (2 workers) → Partial Aggregate → Parallel Seq Scan | 40.0 | 69.2 | 189.2 |
+| 1 | **prices by \|face\| (after)** | the same | 39.6 | 72.4 | 139.5 |
+| 2 (load ≈ 23) | \|MV\| weight only (before) | the same | 26.9 | 29.9 | 44.7 |
+| 2 | **prices by \|face\| (after)** | the same | 27.0 | 30.2 | 46.8 |
+
+Reading a second stored column costs about 0.3 ms at p50 (1%), within noise, and the plan stays parallel.
+
+k6 end to end (`perf/positions.js`, one VU, 30 s per scenario): main @3d55669 and this branch as two compose apps, each against its own database (both migrated and seeded alike on the same Postgres, so main's app reads a catalog it knows), alternating main, branch:
+
+| Round | Build | MISS Risk p50 / p95 ms | HIT p50 / p95 ms | MISS All p50 / p95 ms | All ≤ 150 ms? |
+|---|---|---:|---:|---:|---|
+| 1 | main | 27.8 / 65.1 | 2.5 / 9.3 | 131.3 / 281.4 | no |
+| 1 | **branch** | 21.2 / 52.6 | 1.1 / 2.9 | **48.4 / 74.3** | **yes** |
+| 2 | main | 15.6 / 26.3 | 1.0 / 1.5 | 56.8 / 153.8 | no |
+| 2 | **branch** | 21.0 / 45.2 | 4.9 / 25.0 | **93.5 / 223.6** | **no** |
+| 3 | main | 22.7 / 59.4 | 2.2 / 8.6 | 71.7 / 143.2 | yes |
+| 3 | **branch** | 17.5 / 54.7 | 1.5 / 5.1 | **60.1 / 122.6** | **yes** |
+
+Every check passed in all six runs (k6 exited 99 only for crossed latency thresholds). The machine's load swung between 10 and 50 within single runs, which is where the spread comes from: the branch is faster in rounds 1 and 3 and slower in round 2, with no consistent direction. The EXPLAIN rounds above isolate the summary's cost; on the quieter machine of #241's runs, All MISS p95 was 61–83 ms, and the second weight adds about 1% to the summary.
+
+```
+# local stack only: compose -p wrk459 (own ports), seed 42 --scale 1.0 into two databases, a throwaway viewer
+# from Desk.UserAdmin in each, RATE_LIMIT_PER_USER_PER_MIN/BURST raised in both apps' environments only
+docker exec -i <postgres container> sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q' < perf/explain-summary-face-weight.sql
+docker run --rm -i --add-host=host.docker.internal:host-gateway -e BASE_URL=http://host.docker.internal:<port> \
+  -e DESK_EMAIL=… -e DESK_PASSWORD=… grafana/k6:2.3.0 run --quiet - < perf/positions.js
+```
+
+**Decision.**
+- Migration `SnapshotFaceWeightColumn` adds the stored generated column; `GridSqlBuilder.Aggregate` reads `face_weight_f8` for `WeightedByCurrentFace` and `weight_f8` for every other average, with the same text and NULL/zero rules (README §8).
+- `MigrationTests` pins the frozen expression to `GridSqlBuilder.FaceWeightExpression`; `WeightColumnTests` checks the stored values and the write guard, and that the All summary, which now reads both weights, still plans as a parallel partial aggregate. `WeightedAverageTests` evaluates the price aggregate in Postgres over mixed-sign, zero and NULL faces.
+
+**Consequences.**
+- **Deploy, in two steps (expand, then the data).** The API reads each column's aggregation from `app.column_catalog`, seeded data, not from `ColumnCatalog`. Deploy runs migrate → seed → Render hook, so the app that is live during a deploy reads the catalog first. That app parsed the name with `Enum.Parse` and would fail every meta load on `WeightedByCurrentFace`. And a `SeedVersion` bump would reseed a full book, which the 512 MB reseed cap refuses (README §10). So this change ships as expand only: the column, the builder, the enum value, the code catalog (fresh seeds, the tests and CI's stacks are face-weighted) and a `MetaRepository` that falls back to the |MV|-weighted average, with a warning, for a name it doesn't know. Production's catalog keeps `WeightedByMarketValue` for prices, so its Total row stays |MV|-weighted and labelled that way (the labels follow the served aggregation). A follow-up data migration then updates those `app.column_catalog` rows once this build is live. The live app reads the new catalog within its 10-minute meta revalidation, and from that read on it serves face-weighted totals: `GridQuery.SummaryKey` and `CanonicalKey` key each column as name and aggregation, so the summary cache, the block cache and the ETag all move to new keys although `DataVersion` (a reseed) hasn't changed. Without that, cached |MV|-weighted totals would have stayed under the new labels until the next batch. Entries under the old keys simply expire at `BatchEndsAt`; no cache clear is needed. From then on, an aggregation added this way can't fail `/api/meta` during a deploy.
+- **The `ALTER` rewrites the snapshot** under an ACCESS EXCLUSIVE lock, as `SnapshotWeightColumn` did (0.73–1.8 s at scale 1.0), briefly blocking grid reads during the migrate step. It's the second such rewrite of the table: on Neon that is the whole ~77 MB snapshot, so seconds of blocked grid reads (queued, not failed) while production migrates. README §14.2's deploy notes are governed (`[workflows]`), so this note lives here until a `[workflows]` PR adds a line there. Derived data, filled by the `ALTER` itself, so no `SeedVersion` bump; Down drops the column.
+- **Size:** `core.position_snapshot` measured 77,709,312 bytes (74 MB, `pg_total_relation_size`) at scale 1.0 both with and without `face_weight_f8`, to the byte. The whole seeded database was 286 MB either way. Seeding is unchanged.
+- **SQL portability:** a second persisted computed column on SQL Server (README §16).
