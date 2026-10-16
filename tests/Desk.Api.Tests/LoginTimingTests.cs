@@ -233,8 +233,8 @@ public sealed class LoginTimingTests(PostgresApiFactory api)
                 return (user.Email, null);
             case LoginPath.Locked:
             case LoginPath.LockedWithTheRightPassword:
-                // Far past both the fake clock and the wall clock, whichever Identity reads.
-                await row.ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, DateTimeOffset.UtcNow.AddYears(10)), Ct);
+                // Identity reads only the injected clock (#294, #313).
+                await row.ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnd, api.Time.GetUtcNow().AddYears(10)), Ct);
                 return (user.Email, path == LoginPath.Locked ? "wrong-password-123456" : PostgresApiFactory.Password);
             case LoginPath.Disabled:
                 await row.ExecuteUpdateAsync(s => s.SetProperty(u => u.IsDisabled, true), Ct);

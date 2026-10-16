@@ -15,7 +15,11 @@ namespace Desk.Api.Positions;
 /// <summary>P1 positions grid (README §6): one block + summary per request, cache-first, and a streamed CSV export.</summary>
 public static class PositionsEndpoints
 {
+    /// <summary>The built-in export cap; <c>EXPORT_MAX_ROWS</c> may only lower it (<see cref="LimitsOptions.ExportMaxRows"/>).</summary>
     public const int MaxExportRows = 25_000;
+
+    /// <summary>Sent as <c>true</c>, before the first byte, when more rows match than the export cap (README §8, #277).</summary>
+    public const string TruncatedHeader = "X-Export-Truncated";
 
     public static RouteGroupBuilder MapPositionsEndpoints(this RouteGroupBuilder api)
     {
@@ -32,7 +36,7 @@ public static class PositionsEndpoints
         positions.MapPost("/export", ExportAsync)
             .WithMetadata(ExportEndpoint.Instance)
             .WithName("ExportPositions")
-            .WithSummary($"Streams the filtered positions as CSV (displayed columns, at most {MaxExportRows:N0} rows; one export at a time per user, a few in total, under an overall deadline).")
+            .WithSummary($"Streams the filtered positions as CSV (displayed columns, at most {MaxExportRows:N0} rows, {TruncatedHeader}: true when more match; one export at a time per user, a few in total, under an overall deadline).")
             .Produces(StatusCodes.Status200OK, contentType: "text/csv")
             .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
@@ -115,7 +119,7 @@ public static class PositionsEndpoints
 
         try
         {
-            var rows = await WriteCsvAsync(http, grid, query, meta, deadline.Token);
+            var rows = await WriteCsvAsync(http, grid, query with { Offset = 0, Limit = limits.ExportMaxRows }, meta, deadline.Token);
             if (http.Features.Get<AuditFeature>() is { } audit) audit.Rows = rows;
             return Results.Empty;
         }
@@ -127,6 +131,7 @@ public static class PositionsEndpoints
             {
                 // Not a file any more. No Retry-After: the same export would hit the same deadline.
                 http.Response.Headers.Remove(HeaderNames.ContentDisposition);
+                http.Response.Headers.Remove(TruncatedHeader);
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Export timed out",
                     detail: "Narrow the filter or the columns and try again.");
             }
@@ -142,18 +147,24 @@ public static class PositionsEndpoints
         }
     }
 
-    private static async Task<int> WriteCsvAsync(HttpContext http, GridRepository grid, GridQuery query, MetaSnapshot meta, CancellationToken ct)
+    private static async Task<int> WriteCsvAsync(HttpContext http, GridRepository grid, GridQuery export, MetaSnapshot meta, CancellationToken ct)
     {
-        var export = query with { Offset = 0, Limit = MaxExportRows };
+        var started = Stopwatch.GetTimestamp();
+        await using var rows = await grid.OpenExportAsync(export, meta.Catalog, ct);
+        // Everything the headers say is known before the first byte: the truncation (#130 N5) and the time to the
+        // first row (README §8; the CSV is written as it streams, so there is no separate serialize time).
+        if (rows.Truncated)
+            http.Response.Headers[TruncatedHeader] = "true";
+        SetTiming(http, "MISS", rows.DbMs, 0, started);
         http.Response.ContentType = "text/csv; charset=utf-8";
-        http.Response.Headers.ContentDisposition = $"attachment; filename=\"positions-{query.AsOf:yyyy-MM-dd}.csv\"";
+        http.Response.Headers.ContentDisposition = $"attachment; filename=\"positions-{export.AsOf:yyyy-MM-dd}.csv\"";
         // Not `await using`: disposing flushes, and a flush must not run after a deadline or a client abort.
         var writer = new StreamWriter(http.Response.Body, new UTF8Encoding(false), bufferSize: 64 * 1024);
         await writer.WriteLineAsync(string.Join(',', export.Columns.Select(c => Csv.Escape(c.Header))).AsMemory(), ct);
 
-        var rows = 0;
+        var count = 0;
         var line = new StringBuilder(1024);
-        await foreach (var reader in grid.StreamAsync(export, meta.Catalog, ct))
+        await foreach (var reader in rows.RowsAsync(ct))
         {
             line.Clear();
             for (var i = 0; i < export.Columns.Count; i++)
@@ -162,10 +173,10 @@ public static class PositionsEndpoints
                 Csv.Append(line, export.Columns[i], reader, i);
             }
             await writer.WriteLineAsync(line, ct);
-            rows++;
+            count++;
         }
         await writer.FlushAsync(ct);
-        return rows;
+        return count;
     }
 
     private sealed record Resolved(GridQuery? Query, IResult? Error);

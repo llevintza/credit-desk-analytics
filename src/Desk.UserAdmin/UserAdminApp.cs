@@ -86,6 +86,8 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
         services.AddSingleton(_time);
         services.AddDeskData(config);
+        // The base UserManager: its IsLockedOutAsync and AccessFailedAsync read the wall clock, not _time. No command
+        // calls them; one that needs lockout uses DeskUser.IsLockedOutAt with _time (the API's rule, #313).
         services.AddIdentityCore<DeskUser>(IdentityPolicy.Apply)
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<AppDbContext>();
@@ -126,6 +128,7 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
                 u.Email,
                 u.ExpiresAt,
                 u.IsDisabled,
+                u.LockoutEnabled,
                 u.LockoutEnd,
                 Roles = db.UserRoles.Where(ur => ur.UserId == u.Id)
                     .Join(db.Roles, ur => ur.RoleId, r => r.Id, (_, r) => r.Name)
@@ -140,7 +143,7 @@ public sealed class UserAdminApp(TextWriter stdout, TextWriter stderr, ILoggerFa
             var roleNames = string.Join(",", u.Roles);
             var status = u.IsDisabled ? "disabled"
                 : now >= u.ExpiresAt ? "expired"
-                : u.LockoutEnd > now ? "locked"
+                : DeskUser.IsLockedOutAt(u.LockoutEnabled, u.LockoutEnd, now) ? "locked"
                 : "active";
             // ENTITLEMENTS_MODE=grants: an admin sees every portfolio whatever its grants (ADR-0021 E1); no grants is none (E2).
             var grants = u.Roles.Contains(Roles.Admin) ? "all (admin)"

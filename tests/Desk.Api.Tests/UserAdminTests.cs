@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Desk.Api.Tests;
 
@@ -23,7 +24,9 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
 
     private Task<Run> RunAsync(params string[] args) => RunAsync(null, args);
 
-    private async Task<Run> RunAsync(Action<IServiceCollection>? configure, params string[] args)
+    private Task<Run> RunAsync(Action<IServiceCollection>? configure, params string[] args) => RunAsync(configure, api.Time, args);
+
+    private async Task<Run> RunAsync(Action<IServiceCollection>? configure, TimeProvider time, params string[] args)
     {
         var stdout = new StringWriter();
         var stderr = new StringWriter();
@@ -32,7 +35,7 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:App"] = api.ConnectionString })
             .Build();
-        var app = new UserAdminApp(stdout, stderr, loggers, api.Time) { ConfigureServices = configure };
+        var app = new UserAdminApp(stdout, stderr, loggers, time) { ConfigureServices = configure };
         var exit = await app.RunAsync(args, config, Ct);
         return new Run(exit, stdout.ToString(), stderr.ToString(), logs.Text);
     }
@@ -107,6 +110,33 @@ public sealed partial class UserAdminTests(PostgresApiFactory api)
         var run = await RunAsync("list");
         Assert.Matches($@"{Regex.Escape(expired.Email!)}.*expired", run.Out);
         Assert.Matches($@"{Regex.Escape(locked.Email!)}.*locked", run.Out);
+    }
+
+    [Fact]
+    public async Task List_shows_locked_exactly_when_the_api_refuses_the_login_on_the_injected_clock()
+    {
+        // #313: the API's lockout is LockoutEnabled && LockoutEnd >= now (inclusive, on the DI clock). Postgres keeps
+        // microseconds, so the instant is whole microseconds and stored exactly.
+        var at = api.Time.GetUtcNow();
+        at = at.AddTicks(-(at.UtcTicks % 10));
+        var ends = await api.CreateUserAsync();
+        var disabledLockout = await api.CreateUserAsync();
+        await using (var db = api.NewContext())
+        {
+            await db.Users.Where(u => u.Id == ends.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnabled, true).SetProperty(u => u.LockoutEnd, at), Ct);
+            await db.Users.Where(u => u.Id == disabledLockout.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockoutEnabled, false).SetProperty(u => u.LockoutEnd, at.AddMinutes(10)), Ct);
+        }
+
+        var atTheEnd = await RunAsync(null, new FakeTimeProvider(at), "list");
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\slocked\r?$", Line(atTheEnd.Out, ends.Email!));   // LockoutEnd == now
+        Assert.Matches($@"{Regex.Escape(disabledLockout.Email!)}.*\sactive\r?$", Line(atTheEnd.Out, disabledLockout.Email!)); // lockout off
+
+        var justAfter = await RunAsync(null, new FakeTimeProvider(at.AddTicks(1)), "list");
+        Assert.Matches($@"{Regex.Escape(ends.Email!)}.*\sactive\r?$", Line(justAfter.Out, ends.Email!)); // LockoutEnd == now - 1 tick
+
+        static string Line(string output, string email) => output.Split('\n').Single(l => l.StartsWith(email, StringComparison.Ordinal));
     }
 
     [Fact]
