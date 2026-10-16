@@ -33,6 +33,7 @@ public sealed class MigrationTests
         Assert.Equal(summarised.Where(c => c.SqlType == "double precision").Select(c => c.Name), SnapshotNanChecks.Float8Measures);
         Assert.Equal(summarised.Count, SnapshotNanChecks.NumericMeasures.Length + SnapshotNanChecks.Float8Measures.Length);
         Assert.Contains(GridSqlBuilder.WeightColumn, SnapshotNanChecks.NumericMeasures);
+        Assert.Contains(GridSqlBuilder.FaceWeightColumn, SnapshotNanChecks.NumericMeasures); // #459: the price weight
     }
 
     [Fact]
@@ -100,5 +101,21 @@ public sealed class MigrationTests
                      "GENERATED ALWAYS AS (abs(market_value)::float8) STORED;", up);
         Assert.Equal("ALTER TABLE core.position_snapshot DROP COLUMN IF EXISTS weight_f8;", down);
         Assert.DoesNotContain(ColumnCatalog.PositionSnapshot, c => c.Name == GridSqlBuilder.WeightF8Column);
+    }
+
+    [Fact]
+    public void The_face_weight_column_migration_is_rerun_safe_and_matches_the_builder()
+    {
+        // #459: the price weight is stored like the |MV| weight (#241), under a name no catalog column can take.
+        var migration = new SnapshotFaceWeightColumn();
+        var up = Assert.Single(migration.UpOperations.OfType<SqlOperation>()).Sql;
+        var down = Assert.Single(migration.DownOperations.OfType<SqlOperation>()).Sql;
+
+        Assert.Equal(GridSqlBuilder.FaceWeightF8Column, SnapshotFaceWeightColumn.Column);
+        Assert.Equal(GridSqlBuilder.FaceWeightExpression, SnapshotFaceWeightColumn.Expression);
+        Assert.Equal("ALTER TABLE core.position_snapshot ADD COLUMN IF NOT EXISTS face_weight_f8 double precision " +
+                     "GENERATED ALWAYS AS (abs(current_face)::float8) STORED;", up);
+        Assert.Equal("ALTER TABLE core.position_snapshot DROP COLUMN IF EXISTS face_weight_f8;", down);
+        Assert.DoesNotContain(ColumnCatalog.PositionSnapshot, c => c.Name == GridSqlBuilder.FaceWeightF8Column);
     }
 }
