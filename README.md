@@ -992,7 +992,9 @@ Dispatch is refused unless the run is from exact `refs/heads/main` (case-sensiti
   - Add columns as nullable or with defaults.
   - Never rename or drop in the same release that stops using a column; drop in a later PR.
 - **Migrations are generated, reviewed and committed** in the PR that needs them. CI fails on pending model changes.
-- **Seed data is never written by migrations,** only by the seeder. The exception is the column catalog, which is reference data; the seeder owns it too.
+- **Seed data is never written by migrations,** only by the seeder. There are two exceptions:
+  - the column catalog, which is reference data; the seeder owns it too;
+  - the `viewer` and `admin` role rows, seeded once by the `AuthAndAudit` migration ([ADR-0005 addendum](docs/adr/0005-auth-same-origin-cookie-vs-jwt.md#addendum-2026-10-07-115-the-viewer-and-admin-roles-are-seeded-by-a-migration)). They have fixed ids, come from one `InsertData` that runs once, and are never updated or deleted. Any further seeded reference rows need their own ADR.
 
 ### 14.5 Code review: `.github/workflows/claude-review.yml`, on every PR push
 
