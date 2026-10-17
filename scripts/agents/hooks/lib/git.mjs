@@ -16,7 +16,10 @@ const ok = { code: 0 };
 const ASSIGN = /^[A-Za-z_]\w*=/;
 // G3: these select the repo, its config, the global gitconfig or the git binary.
 const GIT_ENV = /^(?:GIT_\w*|HOME|XDG_CONFIG_HOME|PATH)$/;
-const RISKY_CONFIG = /^(?:remote|push|branch|alias|url|include|includeif)\.|^core\.hookspath$/i;
+// `-c` keys a one-off command may set: display, identity and history-shaping keys only. Any
+// other key could pick the destination (remote.*, url.*), run a program (core.sshCommand,
+// core.pager, diff.external, alias.*) or load more config (include*), so it fails closed.
+const SAFE_CONFIG = /^(?:color|user|advice|log|format|column|i18n)\.|^(?:core\.(?:quotepath|autocrlf|safecrlf|abbrev)|init\.defaultbranch|merge\.conflictstyle|rebase\.(?:autosquash|autostash)|commit\.gpgsign|gc\.auto|diff\.(?:renames|algorithm|noprefix|context))$/i;
 const SAFE_GLOBALS = new Set(["--no-pager", "-P", "-p", "--paginate", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects", "--version", "--help", "-v", "-h"]);
 
 function runGit(args, cwd) {
@@ -70,7 +73,7 @@ export function gitCommand(seg, repoAt, cwd) {
     if (t === "-C") g.dir = resolve(g.dir, rest[++i]?.text ?? "");
     else if (t === "-c") {
       const kv = rest[++i]?.text ?? "";
-      if (RISKY_CONFIG.test(kv.split("=")[0])) g.bad.push(`git -c ${kv.split("=")[0]}`);
+      if (!SAFE_CONFIG.test(kv.split("=")[0])) g.bad.push(`git -c ${kv.split("=")[0]}`);
     } else if (/^--(?:git-dir|work-tree|namespace|config-env|exec-path)\b/.test(t)) g.bad.push(`git ${t.split("=")[0]}`);
     else if (t.startsWith("-")) { if (!SAFE_GLOBALS.has(t)) g.bad.push(`git global option ${t}`); }
     else break;
@@ -79,8 +82,10 @@ export function gitCommand(seg, repoAt, cwd) {
   let sub = rest[i].text;
   let args = rest.slice(i + 1);
   const repo = repoAt(g.dir);
-  for (let depth = 0; !["push", "send-pack"].includes(sub) && repo.get(`alias.${sub}`) !== undefined && !repo.builtins().has(sub); depth++) {
-    const value = repo.get(`alias.${sub}`);
+  // git looks aliases up case-insensitively (config keys are), builtins case-sensitively.
+  const alias = (x) => repo.get(`alias.${x.toLowerCase()}`);
+  for (let depth = 0; !["push", "send-pack"].includes(sub) && alias(sub) !== undefined && !repo.builtins().has(sub); depth++) {
+    const value = alias(sub);
     if (depth > 8) throw new Error(`git alias ${sub} loops`);
     if (value.startsWith("!")) return { ...g, sub, args, shell: value.slice(1) };
     const expanded = parse(value).segments[0]?.words ?? [];
@@ -259,6 +264,40 @@ export function payloadCheck({ segs, sig }) {
   return undefined;
 }
 
+// git subcommands known not to push (fail closed: anything else, such as send-pack,
+// http-push, subtree push, p4 submit, lfs or filter-branch, blocks; #515 review).
+const NON_PUSHING = new Set(["add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "check-attr", "check-ignore",
+  "check-mailmap", "check-ref-format", "checkout", "cherry", "cherry-pick", "clean", "clone", "commit", "commit-graph", "commit-tree", "config",
+  "count-objects", "describe", "diff", "diff-files", "diff-index", "diff-tree", "difftool", "fetch", "for-each-ref", "format-patch", "fsck", "gc", "grep",
+  "hash-object", "help", "init", "log", "ls-files", "ls-remote", "ls-tree", "maintenance", "merge", "merge-base", "merge-file", "merge-tree", "mergetool",
+  "mktag", "mktree", "mv", "name-rev", "notes", "pack-refs", "prune", "pull", "range-diff", "read-tree", "rebase", "reflog", "remote", "repack", "replace",
+  "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "shortlog", "show", "show-branch", "show-ref", "sparse-checkout", "stash", "status",
+  "stripspace", "submodule", "switch", "symbolic-ref", "tag", "update-index", "update-ref", "var", "verify-commit", "verify-tag", "version", "whatchanged",
+  "worktree", "write-tree"]);
+
+/** A git subcommand other than push: allowlisted, with the ones that run commands checked. */
+function other(c, ctx) {
+  if (!NON_PUSHING.has(c.sub)) return block(`git ${c.sub} isn't on the guard's list of non-pushing subcommands`);
+  const a = c.args.map((w) => w.text);
+  if (c.sub === "config") {
+    const pos = a.filter((t) => !t.startsWith("-")).filter((t, i) => !(i === 0 && ["set", "unset", "get", "list"].includes(t)));
+    const [key, value] = pos;
+    if (key && /^alias\./i.test(key) && value !== undefined && (value.startsWith("!") || /\b(?:push|send-pack)\b/.test(value)))
+      return block(`git config ${key} defines an alias that pushes or runs a shell command`);
+  }
+  if (c.sub === "submodule" && a.includes("foreach")) return block("git submodule foreach runs a shell command in each submodule");
+  if (c.sub === "bisect" && a[0] === "run") return block("git bisect run runs a command");
+  if (["difftool", "mergetool"].includes(c.sub) && a.some((t) => /^(?:-x|--extcmd)/.test(t))) return block(`git ${c.sub} with an external command`);
+  if (c.sub === "rebase")
+    for (let i = 0; i < a.length; i++) {
+      const m = /^(?:-x|--exec)(?:=(.*))?$/.exec(a[i]) ?? /^-x(.+)$/.exec(a[i]);
+      if (!m) continue;
+      const d = ctx.evaluate?.(m[1] ?? a[++i] ?? "");
+      if (d?.code !== 0) return block("git rebase --exec runs a command the guard can't prove safe");
+    }
+  return ok;
+}
+
 /** The segment analyser (decide.mjs ANALYSERS). */
 export function analyseGit(seg, ctx) {
   const cwd = ctx.call.cwd ?? process.cwd();
@@ -276,9 +315,9 @@ export function analyseGit(seg, ctx) {
     const d = ctx.evaluate?.(c.shell);
     return d?.code === 0 ? ok : block(`the git alias ${c.sub} runs a shell command the guard can't prove safe`);
   }
-  if (c.sub === "send-pack") return block("git send-pack");
   if (c.tool === "hub" && c.sub !== undefined && !repoAt(c.dir).builtins().has(c.sub)) return block(`hub ${c.sub} isn't analysed`);
-  if (c.sub !== "push") return ok;
+  if (c.sub === undefined) return ok;
+  if (c.sub !== "push") return other(c, ctx);
   const top = ctx.parsed.segments.length;
   const earlier = ctx.segs.filter((s, j) => j !== ctx.index && (j < Math.min(ctx.index, top) || j >= top));
   const state = new Set(earlier.flatMap((s) => [...changes(s, repoAt, cwd)]));

@@ -81,6 +81,16 @@ test("aliases: chains, depth, empty and shell aliases", () => {
   assert.equal(code("git a", { config: { "alias.a": "!git a" } }), 2); // nested too deep
   assert.equal(code("git status", { config: { "alias.status": "push origin main" } }), 0); // builtins win
   assert.equal(code("git --version"), 0);
+  assert.equal(code("git A", { config: { "alias.a": "push origin main" } }), 2); // case-insensitive lookup
+  assert.equal(code("git A", { config: { "alias.a": "status" } }), 0);
+  assert.equal(code("git config set alias.p '!git push'"), 2);
+  assert.equal(code("git config --global alias.p 'push origin main'"), 2);
+  assert.equal(code("git config alias.p"), 0); // a read
+  assert.equal(code("git rebase --exec='git push origin main' HEAD~1"), 2);
+  assert.equal(code("git rebase -xtrue HEAD~1"), 0);
+  assert.equal(code("git difftool -x meld"), 2);
+  assert.equal(code("git difftool --extcmd=meld"), 2);
+  assert.equal(code("git lfs push origin main"), 2);
 });
 
 test("other git and hub commands", () => {
