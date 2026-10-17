@@ -30,9 +30,9 @@ test("the governance path list (governance.md), case-insensitive", () => {
     "src/x/.claude/a.json", ".cursor/cli.json", ".cursorignore", ".grok/agents/a.md", ".mcp.json", "AGENTS.md", "web/AGENTS.md",
     "src/Desk.UserAdmin/AGENTS.md", "src/Desk.UserAdmin/CLAUDE.md", "x/AGENT.md", "CLAUDE.local.md", ".claudeignore",
     "docs/agents/README.md", "scripts/agents/guard.mjs", ".gitleaks.toml", "perf/coverage-gate.mjs", "tests/testconfig.json",
-    ".gitmodules", ".GITHUB/workflows/x.yml", "Web/agents.md",
+    ".gitmodules", ".GITHUB/workflows/x.yml", "Web/agents.md", ".cursorrules", ".github", ".claude", "docs/agents", "scripts/agents", "deploy",
   ]) assert.ok(isGovernance(p), p);
-  for (const p of ["src/Desk.UserAdmin/UserAdminApp.cs", "src/Desk.Api/Program.cs", "README.md", "docs/adr/0001-stack.md", "perf/payload-size.mjs", "web/src/app.ts"])
+  for (const p of ["docs", "scripts", ".githubx", "src/Desk.UserAdmin/UserAdminApp.cs", "src/Desk.Api/Program.cs", "README.md", "docs/adr/0001-stack.md", "perf/payload-size.mjs", "web/src/app.ts"])
     assert.ok(!isGovernance(p), p);
 });
 

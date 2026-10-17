@@ -13,16 +13,20 @@
  * from the base copy of arming.json. Any lookup error fails the job.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CheckError, capNames, escapeHtml, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
+import { CheckError, capNames, escapeHtml, fail, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
+import { TEXT_CHECKS } from "./lib/checks-text.mjs";
 import { TREE_CHECKS, validateArming } from "./lib/checks-tree.mjs";
 
-export const CHECKS = Object.freeze({ ...TREE_CHECKS });
+export const CHECKS = Object.freeze({ ...TREE_CHECKS, ...TEXT_CHECKS });
 
 /** `git ls-tree -r -z` of HEAD in `dir`: [{path, mode, type, sha}]. */
 export function gitListing(dir) {
+  // Never list an enclosing repository: `dir` must be the top of its own work tree (#502 nit).
+  const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  if (realpathSync(top) !== realpathSync(dir)) throw new CheckError("--root/--base must be the top of a git work tree");
   const out = execFileSync("git", ["-C", dir, "ls-tree", "-r", "-z", "--full-tree", "HEAD"], { encoding: "utf8", maxBuffer: 64 << 20 });
   return out.split("\0").filter(Boolean).map((l) => {
     const [meta, path] = l.split("\t");
@@ -34,7 +38,7 @@ export function gitListing(dir) {
 /** Read-only view of one tree for the checks. Unknown paths read as null; listed ones must read. */
 export function treeView(root, listing) {
   const entries = listing.filter((e) => e.type !== "tree");
-  for (const e of entries) if (!isSafePath(e.path)) throw new CheckError(`unsafe path in listing: ${JSON.stringify(e.path)}`);
+  for (const e of entries) if (!isSafePath(e.path)) fail("unsafe path in listing", e.path);
   const byPath = new Map(entries.map((e) => [e.path, e]));
   const folded = new Map();
   for (const e of entries) folded.set(fold(e.path), [...(folded.get(fold(e.path)) ?? []), e.path]);
@@ -54,8 +58,10 @@ export function treeView(root, listing) {
 export function armed(arming, head, base) {
   const on = new Set(arming.alwaysArmed);
   const off = [];
+  // D12 is also armed by any `# agents-drift:` marker line in main's claude-review.yml.
+  const marked = /^\s*# agents-drift:/m.test(base?.read(".github/workflows/claude-review.yml") ?? "");
   for (const [id, globs] of Object.entries(arming.subjects)) {
-    if (head.glob(globs).length || base?.glob(globs).length) on.add(id);
+    if (head.glob(globs).length || base?.glob(globs).length || (id === "D12" && marked)) on.add(id);
     else off.push(id);
   }
   return { on, off };
@@ -98,11 +104,12 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     const head = treeView(root, pathsFile ? JSON.parse(readFileSync(pathsFile, "utf8")) : gitListing(root));
     const baseDir = arg(argv, "--base");
     const base = baseDir ? treeView(resolve(baseDir), gitListing(resolve(baseDir))) : null;
-    // Arming is always the trusted copy, never the PR's.
+    // Arming and the input globs are always the trusted copies, never the PR's.
     const own = (f) => (base ? join(base.root, "scripts/agents", f) : fileURLToPath(new URL(`./${f}`, import.meta.url)));
     // The trusted copy must name only checks this checker has (P is the presence rule).
     const arming = validateArming(JSON.parse(readFileSync(own("arming.json"), "utf8")), new Set(Object.keys(CHECKS)));
-    const ctx = { head, base, arming, armed: armed(arming, head, base) };
+    const adapters = JSON.parse(readFileSync(own("adapters.json"), "utf8"));
+    const ctx = { head, base, arming, inputs: adapters.inputs, armed: armed(arming, head, base) };
     const results = runChecks(ctx);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary(results, ctx.armed.off));
     const failed = results.filter((r) => r.fails.length);
@@ -112,6 +119,7 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     return failed.length ? 1 : 0;
   } catch (err) {
     write(`::error::agents-drift: ${err instanceof CheckError ? err.message : "lookup or parse error (fail closed)"}\n`);
+    if (err instanceof CheckError && err.detail !== undefined) logUntrusted(write, [err.detail]);
     return 1;
   }
 }

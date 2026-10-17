@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECKS, armed, main, runChecks, summary, treeView } from "../check-drift.mjs";
-import { CHECK_ID, frontmatter, validateArming } from "../lib/checks-tree.mjs";
+import { CHECK_ID, TREE_CHECKS, frontmatter, validateArming } from "../lib/checks-tree.mjs";
 import { capture, scratch } from "./helpers.mjs";
 
 const ARMING = JSON.parse(readFileSync(new URL("../arming.json", import.meta.url), "utf8"));
@@ -53,8 +53,9 @@ const fails = (id, head, re, b) => {
   assert.ok(r.fails.some((m) => re.test(m)), `${id}: expected a failure matching ${re}, got ${JSON.stringify(r.fails)}`);
 };
 
-test("the GOOD tree passes every check", () => {
-  for (const id of Object.keys(CHECKS)) passes(id, {}, {});
+test("the GOOD tree passes every tree check", () => {
+  assert.ok(Object.keys(TREE_CHECKS).every((id) => id in CHECKS));
+  for (const id of Object.keys(TREE_CHECKS)) passes(id, {}, {});
 });
 
 test("D1 root stub, D2 nested pairs, D16 every stub is exact", () => {
@@ -161,7 +162,9 @@ test("D22 arming.json may only grow; P keeps subjects present on main", () => {
 
 test("arming: subject-armed checks run only when the subject is on main or in the PR", () => {
   const noNested = tree({ "AGENTS.md": "x" });
-  assert.deepEqual(armed(ARMING, noNested, null).off, ["D2"]);
+  assert.deepEqual(armed(ARMING, noNested, null).off, ["D2", "D12"]);
+  const marked = tree({ ".github/workflows/claude-review.yml": "  # agents-drift:claude-args\n" });
+  assert.ok(armed(ARMING, noNested, marked).on.has("D12"), "D12 is armed by a marker in main's claude-review.yml");
   assert.ok(armed(ARMING, noNested, tree(GOOD)).on.has("D2"), "armed by main");
   assert.ok(armed(ARMING, tree(GOOD), null).on.has("D2"), "armed by the PR");
 });
@@ -176,7 +179,7 @@ test("frontmatter and the summary escaping", () => {
 });
 
 test("treeView fails closed on unsafe listing paths and unreadable listed files", () => {
-  assert.throws(() => treeView(scratch(), [{ path: "../x", type: "blob" }]), /unsafe path in listing/);
+  assert.throws(() => treeView(scratch(), [{ path: "../x", type: "blob" }]), (e) => e.message === "unsafe path in listing" && e.detail === "../x");
   const v = treeView(scratch(), [{ path: "AGENTS.md", mode: "100644", type: "blob" }]);
   assert.throws(() => v.read("AGENTS.md"), /ENOENT/);
   assert.equal(v.read("absent.md"), null);
@@ -195,14 +198,19 @@ function gitRepo(files) {
   return d;
 }
 
+// The text checks need the real gate copies and ci.yml.
+// Root AGENTS.md links into the whole repo, so its links are dropped here (checks-text.test covers D23).
+const REAL = Object.fromEntries(["AGENTS.md", "README.md", "docs/deployment-setup.md", ".github/workflows/ci.yml"].map((p) => [p, readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8")]));
+REAL["AGENTS.md"] = REAL["AGENTS.md"].replace(/\]\([^)]*\)/g, "]");
+
 test("main: a real checkout against a base checkout, the summary file, exit codes", () => {
-  const own = { "scripts/agents/arming.json": JSON.stringify(ARMING), "scripts/agents/adapters.json": JSON.stringify(ADAPTERS) };
+  const own = { ...REAL, "scripts/agents/arming.json": JSON.stringify(ARMING), "scripts/agents/adapters.json": JSON.stringify(ADAPTERS) };
   const baseDir = gitRepo({ ...GOOD, ...own });
   const sum = join(scratch(), "s.md");
   const ok = capture();
   assert.equal(main(["--root", gitRepo({ ...GOOD, ...own }), "--base", baseDir], { GITHUB_STEP_SUMMARY: sum }, { write: ok.write }), 0);
-  assert.match(ok.text(), /^agents-drift: 17 checks, 0 failed\n$/);
-  assert.match(readFileSync(sum, "utf8"), /17 checks run, 0 failed/);
+  assert.match(ok.text(), /^agents-drift: 22 checks, 0 failed; disarmed: D12\n/);
+  assert.match(readFileSync(sum, "utf8"), /22 checks run, 0 failed/);
 
   const bad = capture();
   const head = gitRepo({ ...GOOD, ...own, "web/AGENTS.md": "x\n".repeat(61), ".env.dev": "x" });
@@ -212,7 +220,10 @@ test("main: a real checkout against a base checkout, the summary file, exit code
 
 test("main: --paths listing (the base-job form), no base, disarmed notice, usage and errors", () => {
   const d = scratch();
-  writeFileSync(join(d, "AGENTS.md"), "# x\n");
+  for (const [p, t] of Object.entries(REAL)) {
+    mkdirSync(dirname(join(d, p)), { recursive: true });
+    writeFileSync(join(d, p), t);
+  }
   writeFileSync(join(d, "CLAUDE.md"), "@AGENTS.md\n");
   mkdirSync(join(d, "scripts/agents"), { recursive: true });
   writeFileSync(join(d, "scripts/agents/arming.json"), JSON.stringify(ARMING));
@@ -220,10 +231,10 @@ test("main: --paths listing (the base-job form), no base, disarmed notice, usage
   writeFileSync(join(d, "docs/agents/roles-and-skills.md"), "### 4. Commands and skills\n");
   const paths = join(scratch(), "paths.json");
   const blob = (path) => ({ path, mode: "100644", type: "blob", sha: "1".repeat(40), size: 1 });
-  writeFileSync(paths, JSON.stringify([blob("AGENTS.md"), blob("CLAUDE.md"), blob("scripts/agents/arming.json"), blob("docs/agents/roles-and-skills.md"), { path: "docs", type: "tree" }]));
+  writeFileSync(paths, JSON.stringify([...Object.keys(REAL).map(blob), blob("CLAUDE.md"), blob("scripts/agents/arming.json"), blob("docs/agents/roles-and-skills.md"), { path: "docs", type: "tree" }]));
   const c = capture();
   assert.equal(main(["--root", d, "--paths", paths], {}, { write: c.write }), 0);
-  assert.match(c.text(), /disarmed: D2/);
+  assert.match(c.text(), /disarmed: D2, D12/);
 
   const u = capture();
   assert.equal(main([], {}, { write: u.write }), 1);
@@ -263,4 +274,16 @@ test("main: a malformed or unknown-id trusted arming.json fails closed", () => {
     assert.equal(main(["--root", d, "--base", d], {}, { write: c.write }), 1);
     assert.match(c.text(), /^::error::agents-drift: arming.json/);
   }
+});
+
+test("main: an unsafe --paths entry is printed only escaped; a --root inside another repo fails", () => {
+  const paths = join(scratch(), "paths.json");
+  writeFileSync(paths, JSON.stringify([{ path: "a\n::warning::x", mode: "100644", type: "blob" }]));
+  const c = capture();
+  assert.equal(main(["--root", scratch(), "--paths", paths], {}, { write: c.write }), 1);
+  assert.match(c.text(), /^::error::agents-drift: unsafe path in listing\n::stop-commands::\w+\n"a\\n::warning::x"\n/);
+  const repo = gitRepo({ "AGENTS.md": "x\n", "sub/f.txt": "y" });
+  const n = capture();
+  assert.equal(main(["--root", join(repo, "sub")], {}, { write: n.write }), 1);
+  assert.match(n.text(), /must be the top of a git work tree/);
 });

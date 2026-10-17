@@ -19,7 +19,7 @@ import { collectFiles, decodeBlob } from "./pr-data.mjs";
 export const GOVERNANCE_PATHS = Object.freeze([
   ".github/**", "**/Dockerfile*", "**/*.Dockerfile", "render.yaml", "deploy/**",
   "**/docker-compose*.y*ml", "**/compose*.y*ml",
-  ".claude/**", "**/.claude/**", ".cursor/**", ".cursorignore", ".grok/**", ".mcp.json",
+  ".claude/**", "**/.claude/**", ".cursor/**", ".cursorignore", ".cursorrules", ".grok/**", ".mcp.json",
   "**/AGENTS.md", "**/AGENT.md", "**/CLAUDE.md", "**/CLAUDE.local.md", ".claudeignore",
   "docs/agents/**", "scripts/agents/**", ".gitleaks.toml", "perf/coverage-*", "tests/testconfig.json", ".gitmodules",
 ]);
@@ -34,7 +34,8 @@ export const COVERAGE_VOIDERS = Object.freeze([
   "**/*.runsettings", "web/angular.json", "web/vitest.config.*", "web/package.json",
 ]);
 
-export const isGovernance = (path) => matchesAny(path, GOVERNANCE_PATHS);
+// A bare directory path (a file or link named `.github` or `docs/agents`) counts too (#501 nit).
+export const isGovernance = (path) => matchesAny(path, GOVERNANCE_PATHS) || matchesAny(`${path}/`, GOVERNANCE_PATHS);
 const names = (f) => [f.filename, ...(f.previous_filename === undefined ? [] : [f.previous_filename])];
 
 /** Same keys at every level; `line`/`branch` numbers may only go up; nothing else may change. */
