@@ -73,3 +73,9 @@ export const SETTINGS = {
     allow: [...MAX_ALLOW],
   },
 };
+
+/** Guard git lookups from a fake repo (default: on `feat`, no config, no refs). */
+export const fakeRepo = ({ config = {}, branch = "feat", refs = {} } = {}) => () => ({
+  get: (k) => [].concat(config[k] ?? []).at(-1), all: (k) => [].concat(config[k] ?? []), branch: () => branch,
+  fullName: (s) => refs[s] ?? null, symref: () => null, builtins: () => new Set(["status", "log", "commit", "checkout", "push"]),
+});

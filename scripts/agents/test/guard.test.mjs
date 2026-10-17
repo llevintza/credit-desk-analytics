@@ -5,13 +5,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { decide, gitSubcommand, head, isSecretPath } from "../hooks/lib/decide.mjs";
+import { decide, head, isSecretPath } from "../hooks/lib/decide.mjs";
 import { parse } from "../hooks/lib/shell.mjs";
 import { braces, couldBeSecret, couldName, globRe } from "../hooks/lib/glob.mjs";
 import { normalize, unescapeRaw } from "../hooks/lib/input.mjs";
 import { BLOCK_TTL_MS, callKey, recall, remember } from "../hooks/lib/record.mjs";
 import { HARD_CAP_MS, loadPatterns, main } from "../hooks/guard.mjs";
-import { capture, scratch } from "./helpers.mjs";
+import { capture, fakeRepo, scratch } from "./helpers.mjs";
 
 const GUARD = fileURLToPath(new URL("../hooks/guard.mjs", import.meta.url));
 
@@ -28,7 +28,8 @@ const kv = (k, v) => [k, v].join("=");
 const PW = ["Pass", "word"].join("");
 const PG_URI = ["postgres://u", "s3cret@h/db"].join(":");
 
-const code = (json, opts) => decide(typeof json === "string" ? json : JSON.stringify(json), opts).code;
+// Git lookups come from a fake repo on `feat` (guard-realgit.test.mjs runs real git).
+const code = (json, opts) => decide(typeof json === "string" ? json : JSON.stringify(json), { repoAt: fakeRepo(), ...opts }).code;
 const rows = (list, want) => {
   for (const c of list) for (const [name, shape] of Object.entries(SHAPES)) assert.equal(code(shape(c)), want, `${name}: ${c}`);
 };
@@ -72,9 +73,9 @@ test("curl and wget block in every form, with no exception (G18)", () => {
 });
 
 test("push/merge-shaped segments fail closed until an analyser proves them; mentions pass", () => {
-  rows(["git push origin main", "git -C . push origin feat", "hub push origin x", "env git push", "gh pr merge 5", "gh api repos/o/r/pulls/5/merge -X PUT",
-    "echo 'git push' | sh", "printf 'git push' |& bash", "echo $(git push origin main)", "x=`git push`", "git -c alias.c='!git push' commit", "cat <(git push)",
-    "if git push; then :; fi", "{ cd ..; git push; }", "for b in a; do git push origin $b; done", "! git push", "X=1 git push"], 2);
+  rows(["git push origin main", "git -C . push origin main", "hub push origin main", "env git push", "gh pr merge 5", "gh api repos/o/r/pulls/5/merge -X PUT",
+    "echo 'git push' | sh", "printf 'git push' |& bash", "echo $(git push origin main)", "x=`git push origin main`", "git -c alias.c='!git push' commit", "cat <(git push origin main)",
+    "if git push origin main; then :; fi", "{ cd ..; git push; }", "for b in a; do git push origin $b; done", "! git push origin main", "GIT_DIR=x git push"], 2);
   rows([
     "echo 'git push origin main'", "grep -rn 'git push' docs", "git log --grep push", `git commit -m "docs: the git push flow"`, "ls # git push origin main",
     `git commit -m "$(cat <<'EOF'\nfix: it's how we git push\nEOF\n)"`, "cat <<'EOF' > notes.md\ngit push origin main\nEOF", "git --no-pager -C . log", "npm test",
@@ -138,10 +139,7 @@ test("MCP calls are normalized per adapter; a signature in the arguments fails c
   assert.equal(code({ tool_name: "mcp__gh__update_repo", tool_input: { default_branch: "x" } }), 2);
 });
 
-test("helpers: git subcommand, secret paths", () => {
-  const w = (s) => s.split(" ").map((text) => ({ text }));
-  assert.deepEqual(gitSubcommand(w("git -C x --git-dir y -c a=b --no-pager log")), { sub: "log", config: true });
-  assert.deepEqual(gitSubcommand(w("git --config-env=a=B")), { sub: undefined, config: true });
+test("helpers: secret paths, the command word", () => {
   assert.equal(isSecretPath("--env-file=web/.env.local"), true);
   assert.equal(isSecretPath("secrets"), false);
   assert.equal(head(parse("{ ! X=1 git push").segments[0]).text, "git");
