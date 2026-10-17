@@ -63,6 +63,17 @@ test("Read and Write tools: secret paths, secret patterns and Password= literals
   assert.equal(w({ file_path: "AGENTS.md", content: "use the web fetch tool, never curl" }), 0); // G18 is for commands only
 });
 
+test("more readers, recursive greps and other password forms (#514 review)", () => {
+  rows(["dd if=.env of=/dev/stdout", "paste .env", "rev .env", "tar cf x.tar .env", "rsync .env x", "vim .env", "ln -s .env x", "git show HEAD:.env",
+    "git cat-file -p HEAD:web/.env.prod", "git add .env", "grep -r KEY .", "grep -rn KEY", "grep -R x web", "egrep --recursive x ..", "rg --hidden KEY", "rg -uu KEY",
+    "ag --no-ignore-vcs KEY"], 2);
+  rows(["grep -rn KEY src/", "grep -n KEY README.md", "rg KEY", "rg -n KEY web/src", "git add .env.example", "tar cf x.tar src", "git show HEAD:README.md"], 0);
+  const w = (content) => code({ tool_name: "Write", tool_input: { file_path: "a.json", content } });
+  const pw = PW.toLowerCase();
+  for (const c of [`${PW} = hunter2`, `pwd = abc`, `{ "${pw}": "hunter2" }`, `${pw}: 'hunter2'`, `${PW}="hunter2"`]) assert.equal(w(c), 2, c);
+  for (const c of [`${pw}: string;`, `{ "${pw}": "$DB_PASS" }`, `{ "${pw}": "" }`, `${pw}: "<redacted>"`, `${PW} = $PGPASSWORD`, `${pw}: '{{ secret }}'`]) assert.equal(w(c), 0, c);
+});
+
 test("curl and wget block in every form, with no exception (G18)", () => {
   rows([
     "curl -s http://localhost:5180/health", "/usr/bin/curl x", "env curl x", "command curl x", "timeout 5 curl x", "busybox wget x", "c\\url x",
@@ -73,7 +84,7 @@ test("curl and wget block in every form, with no exception (G18)", () => {
 });
 
 test("push/merge-shaped segments fail closed until an analyser proves them; mentions pass", () => {
-  rows(["git push origin main", "git -C . push origin main", "hub push origin main", "env git push", "gh pr merge 5", "gh api repos/o/r/pulls/5/merge -X PUT",
+  rows(["git push origin main", "git -C . push origin main", "hub push origin main", "env git push origin main", "gh pr merge 5", "gh api repos/o/r/pulls/5/merge -X PUT",
     "echo 'git push' | sh", "printf 'git push' |& bash", "echo $(git push origin main)", "x=`git push origin main`", "git -c alias.c='!git push' commit", "cat <(git push origin main)",
     "if git push origin main; then :; fi", "{ cd ..; git push; }", "for b in a; do git push origin $b; done", "! git push origin main", "GIT_DIR=x git push"], 2);
   rows([
