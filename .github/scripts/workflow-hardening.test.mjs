@@ -277,6 +277,9 @@ test("#461: the scan step, run with a stub docker: clean, a job secret, a gitlea
   assert.equal(missing.output, "");
 });
 
+// The ci-jobs.mjs ban list: any import, or a process, worker, vm or eval route (#500 review, #505).
+const CI_JOBS_BANNED = /^\s*import\b|\bimport\s*\(|\brequire\s*\(|child_process|worker_threads|node:vm|eval\(|Function\(|process\./m;
+
 // ADR-0026 parse-only invariant: ci-wiring (base) runs the base copy of this file against a
 // PR's ci.yml, so it may only parse. The protected job repeats this grep on the base copy.
 test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:fs and ./ci-jobs.mjs, and never spawns", () => {
@@ -288,7 +291,25 @@ test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:
   assert.doesNotMatch(src, /\brequire\s*\(|process\.binding|createRequire/);
   // Its one local import has no imports of its own, so nothing it loads can spawn (#500 review).
   const jobs = readFileSync(new URL("./ci-jobs.mjs", import.meta.url), "utf8");
-  assert.doesNotMatch(jobs, /^\s*import\b|\bimport\s*\(|\brequire\s*\(|child_process|worker_threads|node:vm|eval\(|Function\(|process\./m);
+  assert.doesNotMatch(jobs, CI_JOBS_BANNED);
+});
+
+// #505 (a): the fixtures for the ban list above.
+test("#505: the ci-jobs.mjs ban list rejects any import or process route (fixtures)", () => {
+  const ok = readFileSync(new URL("./ci-jobs.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(ok, CI_JOBS_BANNED);
+  for (const bad of [
+    'import { execFileSync } from "node:child_process";',
+    'import { readFileSync } from "node:fs";',
+    '  import * as cp from "child_process";',
+    'export const JOBS = await import("node:child_process");',
+    'const cp = require("child_process");',
+    'import { Worker } from "node:worker_threads";',
+    'import vm from "node:vm";',
+    'export const JOBS = eval("{}");',
+    'export const JOBS = Function("return 1")();',
+    'export const JOBS = process.env.JOBS;',
+  ]) assert.match(`${ok}\n${bad}\n`, CI_JOBS_BANNED, bad);
 });
 
 // #451: `ci-wiring (base)` is a required base-run check name; a head job with the same name
