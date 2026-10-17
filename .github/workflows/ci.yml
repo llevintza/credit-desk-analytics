@@ -418,6 +418,10 @@ jobs:
             awk '/start of coverage report/,/end of coverage report/' /tmp/changes-tests.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      # ADR-0026: the parse-only wiring tests, under the same permission model that
+      # ci-wiring (base) uses (no child processes, workers or writes).
+      - name: CI wiring tests, parse-only (#451)
+        run: node --permission --allow-fs-read="$GITHUB_WORKSPACE" .github/scripts/ci-wiring.test.mjs
       - name: CI/Deploy concurrency wiring tests (#207)
         run: node --test .github/scripts/concurrency-wiring.test.mjs
       - name: k6 handleSummary and the budgets jq (#271)
