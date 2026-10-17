@@ -129,8 +129,6 @@ function gateArgs(base, extra = []) {
     base,
     "--base-dir",
     "_base",
-    "--default-dir",
-    "_base",
     "--default-sha",
     base,
     "--default-branch",
@@ -152,8 +150,6 @@ function pushArgs(base, extra = []) {
     "--base",
     base,
     "--base-dir",
-    "_base",
-    "--default-dir",
     "_base",
     "--default-sha",
     base,
@@ -305,7 +301,8 @@ test("ci.yml evaluates coverage from a base checkout directory", () => {
   assert.match(yml, /Bootstrap closed after #5/);
   assert.match(yml, /node "\$GATE"/);
   assert.match(yml, /--base-dir _base/);
-  assert.match(yml, /--default-dir _base/);
+  // #110 R2-N4: --default-dir is gone (the floor dir is --base-dir); --default-sha stays the floor SHA.
+  assert.doesNotMatch(yml, /--default-dir/);
   assert.ok(yml.includes('--default-sha "$BASE_SHA"'));
   assert.equal((yml.match(/echo "Bootstrap:/g) || []).length, 0);
   assert.doesNotMatch(yml, /coverage-bootstrap/);
@@ -1882,30 +1879,93 @@ test("F2: a committed baseline below the BASE_SHA floor with no override fails h
   }
 });
 
-test("F2: cannot resolve default-branch tip fails closed", () => {
+test("#110: without --default-sha the floor is --base, never the default-branch tip", () => {
   const { dir, base } = setupPassRepo();
   try {
+    // The pushed commit lowers its own baseline and is the tip of main, as on a push run.
+    write(
+      dir,
+      "perf/coverage-baseline.json",
+      JSON.stringify({ dotnet: { line: 10, branch: 10 }, web: { line: 10, branch: 10 } }),
+    );
+    const head = commit(dir, "lower own floor");
+    assert.equal(git(dir, ["rev-parse", "main"]), head);
     const r = runGate({
       root: dir,
-      argv: [
-        "--dotnet",
-        "cov/dotnet",
-        "--web",
-        "cov/web",
-        "--base",
-        base,
-        "--default-branch",
-        "no-such-branch",
-        "--base-ref",
-        "",
-        "--event",
-        "push",
-      ],
+      argv: ["--dotnet", "cov/dotnet", "--web", "cov/web", "--base", base, "--base-ref", "", "--event", "push"],
       stdoutWrite: () => {},
       stderrWrite: () => {},
     });
     assert.equal(r.failed, true);
-    assert.match(r.output, /cannot resolve default branch 'no-such-branch'/);
+    assert.match(r.output, /lowers the committed baseline below the BASE_SHA floor/);
+    assert.doesNotMatch(r.output, /cannot resolve default branch/);
+  } finally {
+    removeRepo(dir);
+  }
+});
+
+test("#110: --default-dir is not read; the floor dir is --base-dir", () => {
+  // BASE_SHA has the gate but no JSON in git, so the floor comes from the base checkout dir.
+  const { dir, base } = setupPassRepo();
+  try {
+    git(dir, ["rm", "-q", "perf/coverage-thresholds.json", "perf/coverage-baseline.json"]);
+    const gateOnly = commit(dir, "base: gate only");
+    headJson(dir, { dotnet: { line: 100, branch: 100 }, web: { line: 100, branch: 100 } });
+    commit(dir, "head: thresholds and baseline");
+    write(dir, "_base/perf/coverage-gate.mjs", THIS_GATE);
+    write(dir, "_base/perf/coverage-thresholds.json", JSON.stringify(VALID_THRESHOLDS));
+    write(dir, "_base/perf/coverage-baseline.json", readFileSync(join(dir, "perf/coverage-baseline.json"), "utf8"));
+    write(dir, "_other/perf/coverage-thresholds.json", "{not-json");
+    write(dir, "_other/perf/coverage-baseline.json", "{not-json");
+    const r = runGate({
+      root: dir,
+      argv: gateArgs(gateOnly, ["--default-dir", "_other"]),
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+    });
+    assert.equal(r.failed, false, r.output);
+    assert.doesNotMatch(r.output, /cannot parse/);
+    assertGatePath(r.output, "pr/base");
+  } finally {
+    removeRepo(dir);
+  }
+});
+
+test("#110: gate-path output is pinned byte for byte", () => {
+  const gatePathLines = (out) => out.split("\n").filter((l) => l.startsWith("gate-path"));
+  const run = (dir, argv) => {
+    let stdout = "";
+    const r = runGate({ root: dir, argv, stdoutWrite: (s) => (stdout += s), stderrWrite: () => {} });
+    return { ...r, stdout };
+  };
+  const { dir, base } = setupPassRepo();
+  try {
+    const pr = run(dir, gateArgs(base));
+    assert.equal(pr.failed, false, pr.output);
+    assert.deepEqual(gatePathLines(pr.output), ["gate-path: pr/base"]);
+    assert.ok(pr.output.includes("\n\ngate-path: pr/base\nBase SHA: `" + base + "`. Merge-base: `"), pr.output);
+
+    const push = run(dir, pushArgs(base));
+    assert.equal(push.failed, false, push.output);
+    assert.deepEqual(gatePathLines(push.output), ["gate-path: push/base"]);
+    assert.ok(push.output.includes("\n\ngate-path: push/base\nBase SHA: `" + base + "`. Merge-base: `"), push.output);
+
+    // failHard writes the mark and the FAIL line as its first stdout bytes.
+    const cases = [
+      [gateArgs(base, ["--suites", "bogus"]), "fail/suites"],
+      [gateArgs("0".repeat(40)), "fail/missing-base-sha"],
+      [gateArgs(base, ["--base-ref", "release"]), "fail/retarget"],
+    ];
+    for (const [argv, path] of cases) {
+      const r = run(dir, argv);
+      assert.equal(r.failed, true, path);
+      assert.ok(r.stdout.startsWith(`gate-path: ${path}\n- **FAIL** `), `${path}: ${JSON.stringify(r.stdout)}`);
+      assert.deepEqual(gatePathLines(r.output), [`gate-path: ${path}`]);
+    }
+
+    rmSync(join(dir, "perf/coverage-gate.mjs"));
+    const noHeadGate = run(dir, gateArgs(base));
+    assert.ok(noHeadGate.stdout.startsWith("gate-path: fail/missing-head-gate\n- **FAIL** head is missing perf/coverage-gate.mjs;"));
   } finally {
     removeRepo(dir);
   }
