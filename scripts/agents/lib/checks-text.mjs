@@ -44,7 +44,7 @@ export function jobs(yml) {
 
 /**
  * The checks below read workflows by layout, so a file must use the canonical layout or it
- * fails (closed): no quoted keys, anchors, aliases or merge keys; exactly `jobs:`; job ids at
+ * fails (closed): no quoted keys, anchors, aliases or merge keys; exactly `jobs:` (no trailing comment); job ids at
  * 2 spaces and job keys at exactly 4; no flow-style job, step or job key (but `needs: [..]`).
  * Valid YAML in another layout would otherwise slip past the line-anchored rules (#504 review).
  */
@@ -63,7 +63,7 @@ export function layoutProblems(yml) {
     if (/^\S/.test(l)) {
       inJobs = /^jobs\s*:/.test(l);
       seenId = false;
-      if (inJobs && !/^jobs:\s*(#.*)?$/.test(l)) out.push(`${at}: jobs must be a plain block mapping`);
+      if (inJobs && !/^jobs:\s*$/.test(l)) out.push(`${at}: the jobs line must be exactly "jobs:" (no comment, no flow value)`);
       return;
     }
     if (!inJobs) return;
