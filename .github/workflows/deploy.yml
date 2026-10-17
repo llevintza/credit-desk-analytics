@@ -205,6 +205,7 @@ jobs:
 
       # #302: the hook answers {"deploy":{"id":"dep-…"}}. render-deploy.mjs logs the id, adds it to the summary
       # and outputs it with the service id from the hook URL's path, so the smoke step never sees the hook URL.
+      # The deploy is already requested when it runs, so a throw only warns: logging never blocks a deploy.
       - name: Trigger Render deploy of this commit
         id: hook
         if: steps.tip.outputs.allowed == 'true'
@@ -214,17 +215,14 @@ jobs:
           case "$HOOK" in *\?*) sep='&' ;; *) sep='?' ;; esac
           curl -fsS --max-time 30 -X POST "${HOOK}${sep}ref=${SHA}" > hook-response.json
           echo "Deploy requested for ${SHA}"
-          node .github/scripts/render-deploy.mjs hook < hook-response.json
+          node .github/scripts/render-deploy.mjs hook < hook-response.json ||
+            echo "::warning::Render deploy id could not be logged; the deploy of ${SHA} was still requested"
 
       - name: Smoke test (wait for the new build to serve /health)
+        id: smoke
         if: steps.tip.outputs.allowed == 'true'
         env:
           APP_URL: ${{ vars.APP_URL }}
-          # #302: read only when the smoke fails. An empty key prints "could not be read (no API key)";
-          # the smoke fails the same way either way.
-          DEPLOY_ID: ${{ steps.hook.outputs.deploy_id }}
-          SERVICE_ID: ${{ steps.hook.outputs.service_id }}
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
           # Free-tier Docker builds plus cold start can take several minutes.
           v=""
@@ -237,7 +235,7 @@ jobs:
           done
           if [ "$v" != "$SHA" ]; then
             echo "::error::$APP_URL did not report $SHA within 15 minutes"
-            node .github/scripts/render-deploy.mjs status || true
+            echo "timed_out=true" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           root_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$APP_URL/")
@@ -246,6 +244,16 @@ jobs:
           echo "GET /api/me -> $me_code"
           test "$root_code" = 200
           test "$me_code" = 401
+
+      # #302: only this step holds the Render API key, and it runs only when the /health smoke timed out. The job
+      # has already failed by then; an empty key prints "could not be read (no API key)" and changes nothing.
+      - name: Read the Render deploy status (the /health smoke timed out)
+        if: failure() && steps.tip.outputs.allowed == 'true' && steps.smoke.outputs.timed_out == 'true'
+        env:
+          DEPLOY_ID: ${{ steps.hook.outputs.deploy_id }}
+          SERVICE_ID: ${{ steps.hook.outputs.service_id }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: node .github/scripts/render-deploy.mjs status || true
 
       - name: Smoke test (Swagger UI and the OpenAPI document are not public)
         if: steps.tip.outputs.allowed == 'true'

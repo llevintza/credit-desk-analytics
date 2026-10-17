@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { API, deployId, describe, hook, main, serviceId, status, unreadable } from "./render-deploy.mjs";
 
 // #302: the release job logs the Render deploy id from the hook response and, when the /health smoke
@@ -219,19 +219,67 @@ test("deploy.yml: the hook response is kept and parsed, and node is set up from 
   assert.ok(DEPLOY.indexOf(node[1]) < DEPLOY.indexOf("- name: Trigger Render deploy"), "node is set up before the hook step");
 });
 
-test("deploy.yml: a failed smoke reads the status with the production key, then fails the same way", () => {
+// The hook step's last command, as the runner sees it (bash -e): the helper call and its warn guard.
+const hookCall = () => {
+  const trigger = stepBlock(DEPLOY, "Trigger Render deploy of this commit");
+  const call = /^ {10}(node \.github\/scripts\/render-deploy\.mjs hook < hook-response\.json \|\|\n {12}echo "::warning::.*")$/m.exec(trigger);
+  assert.ok(call, "the hook call ends in || echo \"::warning::…\"");
+  assert.ok(trigger.trimEnd().endsWith(call[1]), "the guarded call is the step's last command");
+  return call[1];
+};
+
+const runHookCall = (script) => {
+  const dir = mkdtempSync(join(tmpdir(), "render-deploy-step-"));
+  try {
+    // A copy, not a symlink: node resolves a symlinked main module, and the helper's entry check would skip.
+    mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+    copyFileSync(SCRIPT, join(dir, ".github", "scripts", "render-deploy.mjs"));
+    writeFileSync(join(dir, "hook-response.json"), '{"deploy":{"id":"dep-step1"}}');
+    // A directory as GITHUB_OUTPUT makes the helper's append throw (EISDIR): logging fails after the deploy was requested.
+    mkdirSync(join(dir, "output"));
+    const env = { PATH: process.env.PATH, HOOK, SHA: "abc1234", GITHUB_OUTPUT: join(dir, "output") };
+    return spawnSync("bash", ["-e", "-c", script], { cwd: dir, env, encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+test("deploy.yml: a throw in the hook helper warns and the deploy step still succeeds, as before #302", () => {
+  const call = hookCall();
+  const guarded = runHookCall(call);
+  assert.equal(guarded.status, 0, guarded.stdout + guarded.stderr);
+  assert.match(guarded.stdout, /^::warning::Render deploy id could not be logged; the deploy of abc1234 was still requested$/m);
+  assert.ok(!guarded.stdout.includes(HOOK_KEY) && !guarded.stderr.includes(HOOK_KEY), "the hook URL's key never prints");
+  // The guard is what keeps the step green: the bare call fails the step under bash -e.
+  const bare = runHookCall(call.split(" ||")[0]);
+  assert.notEqual(bare.status, 0, "the stub really makes the helper throw");
+});
+
+test("deploy.yml: the smoke step has no Render key and records a timeout before it fails", () => {
   const smoke = stepBlock(DEPLOY, "Smoke test (wait for the new build to serve /health)");
-  assert.match(smoke, /^ {10}DEPLOY_ID: \$\{\{ steps\.hook\.outputs\.deploy_id \}\}$/m);
-  assert.match(smoke, /^ {10}SERVICE_ID: \$\{\{ steps\.hook\.outputs\.service_id \}\}$/m);
-  assert.match(smoke, /^ {10}RENDER_API_KEY: \$\{\{ secrets\.RENDER_API_KEY \}\}$/m);
-  assert.doesNotMatch(smoke, /RENDER_DEPLOY_HOOK_URL/, "the smoke never sees the hook URL");
+  assert.match(smoke, /^ {8}id: smoke$/m);
+  assert.doesNotMatch(smoke, /RENDER_API_KEY|RENDER_DEPLOY_HOOK_URL|secrets\.|render-deploy\.mjs/, "the smoke holds no Render secret");
   assert.match(
     smoke,
-    /if \[ "\$v" != "\$SHA" \]; then\n\s+echo "::error::\$APP_URL did not report \$SHA within 15 minutes"\n\s+node \.github\/scripts\/render-deploy\.mjs status \|\| true\n\s+exit 1\n\s+fi/,
+    /if \[ "\$v" != "\$SHA" \]; then\n\s+echo "::error::\$APP_URL did not report \$SHA within 15 minutes"\n\s+echo "timed_out=true" >> "\$GITHUB_OUTPUT"\n\s+exit 1\n\s+fi/,
   );
-  // The key is read only by this step, in the production-environment release job, and nowhere else.
-  assert.equal(DEPLOY.match(/secrets\.RENDER_API_KEY/g).length, 1);
+});
+
+test("deploy.yml: RENDER_API_KEY is scoped to the one status step, which runs only after the smoke timed out", () => {
+  const name = "Read the Render deploy status (the /health smoke timed out)";
+  const step = stepBlock(DEPLOY, name);
+  assert.match(step, /^ {8}if: failure\(\) && steps\.tip\.outputs\.allowed == 'true' && steps\.smoke\.outputs\.timed_out == 'true'$/m);
+  assert.match(step, /^ {10}DEPLOY_ID: \$\{\{ steps\.hook\.outputs\.deploy_id \}\}$/m);
+  assert.match(step, /^ {10}SERVICE_ID: \$\{\{ steps\.hook\.outputs\.service_id \}\}$/m);
+  assert.match(step, /^ {10}RENDER_API_KEY: \$\{\{ secrets\.RENDER_API_KEY \}\}$/m);
+  assert.match(step, /^ {8}run: node \.github\/scripts\/render-deploy\.mjs status \|\| true$/m);
+  assert.doesNotMatch(step, /RENDER_DEPLOY_HOOK_URL/, "the status step never sees the hook URL");
+  // Step-level only: the one reference in the file is inside this step, never in a job- or workflow-level env.
+  assert.deepEqual(DEPLOY.split("\n").filter((l) => l.includes("RENDER_API_KEY")), ["          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}"]);
+  assert.ok(step.includes("secrets.RENDER_API_KEY"));
+  // It sits right after the /health smoke, inside the production-environment release job.
   const release = DEPLOY.slice(DEPLOY.indexOf("\n  release:"));
   assert.match(release, /^ {4}environment: production$/m);
-  assert.ok(release.includes("secrets.RENDER_API_KEY"));
+  const after = release.slice(release.indexOf("- name: Smoke test (wait for the new build to serve /health)\n") + 1);
+  assert.equal(/\n {6}- name: (.+)\n/.exec(after)[1], name);
 });

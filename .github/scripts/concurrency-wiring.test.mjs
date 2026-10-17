@@ -108,6 +108,8 @@ const releaseTipProblems = (yml) => {
   for (const step of steps.slice(1)) {
     const name = /- (?:name: (.+)|uses: (\S+))/.exec(step);
     if (/^ {8}if: steps\.tip\.outputs\.allowed == 'true'$/m.test(step)) continue;
+    // #302: the Render status read runs only after a failed, tip-gated smoke, so it keeps the tip clause literally.
+    if (/^ {8}if: failure\(\) && steps\.tip\.outputs\.allowed == 'true' && steps\.smoke\.outputs\.timed_out == 'true'$/m.test(step)) continue;
     // The one exception: the always() summary, which reads `allowed` itself and stops first when it isn't true.
     const summary =
       name?.[1] === "Summary" &&
@@ -129,6 +131,9 @@ test("deploy.yml: release re-checks the tip first and gates every later step on 
   assert.ok(releaseTipProblems(renamed).includes("first step is not the tip check"));
   const summaryRunsOn = DEPLOY.replace(/( {10}if \[ "\$ALLOWED" != true \]; then\n) {12}exit 0\n/, "$1            true\n");
   assert.deepEqual(releaseTipProblems(summaryRunsOn), ["ungated: Summary"]);
+  const statusUntipped = DEPLOY.replace("if: failure() && steps.tip.outputs.allowed == 'true' && ", "if: failure() && ");
+  assert.notEqual(statusUntipped, DEPLOY);
+  assert.deepEqual(releaseTipProblems(statusUntipped), ["ungated: Read the Render deploy status (the /health smoke timed out)"]);
 });
 
 test("deploy.yml: release's non-tip skip warns and writes a summary (#242)", () => {
