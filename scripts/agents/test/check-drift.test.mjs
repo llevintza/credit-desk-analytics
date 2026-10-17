@@ -262,7 +262,9 @@ test("D22 strict arming.json shape: strings for arrays, unknown ids, extra keys,
   };
   for (const [what, x] of Object.entries(bad)) fails("D22", as(x), /arming.json is malformed/, {});
   fails("D22", { "scripts/agents/arming.json": "null" }, /malformed: arming.json must be an object/);
-  assert.throws(() => validateArming({ alwaysArmed: ["D2x"], subjects: {} }, new Set(["D1"])), /unknown check id D2x/);
+  assert.throws(() => validateArming({ alwaysArmed: ["D2x"], subjects: {} }, new Set(["D1"])), (e) => e.message === "arming.json: unknown check id" && e.detail === "D2x");
+  assert.throws(() => validateArming({ alwaysArmed: [], subjects: { "D1\n::error::x": ["a"] } }, new Set(["D1"])), (e) => e.message === "arming.json: unknown check id" && e.detail === "D1\n::error::x");
+  fails("D22", as({ alwaysArmed: [...ARMING.alwaysArmed, "Dz9"], subjects: ARMING.subjects }), /malformed: arming.json: unknown check id "Dz9"/);
   assert.ok(CHECK_ID.test("D8a") && CHECK_ID.test("DEP") && !CHECK_ID.test("D8 ") && !CHECK_ID.test("d1"));
 });
 
@@ -274,6 +276,20 @@ test("main: a malformed or unknown-id trusted arming.json fails closed", () => {
     assert.equal(main(["--root", d, "--base", d], {}, { write: c.write }), 1);
     assert.match(c.text(), /^::error::agents-drift: arming.json/);
   }
+});
+
+// #505 (c1): an injected listing path yields one fixed ::error:: line; the path reaches stdout
+// only JSON-escaped inside the stop-commands block, and nothing raw leaks outside it.
+test("main: a listing path with ::error::, a newline and %0A stays inside the stop-commands block", () => {
+  const evil = "x::error::spoofed\n::error::two%0A::warning::three";
+  const paths = join(scratch(), "paths.json");
+  writeFileSync(paths, JSON.stringify([{ path: evil, mode: "100644", type: "blob" }]));
+  const c = capture();
+  assert.equal(main(["--root", scratch(), "--paths", paths], {}, { write: c.write }), 1);
+  const m = /^::error::agents-drift: unsafe path in listing\n::stop-commands::(\w+)\n(.*)\n::\1::\n$/.exec(c.text());
+  assert.ok(m, c.text());
+  assert.equal(m[2], JSON.stringify(evil));
+  assert.ok(!m[2].includes("\n") && !c.text().replace(m[2], "").includes("spoofed"));
 });
 
 test("main: an unsafe --paths entry is printed only escaped; a --root inside another repo fails", () => {

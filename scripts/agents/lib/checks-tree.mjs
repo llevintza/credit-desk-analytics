@@ -3,7 +3,7 @@
  * D16 (imports and stubs), D18 (frontmatter and .mcp.json), D19, D22 and the presence rule P.
  * Each check gets the context from check-drift.mjs and reports through fail()/warn().
  */
-import { CheckError, fold, matchesAny } from "./common.mjs";
+import { CheckError, fail, fold, matchesAny } from "./common.mjs";
 
 const STUB = "@AGENTS.md\n";
 const base = (p) => p.slice(p.lastIndexOf("/") + 1);
@@ -30,7 +30,8 @@ export const CHECK_ID = /^(D\d{1,2}[a-z]?|P|DEP)$/;
  * arming.json must be exactly {alwaysArmed: [id…], subjects: {id: [glob…]}}: arrays of
  * non-empty strings, ids that match `known` (a Set or a RegExp), no duplicates, no other
  * keys. Anything else throws, so a string-for-array rewrite can't turn `includes` into a
- * substring test or arm single characters (#502 review).
+ * substring test or arm single characters (#502 review). An unknown id goes in the error's
+ * detail, never its message, so main() prints it only escaped (#505).
  */
 export function validateArming(a, known) {
   const isKnown = (id) => (known instanceof RegExp ? known.test(id) : known.has(id));
@@ -42,10 +43,10 @@ export function validateArming(a, known) {
   if (typeof a !== "object" || a === null || Array.isArray(a)) throw new CheckError("arming.json must be an object");
   const keys = Object.keys(a).sort().join();
   if (keys !== "alwaysArmed,subjects") throw new CheckError("arming.json must have exactly alwaysArmed and subjects");
-  for (const id of strings(a.alwaysArmed, "alwaysArmed")) if (!isKnown(id)) throw new CheckError(`arming.json: unknown check id ${id}`);
+  for (const id of strings(a.alwaysArmed, "alwaysArmed")) if (!isKnown(id)) fail("arming.json: unknown check id", id);
   if (typeof a.subjects !== "object" || a.subjects === null || Array.isArray(a.subjects)) throw new CheckError("arming.json: subjects must be an object");
   for (const [id, globs] of Object.entries(a.subjects)) {
-    if (!isKnown(id)) throw new CheckError(`arming.json: unknown check id ${id}`);
+    if (!isKnown(id)) fail("arming.json: unknown check id", id);
     strings(globs, `subjects.${id}`);
   }
   return a;
@@ -191,7 +192,7 @@ export const TREE_CHECKS = {
     try {
       pr = validateArming(JSON.parse(text), CHECK_ID);
     } catch (e) {
-      return r.fail(`the PR's arming.json is malformed: ${e.message}`);
+      return r.fail(`the PR's arming.json is malformed: ${e.message}${e.detail === undefined ? "" : ` ${JSON.stringify(e.detail)}`}`);
     }
     const main = b ? validateArming(JSON.parse(b.read("scripts/agents/arming.json")), CHECK_ID) : arming;
     for (const id of main.alwaysArmed) if (!pr.alwaysArmed.includes(id)) r.fail(`arming.json drops always-armed ${id}`);
