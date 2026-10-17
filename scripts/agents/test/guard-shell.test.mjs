@@ -65,3 +65,41 @@ test("unbalanced input throws ShellError", () => {
 test("a deadline in the past stops the parse", () => {
   assert.throws(() => parse("a b c", 0), /deadline/);
 });
+
+const cmds = (src) => allSegments(parse(src)).map((s) => s.words.map((w) => w.text).join(" "));
+
+test("${…} bodies are parsed: substitutions inside run (#510 review)", () => {
+  assert.ok(cmds("echo ${x:-$(git push --force origin main)}").includes("git push --force origin main"));
+  assert.ok(cmds("echo ${x:=`git push`}").includes("git push"));
+  assert.ok(cmds("echo ${x/a/$(git push)}").includes("git push"));
+  assert.ok(cmds("echo ${a:-${b:-$(git push)}}").includes("git push"));
+  assert.ok(cmds('echo "${x:-$(git push)}"').includes("git push"));
+  assert.ok(cmds(`echo "\${x:-'$(git push)'}"`).includes("git push")); // ' is literal inside "…"
+  assert.ok(cmds(`echo "\${x:-"$(git push)"}"`).includes("git push"));
+  assert.ok(!cmds("echo ${x:-'$(git push)'}").includes("git push")); // quoted: inert
+  assert.ok(!cmds("echo ${x:-\\$(git push)}").includes("git push"));
+  for (const s of ["echo ${x:-$(git push", "echo ${x:-'a}", `echo "\${x:-"a}"`]) assert.throws(() => parse(s), ShellError, s);
+});
+
+test("$((…)) bodies are parsed; $((cmd) ) throws (#510 review)", () => {
+  assert.ok(cmds("echo $(( $(git push) + 1 ))").includes("git push"));
+  assert.ok(cmds("echo $(( 1 + `git push` ))").includes("git push"));
+  assert.deepEqual(cmds("echo $(( (1+2) * 3 )) $((a\\ ))"), ["echo $(( (1+2) * 3 )) $((a\\ ))"]);
+  for (const s of ["echo $((git push) )", "echo $(( '1' ))", "echo $(( 1 + 2 )"]) assert.throws(() => parse(s), ShellError, s);
+});
+
+test("unquoted heredoc bodies are expanded; quoted ones stay inert (#510 review)", () => {
+  assert.ok(cmds("cat <<EOF\n$(git push origin main)\nEOF").includes("git push origin main"));
+  assert.ok(cmds("cat <<-EOF\n\t`git push`\n\tEOF").includes("git push"));
+  assert.ok(cmds("cat <<EOF\n${x:-$(git push)} it's\nEOF").includes("git push"));
+  assert.ok(cmds("cat <<EOF\n$(cat <<IN\n$(git push)\nIN\n)\nEOF").includes("git push"));
+  for (const q of ["'EOF'", '"EOF"', "\\EOF", "E'O'F"]) assert.ok(!cmds(`cat <<${q}\n$(git push)\nEOF`).includes("git push"), q);
+  assert.ok(!cmds("cat <<EOF\n\\$(git push) \\`x\\`\nEOF").includes("git push"));
+  assert.throws(() => parse("cat <<EOF\n$(git push\nEOF"), ShellError);
+});
+
+test("leading reserved words are dropped so the first word is the command (#510 review)", () => {
+  assert.deepEqual(words("if git push; then git status; elif a; else b; fi"), [["git", "push"], ["git", "status"], ["a"], ["b"]]);
+  assert.deepEqual(words("! git push; { cd ..; git push; }; while x; do y; done; until z; do w; done"), [["git", "push"], ["cd", ".."], ["git", "push"], ["x"], ["y"], ["z"], ["w"]]);
+  assert.deepEqual(words("'if' x; \\! y; for b in a; do git push; done"), [["if", "x"], ["!", "y"], ["for", "b", "in", "a"], ["git", "push"]]);
+});

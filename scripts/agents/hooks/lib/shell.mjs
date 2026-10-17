@@ -13,6 +13,10 @@ export class ShellError extends Error {}
 const STOP = new Set([" ", "\t", "\n", ";", "&", "|", "<", ">", "(", ")"]);
 const REDIR = /^(\d*)(<<<|<<-|<<|<>|<&|>>|>&|>\||&>>|&>|<|>)/;
 const OPS = ["&&", "||", "|&", ";;", ";", "|", "&", "\n", "(", ")"];
+// Reserved words that can start a segment before its command (`! git push`, `{ cd ..; …; }`,
+// `then git push`); they are dropped so the first word is the command. `for`, `case` and
+// `select` stay: the words after them are not a command.
+const RESERVED = new Set(["!", "{", "}", "if", "then", "else", "elif", "fi", "do", "done", "while", "until"]);
 const ANSI = { n: "\n", t: "\t", r: "\r", a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?" };
 
 /** Parse a command string. `deadline` (ms epoch) makes a runaway parse throw instead of hang. */
@@ -35,6 +39,7 @@ function list(p, inSub) {
   let seg = { words: [], redirs: [] };
   let depth = 0;
   const end = (sep) => {
+    while (seg.words.length && seg.words[0].raw === seg.words[0].text && RESERVED.has(seg.words[0].text)) seg.words.shift();
     if (seg.words.length || seg.redirs.length) segments.push({ ...seg, sep });
     seg = { words: [], redirs: [] };
   };
@@ -77,14 +82,16 @@ function list(p, inSub) {
         depth--;
       } else if (op === "(") depth++;
       end(op);
-      if (op === "\n") heredocBodies(p);
+      if (op === "\n") heredocBodies(p, subs);
       continue;
     }
     seg.words.push(word(p, subs));
   }
 }
 
-function heredocBodies(p) {
+/** Read the pending heredoc bodies after a newline. An unquoted body is expanded by bash, so
+ * its `$(…)`, backticks and `${…}` are parsed into `subs` like any other. */
+function heredocBodies(p, subs) {
   for (const h of p.pending.splice(0)) {
     const lines = [];
     for (;;) {
@@ -98,6 +105,15 @@ function heredocBodies(p) {
     }
     h.body = lines.join("\n");
     p.heredocs.push(h);
+    if (h.quoted) continue;
+    const q = { src: h.body, i: 0, pending: [], heredocs: [], deadline: p.deadline };
+    const sub = (kind, inner) => subs.push({ kind, result: inner });
+    while (q.i < q.src.length) {
+      const c = q.src[q.i];
+      if (c === "\\") q.i += 2;
+      else if (c === "$" || c === "`") expansion(q, sub, true);
+      else q.i++;
+    }
   }
 }
 
@@ -138,7 +154,7 @@ function word(p, subs) {
         if (d === "\\" && '$`"\\\n'.includes(p.src[p.i + 1])) {
           if (p.src[p.i + 1] !== "\n") text += p.src[p.i + 1];
           p.i += 2;
-        } else if (d === "$" || d === "`") text += expansion(p, sub);
+        } else if (d === "$" || d === "`") text += expansion(p, sub, true);
         else { text += d; p.i++; }
       }
     } else if (c === "$" && p.src[p.i + 1] === "'") {
@@ -160,8 +176,12 @@ function word(p, subs) {
   return { text, raw: p.src.slice(start, p.i), dynamic, quoted, glob };
 }
 
-/** `$(…)`, `$((…))`, `${…}`, `$name` or a backtick span at p.i; returns its source text. */
-function expansion(p, sub) {
+/**
+ * `$(…)`, `$((…))`, `${…}`, `$name` or a backtick span at p.i; returns its source text.
+ * Substitutions inside `${…}` and `$((…))` are parsed too. `dq`: inside double quotes (or an
+ * unquoted heredoc body), where `'` is a literal character.
+ */
+function expansion(p, sub, dq = false) {
   const start = p.i;
   if (p.src[p.i] === "`") {
     let j = p.i + 1;
@@ -177,17 +197,31 @@ function expansion(p, sub) {
   }
   const n = p.src[p.i + 1];
   if (n === "(" && p.src[p.i + 2] === "(") {
-    const e = p.src.indexOf("))", p.i + 3);
-    if (e < 0) throw new ShellError("unbalanced $((");
-    p.i = e + 2;
+    p.i += 3;
+    for (let depth = 0; ;) {
+      const c = p.src[p.i];
+      if (c === undefined) throw new ShellError("unbalanced $((");
+      if (c === ")" && depth === 0) {
+        // `$((cmd) )` is a subshell inside $(…), not arithmetic: not parsed, so it throws.
+        if (p.src[p.i + 1] !== ")") throw new ShellError("$(( closed by a single )");
+        p.i += 2;
+        break;
+      }
+      if (c === "'" || c === '"') throw new ShellError("a quote inside $((…))");
+      if (c === "$" || c === "`") expansion(p, sub, dq);
+      else {
+        if (c === "(") depth++;
+        else if (c === ")") depth--;
+        p.i += c === "\\" ? 2 : 1;
+      }
+    }
     sub("arith", { segments: [], subs: [] });
   } else if (n === "(") {
     p.i += 2;
     sub("cmd", list(p, true));
   } else if (n === "{") {
-    const e = p.src.indexOf("}", p.i + 2);
-    if (e < 0) throw new ShellError("unbalanced ${");
-    p.i = e + 1;
+    p.i += 2;
+    braceBody(p, sub, dq);
     sub("var", { segments: [], subs: [] });
   } else if (n !== undefined && /[\w@*#?$!-]/.test(n)) {
     p.i += 2;
@@ -198,6 +232,37 @@ function expansion(p, sub) {
     return "$";
   }
   return p.src.slice(start, p.i);
+}
+
+/** The rest of `${…}` after `${`, through the matching `}`, with nested expansions parsed. */
+function braceBody(p, sub, dq) {
+  for (;;) {
+    const c = p.src[p.i];
+    if (c === undefined) throw new ShellError("unbalanced ${");
+    if (c === "}") { p.i++; return; }
+    if (c === "\\") p.i += 2;
+    else if (c === "'" && !dq) {
+      const e = p.src.indexOf("'", p.i + 1);
+      if (e < 0) throw new ShellError("unbalanced '");
+      p.i = e + 1;
+    } else if (c === '"') {
+      p.i++;
+      dquote(p, sub);
+    } else if (c === "$" || c === "`") expansion(p, sub, dq);
+    else p.i++;
+  }
+}
+
+/** A double-quoted span inside `${…}`, after the opening quote, through the closing one. */
+function dquote(p, sub) {
+  for (;;) {
+    const c = p.src[p.i];
+    if (c === undefined) throw new ShellError('unbalanced "');
+    if (c === '"') { p.i++; return; }
+    if (c === "\\") p.i += 2;
+    else if (c === "$" || c === "`") expansion(p, sub, true);
+    else p.i++;
+  }
 }
 
 /** The body of `$'…'` after the opening quote, ANSI-C escapes decoded (G4). */
