@@ -303,7 +303,7 @@ test("#171: claude-review.yml carries §A and the scripts step verbatim, the hoo
   const args = /^ {10}# agents-drift:claude-args\n {10}claude_args: \|\n((?: {12}.*\n)+)/m.exec(REVIEW)?.[1];
   assert.ok(args, "claude-args marker must sit directly above claude_args");
   assert.match(args, /^ {12}--settings '\{"disableAllHooks": true\}'$/m);
-  assert.match(args, /^ {12}--disallowedTools "Read\(\.\/\.git\/\*\*\),Read\(\.\/\.review-base\/\.git\/\*\*\),Skill,Agent,Task"$/m);
+  assert.match(args, /^ {12}--disallowedTools "Read\(\.\/\.git\/\*\*\),Grep\(\.\/\.git\/\*\*\),Glob\(\.\/\.git\/\*\*\),Read\(\.\/\.review-base\/\.git\/\*\*\),Grep\(\.\/\.review-base\/\.git\/\*\*\),Glob\(\.\/\.review-base\/\.git\/\*\*\),Skill,Agent,Task"$/m);
   assert.doesNotMatch(/--allowedTools "([^"]*)"/.exec(args)[1], /\b(Skill|Agent|Task)\b/);
 });
 

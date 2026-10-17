@@ -184,7 +184,7 @@ export const TEXT_CHECKS = {
       if (!yml.split("\n").some((l) => strip(l) === m)) r.fail(`claude-review.yml lacks the marker ${m}`);
     if (!yml.includes(`--settings '{"disableAllHooks": true}'`)) r.fail(`claude-review.yml lacks --settings '{"disableAllHooks": true}'`);
     const denied = /--disallowedTools "([^"]*)"/.exec(yml)?.[1].split(",") ?? [];
-    for (const t of ["Skill", "Agent", "Task", "Read(./.git/**)"]) if (!denied.includes(t)) r.fail(`claude-review.yml --disallowedTools lacks ${t}`);
+    for (const t of ["Skill", "Agent", "Task", "Read(./.git/**)", "Grep(./.git/**)", "Glob(./.git/**)"]) if (!denied.includes(t)) r.fail(`claude-review.yml --disallowedTools lacks ${t}`);
     const headings = new Set(head.read("README.md")?.split("\n").flatMap((l) => /^#{2,3} (\d+(?:\.\d+)?)[. ]/.exec(l)?.[1] ?? []));
     for (const p of head.glob(["**/AGENTS.md", ".claude/skills/**/*.md", "docs/agents/**/*.md"]))
       for (const m of (head.read(p) ?? "").matchAll(/README §(\d+(?:\.\d+)?)/g)) if (!headings.has(m[1])) r.fail(`${p} cites README §${m[1]}, which is not a README heading`);
