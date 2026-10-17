@@ -122,10 +122,11 @@ export const TREE_CHECKS = {
     }
   },
 
-  D15: ({ head, base: b, steering }, r) => {
+  // Every symlink fails: a linked directory would hide the steering files behind it (#498).
+  D15: ({ head, base: b }, r) => {
     const baseSubs = new Map((b?.entries ?? []).filter((e) => e.mode === "160000").map((e) => [e.path, e.sha]));
     for (const e of head.entries) {
-      if (e.mode === "120000" && matchesAny(e.path, steering)) r.fail(`symlink at a steering or enforcement path: ${e.path}`);
+      if (e.mode === "120000") r.fail(`symlink in the tree (none are allowed): ${e.path}`);
       if (e.mode === "160000" && baseSubs.get(e.path) !== e.sha) r.fail(`new or changed submodule ${e.path}`);
     }
   },

@@ -10,7 +10,6 @@ import { capture, scratch } from "./helpers.mjs";
 
 const ARMING = JSON.parse(readFileSync(new URL("../arming.json", import.meta.url), "utf8"));
 const ADAPTERS = JSON.parse(readFileSync(new URL("../adapters.json", import.meta.url), "utf8"));
-const STEERING = [...ADAPTERS.inputs, ...ADAPTERS.enforcement];
 const ROLES = "### 4. Commands and skills\n\n| Skill | x |\n|---|---|\n| `adr` | model |\n\n### 5. Next\n";
 const SKILL = (name, description = "Write an ADR.") => `---\nname: ${name}\ndescription: "${description}"\n---\n# ${name}\n`;
 
@@ -45,7 +44,7 @@ function tree(files) {
 const check = (id, head, baseFiles) => {
   const h = tree({ ...GOOD, ...head });
   const b = baseFiles ? tree({ ...GOOD, ...baseFiles }) : null;
-  const ctx = { head: h, base: b, arming: ARMING, steering: STEERING, armed: { on: new Set([id]), off: [] } };
+  const ctx = { head: h, base: b, arming: ARMING, armed: { on: new Set([id]), off: [] } };
   return runChecks(ctx, [id])[0];
 };
 const passes = (id, head = {}, b) => assert.deepEqual(check(id, head, b).fails, [], id);
@@ -123,10 +122,9 @@ test("D13 budgets: root 150 (warn 130), nested 100 (warn 60), incl. the UserAdmi
   fails("D13", { "src/Desk.UserAdmin/AGENTS.md": lines(101) }, /101 lines \(max 100\)/);
 });
 
-test("D15 symlinks at steering paths, new or changed submodules", () => {
-  fails("D15", { "docs/agents/x.md": { mode: "120000" } }, /symlink at a steering/);
-  fails("D15", { ".github/workflows/ci.yml": { mode: "120000" } }, /symlink/);
-  passes("D15", { "web/public/x.svg": { mode: "120000" } });
+test("D15 any symlink, new or changed submodules", () => {
+  for (const p of ["docs/agents/x.md", ".github/workflows/ci.yml", ".claude", "docs/agents", "src/Desk.Api", "web/public/x.svg"])
+    fails("D15", { [p]: { mode: "120000" } }, /symlink in the tree/);
   fails("D15", { "vendor/lib": { mode: "160000", sha: "2".repeat(40) } }, /new or changed submodule/, {});
   passes("D15", { "vendor/lib": { mode: "160000", sha: "2".repeat(40) } }, { "vendor/lib": { mode: "160000", sha: "2".repeat(40) } });
   fails("D15", { "vendor/lib": { mode: "160000", sha: "3".repeat(40) } }, /changed submodule/, { "vendor/lib": { mode: "160000", sha: "2".repeat(40) } });

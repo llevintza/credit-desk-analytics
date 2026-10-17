@@ -98,11 +98,10 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     const head = treeView(root, pathsFile ? JSON.parse(readFileSync(pathsFile, "utf8")) : gitListing(root));
     const baseDir = arg(argv, "--base");
     const base = baseDir ? treeView(resolve(baseDir), gitListing(resolve(baseDir))) : null;
-    // Arming and the steering globs are always the trusted copies, never the PR's.
+    // Arming is always the trusted copy, never the PR's.
     const own = (f) => (base ? join(base.root, "scripts/agents", f) : fileURLToPath(new URL(`./${f}`, import.meta.url)));
     const arming = JSON.parse(readFileSync(own("arming.json"), "utf8"));
-    const adapters = JSON.parse(readFileSync(own("adapters.json"), "utf8"));
-    const ctx = { head, base, arming, steering: [...adapters.inputs, ...adapters.enforcement], armed: armed(arming, head, base) };
+    const ctx = { head, base, arming, armed: armed(arming, head, base) };
     const results = runChecks(ctx);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary(results, ctx.armed.off));
     const failed = results.filter((r) => r.fails.length);
