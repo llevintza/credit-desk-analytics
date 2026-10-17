@@ -8,6 +8,7 @@
  *   the signature and that no analyser has proven safe exits 2 (R5-F1 class A).
  */
 import { normalize, hasSignature, payloadTexts } from "./input.mjs";
+import { couldBeSecret, couldName } from "./glob.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
 
 const block = (reason, call) => ({ code: 2, reason, call });
@@ -74,9 +75,39 @@ export function isSecretPath(s) {
 }
 const READERS = new Set(["cat", "head", "tail", "less", "more", "sed", "awk", "gawk", "cut", "base64", "xxd", "od", "hexdump", "strings", "cp", "source", ".", "printenv", "grep", "rg", "tac", "nl", "bat", "sort", "uniq", "diff", "jq", "python", "python3", "node", "perl", "ruby"]);
 
+// A glob or brace word that could expand to a secret path counts as one (#512 review).
+const secretWord = (w) => isSecretPath(w.text) || (w.glob && couldBeSecret(w.text));
+
 function secretRead(seg) {
-  if (seg.redirs.some((r) => (r.op === "<" || r.op === "<>") && isSecretPath(r.target))) return true;
-  return seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some((w) => isSecretPath(w.text));
+  if (seg.redirs.some((r) => (r.op === "<" || r.op === "<>") && (isSecretPath(r.target) || (/[*?[{]/.test(r.target) && couldBeSecret(r.target))))) return true;
+  return seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord);
+}
+
+// Wrappers run their arguments as a command; behind one, a dynamic or glob word could be it.
+const WRAPPERS = new Set(["env", "command", "exec", "nohup", "time", "builtin", "sudo", "doas", "nice", "timeout", "setsid", "flock", "ionice", "stdbuf", "busybox", "xargs", "parallel", "find"]);
+
+/**
+ * Command words the guard can't name fail closed (G4, G20; #512 review): a dynamic or glob
+ * command word, a dynamic or glob word behind a wrapper, and a dynamic git/hub subcommand
+ * (or option before it) or gh group/verb. Returns a reason, or undefined.
+ */
+function unnamed(seg) {
+  const h = head(seg);
+  if (!h) return undefined;
+  if (h.dynamic || h.glob) return `a dynamic or glob command word ${h.raw} (G4, G20)`;
+  const name = base(h.text);
+  const rest = seg.words.slice(seg.words.indexOf(h) + 1);
+  if (WRAPPERS.has(name) && rest.some((w) => (w.dynamic || w.glob) && !(ASSIGN.test(w.text) && !w.glob)))
+    return `a dynamic or glob word behind ${name} (G4, G20)`;
+  if (name === "gh" && rest.slice(0, 2).some((w) => w.dynamic || w.glob)) return "gh with a dynamic group or verb (G14)";
+  if (name === "git" || name === "hub") {
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i].dynamic || rest[i].glob) return `${name} with a dynamic subcommand or option ${rest[i].raw} (G4)`;
+      if (GIT_GLOBAL_ARG.has(rest[i].text)) i++;
+      else if (!rest[i].text.startsWith("-")) break;
+    }
+  }
+  return undefined;
 }
 
 function command(text, call, deadline) {
@@ -92,7 +123,10 @@ function command(text, call, deadline) {
   }
   const segs = allSegments(parsed);
   for (const [i, seg] of segs.entries()) {
-    if (seg.words.some((w) => HTTP.test(w.text))) return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
+    if (seg.words.some((w) => HTTP.test(w.text) || (w.glob && couldName(w.text, ["curl", "wget"]))))
+      return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
+    const u = unnamed(seg);
+    if (u) return block(u, call);
     if (secretRead(seg)) return block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call);
     // Analysers see every segment: a git alias or a state change carries no signature.
     let d;

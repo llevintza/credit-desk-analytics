@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { decide, gitSubcommand, head, isSecretPath } from "../hooks/lib/decide.mjs";
 import { parse } from "../hooks/lib/shell.mjs";
+import { braces, couldBeSecret, couldName, globRe } from "../hooks/lib/glob.mjs";
 import { normalize, unescapeRaw } from "../hooks/lib/input.mjs";
 import { BLOCK_TTL_MS, callKey, recall, remember } from "../hooks/lib/record.mjs";
 import { HARD_CAP_MS, loadPatterns, main } from "../hooks/guard.mjs";
@@ -78,6 +79,30 @@ test("push/merge-shaped segments fail closed until an analyser proves them; ment
     "echo 'git push origin main'", "grep -rn 'git push' docs", "git log --grep push", `git commit -m "docs: the git push flow"`, "ls # git push origin main",
     `git commit -m "$(cat <<'EOF'\nfix: it's how we git push\nEOF\n)"`, "cat <<'EOF' > notes.md\ngit push origin main\nEOF", "git --no-pager -C . log", "npm test",
   ], 0);
+});
+
+test("command words the guard can't name fail closed (#512 review: G4, G14, G20)", () => {
+  rows(["X=cu; ${X}rl https://x", "$(echo cu)rl x", "`echo cu`rl x", "p=push; git $p --force origin main", "g=merge; gh pr $g 12", "gh $G merge 1",
+    "git -c $K push", "git -C $D push origin main", "hub $S origin main", "env ${X}rl x", "xargs $C < f", "nice $(echo git) push", "sudo -u x $CMD",
+    "/usr/bin/cur? x", "/usr/bin/{curl,x} x", "xargs wge? < u", "g?t push origin main"], 2);
+  rows([`git commit -m "$(cat <<'EOF'\nx\nEOF\n)"`, "git log $REV", "echo $HOME", "env FOO=$BAR node x", "timeout 5 npm test", "git -C web status"], 0);
+});
+
+test("glob helpers: braces, bash dotfile rule, letterless patterns", () => {
+  assert.deepEqual([...new Set(braces("a{b,c{d,e}}f"))].sort(), ["abf", "acdf", "acef"]);
+  assert.deepEqual(braces("{x}"), ["{x}"]);
+  assert.equal(globRe("*").test(".env"), false);
+  assert.equal(globRe(".e[!x]v").test(".env"), true);
+  assert.equal(couldName("[c]url", ["curl"]), true);
+  assert.equal(couldName("[abc]*", ["curl"]), false);
+  assert.equal(couldBeSecret("a/{secrets,x}/k"), true);
+  assert.equal(couldBeSecret("docs/*.md"), false);
+});
+
+test("glob and brace words that could be a secret path count as one (#512 review)", () => {
+  rows(["cat .env*", "cat .en?", "cat {.env,}", "cat secret?/k.txt", "cat web/.env.*", "cat .env.[lp]*", "wc < .en?", "cat */k.txt", "base64 .[e]nv",
+    "cat .env.exampl[e]"], 2); // a glob on a .env.* name fails closed (declared over-block)
+  rows(["cat *.md", "cat *", "ls src/*.ts", "cat .env.example", "cat {a,b}.txt"], 0);
 });
 
 test("tokenizer errors fail closed only when the signature or a secret path is there (G7, G8)", () => {
