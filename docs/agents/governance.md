@@ -1,10 +1,10 @@
-# Agent governance: `agents-governance.yml` (planned; arrives with the harness build PR), guards, bootstrap
+# Agent governance: `agents-governance.yml`, guards, bootstrap
 
 > Draft companion to ADR-0020 (Revision 13; points from revs 10–13 are marked **rev 10**, **rev 11**, **rev 12**, **rev 13**). Repo path: `docs/agents/governance.md`. Tech Writer revision (2026-10-07, 10 PM ET) of the Architect's draft, which it supersedes; changes are marked **[TW]**.
 
 ## Helms's sign-off (H1), recorded for THESE TWO JOBS ONLY
 
-> Helms (CTO), 2026-10-07. This is the gate-3 sign-off for "no *unsafe* `pull_request_target`". It covers `agents-drift (base)` and `governance-paths (base)` in `.github/workflows/agents-governance.yml` (planned; arrives with the harness build PR) **only**, with `permissions: contents: read, pull-requests: read` and **no secrets**. Any other `_target` use needs its own review; D20 fails on it.
+> Helms (CTO), 2026-10-07. This is the gate-3 sign-off for "no *unsafe* `pull_request_target`". It covers `agents-drift (base)` and `governance-paths (base)` in `.github/workflows/agents-governance.yml` **only**, with `permissions: contents: read, pull-requests: read` and **no secrets**. Any other `_target` use needs its own review; D20 fails on it.
 
 - **Rules (Helms):**
   - **Never check out PR head code.** No `actions/checkout` of the head ref or SHA; base checkout only.
@@ -13,63 +13,16 @@
   - **Data only:** the jobs read only the changed-file list and PR blobs via the API, and never execute them. The base checker runs against fetched PR file contents written to a scratch dir. Nothing runs `npm install` or scripts from PR content.
 - **Reason:** on plain `pull_request`, the PR's own workflow file runs, so a PR could loosen its own rules.
 - **Push-to-main runs** (no PR) use a normal checkout of `main` in `agents.yml` (`agents-generate`). That is trusted code; no `_target` is involved.
+- **Third job, `ci-wiring (base)` (ADR-0026 option B; #171 A5b):** the design is Leo's (2026-10-17). It keeps every rule above, reads the head `ci.yml` through `pr-data.mjs` (the API, no fetch of PR refs, no head SHA in `env:`), and runs main's parse-only `ci-wiring.test.mjs` under `node --permission`. **Helms's sign-off above does not cover it yet:** Helms extends it (or rules it out) before Leo adds `ci-wiring (base)` to the ruleset.
 
-## Workflow (both jobs written out in full; R3-N1, R3-F2)
+## Workflow (`.github/workflows/agents-governance.yml`; R3-N1, R3-F2)
 
-```yaml
-name: agents-governance
-# Helms (CTO) governance sign-off, 2026-10-07: pull_request_target for these TWO jobs only.
-# Data-only. No secrets. Never checks out the PR. Any other _target use needs its own review (D20).
-on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, edited, ready_for_review]
-    branches: [main]
-permissions: {}
-concurrency:
-  group: agents-governance-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-jobs:
-  agents-drift-base:                       # no job-level if: (a skipped required check counts as passing)
-    name: agents-drift (base)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; default _target ref = main tip, never the PR
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.12.0
-          package-manager-cache: false     # v5+ auto-caches when package.json declares packageManager (R3-F2)
-      - name: Fetch PR steering files as data (API only)
-        env:
-          GH_TOKEN: ${{ github.token }}    # contents: read + pull-requests: read; not a secret reference
-        run: node scripts/agents/pr-data.mjs --out "$RUNNER_TEMP/pr"
-      - name: Base generator + base checker over PR data
-        run: node scripts/agents/check-drift.mjs --root "$RUNNER_TEMP/pr/tree" --paths "$RUNNER_TEMP/pr/paths.json" --base . --regen
-  governance-paths-base:                   # no job-level if:
-    name: governance-paths (base)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; default _target ref = main tip, never the PR
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.12.0
-          package-manager-cache: false
-      - name: Governance paths (API file list as data)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/agents/governance.mjs
-```
+The workflow is the file itself; this page no longer copies it. Since the rev 13 draft it differs in these ways (#171 A5b):
+
+- `setup-node` is pinned to `949feb24… # v7.1.0`, the pin `ci.yml` uses (Leo, 2026-10-17).
+- `agents-drift (base)` runs `check-drift.mjs` without `--regen`. The generator, and the regen-diff with it, arrive in Stage B (B1).
+- `governance.mjs` gets `--base .`, the base checkout used for the coverage-baseline exemption.
+- It has a third job, `ci-wiring (base)` (H1 above, ADR-0026). It runs on Node `22.13.1` (`--permission` is stable from 22.13), overlays the head `ci.yml` that `pr-data.mjs` fetched, runs ADR-0026's parse-only grep on main's `ci-wiring.test.mjs`, then runs that file under `node --permission --allow-fs-read="$GITHUB_WORKSPACE"`.
 
 - **No PR strings reach `run:` or `env:`.** Both scripts read the PR number and SHAs from `$GITHUB_EVENT_PATH` (guard 6, "Better" form).
 - **Concurrency (R3-N1):** the group is per PR with `cancel-in-progress`, so a title `edited` event cancels an in-flight `agents-drift (base)`. That is fine: the new run reports for the same head.
@@ -176,7 +129,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
     - Blob size cap 1 MB for steering files; above it, fail.
     - Decode base64 and fail on NUL bytes (binary) or invalid UTF-8 where text is expected.
     - Deleted files are checked against base, not fetched from head.
-12. **Pinned actions only** (checkout `3d3c42e5…`, setup-node `82076278…`), or none (runner `node` + `gh api`).
+12. **Pinned actions only** (checkout `3d3c42e5…`, setup-node `949feb24…` v7.1.0 since #171 A5b; was `82076278…`), or none (runner `node` + `gh api`).
 13. **`concurrency: { group: agents-governance-${{ github.event.pull_request.number }}, cancel-in-progress: true }`** and `timeout-minutes: 5` per job.
 14. **No skippable required jobs, no spoofing.**
     - No job-level `if:`, because a skipped required check counts as passing. Fork PRs run too; the job is data-only.
@@ -184,7 +137,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
     - Base D20 fails if any **head** workflow defines a job or `name:` equal to a required base-run check name.
     - Spike (U18) that `_target` check runs report on the PR head as required statuses before relying on them. This was round-1 F4's open spike.
 15. **D20 (base-run, new):**
-    - `pull_request_target` appears **only** in `agents-governance.yml` (planned; arrives with the harness build PR). Any other workflow using it fails, because Helms's sign-off covers these two jobs only.
+    - `pull_request_target` appears **only** in `agents-governance.yml`. Any other workflow using it fails, because Helms's sign-off covers these two jobs only.
     - That file satisfies items 1–4, 9, 12 and 13 by line-anchored checks: exact trigger types, exact `permissions`, no `secrets.`, no `environment:`, no `head.sha`/`head.ref`/`head_ref`/`refs/pull` in any `uses:` or `with:`, no `actions/cache`/`upload-artifact`, no `GITHUB_ENV`/`GITHUB_PATH`, no `${{ github.event.pull_request.(title|body|head.ref|head.label) }}` or `github.head_ref` inside a `run:` block.
 16. **Document in the ADR:** this is Helms's governance sign-off for gate-3 "no *unsafe* `pull_request_target`", scoped to these two jobs. Any other `_target` use needs its own review.
 17. **Alternatives (l.450):** replace the row with "plain `pull_request` for governance-paths: rejected (Helms): the PR's own YAML could remove it."
@@ -192,7 +145,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 ## Spoofing the required checks (R3-F3, U18; residual risk accepted by Helms, R4-F4)
 
 - D20 (base) closes the cheap routes. It fails if:
-  - any workflow other than `agents-governance.yml` (planned; arrives with the harness build PR) has a job-level `name:` containing `${{`, or a job id or job-level name containing `agents-drift` or `governance-paths` (case-insensitive, NFKC-normalized, zero-width characters stripped; comments ignored, so the D12 markers don't match; R4-N4);
+  - any workflow other than `agents-governance.yml` has a job-level `name:` containing `${{`, or a job id or job-level name containing `agents-drift` or `governance-paths` (case-insensitive, NFKC-normalized, zero-width characters stripped; comments ignored, so the D12 markers don't match; R4-N4);
   - any workflow grants `statuses: write`, `checks: write` or `write-all`;
   - any workflow lacks a top-level `permissions:` block.
 - Checked on `main` @ `96df50c2`, `6570f304` (CR4) and `982d00d3` (CR5); re-checked at `741b19eb` (rev 8; #5 changed `ci.yml`, `deploy.yml`, `db-ops.yml` and added `gitleaks.yml`) and `27c1c35a` (rev 9; #104 changed only `ci.yml`'s `coverage` job steps); unchanged at the rev 10 baseline `c91c4b51`; re-checked at the rev 11 baseline `9b83f7ef` (#125 added `ci.yml`'s `budgets` job: job-level `permissions: contents: read`, SHA-pinned actions, no secrets): all five workflows (`ci`, `claude-review`, `deploy`, `db-ops`, `gitleaks`) have a top-level `permissions: contents: read`, none grants `statuses`/`checks` write, and none uses `pull_request_target`.
@@ -234,7 +187,7 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 /src/Desk.Data/Auth/ @llevintza
 ```
 
-`agents-governance.yml` is planned; it arrives with the harness build PR.
+`agents-governance.yml` landed with #171 A5b; the other lines above are the existing advisory set plus the governance paths.
 
 - **[TW]** `main` @ `99c0911e` (9:55 PM ET) has seven of these lines: `/.github/`, `/.claude/`, `/CLAUDE.md`, `/AGENTS.md`, `/.gitleaks.toml`, `/perf/coverage-*`, `/tests/testconfig.json`. The `**/AGENTS.md` and `**/CLAUDE.md` lines cover the seven new nested nodes (rev 11 adds `src/Desk.UserAdmin`).
 - **Rev 11 (H19):** `/src/Desk.UserAdmin/`, `/src/Desk.Api/Auth/` and `/src/Desk.Data/Auth/` are **advisory** lines for the account and auth surface (UserAdmin can create admin accounts and, after #122, grant portfolios). They are visibility only and not governance paths. **They are not the barrier (rev 12, R11-F3):** no ruleset rule requires code-owner review, so they request review and enforce nothing. What protects production data and accounts is (a) the **governance-locked rules**: the root "local/test databases only" rule (root `AGENTS.md` is a governance path; **PENDING #123**: still open with no PR, so the rule is not in root at `9b83f7ef` or `5f91d26f`; Helms signed off the wording, #123 comment 6052455667; #123's merge is a build-PR hard precondition, rev 13 H20) and the nested `src/Desk.UserAdmin/AGENTS.md`, covered by `**/AGENTS.md`, so a PR editing it without a `[workflows]` title fails governance-paths (`testing.md`); and (b) **credential isolation**: production secrets live only in the `production` environment; UserAdmin is in neither `deploy.yml` nor `db-ops.yml` (governance paths), the runtime image or the db-tools bundle; agents never hold a Neon or production connection string (OQ-12; that README §12 line is a build-PR hard precondition, rev 13 H20); and the admin-session route is the tracked R6-M1 residual (OQ5). UserAdmin has no code-level connection-string guard at `9b83f7ef`, so a production connection string is its only way to production. The gate and Code Reviewer's review stay the process control.
@@ -243,9 +196,9 @@ Item 14's names are the check names used throughout. Item 17 is applied in the A
 
 ## Interim manual Gate-3 checklist (from CR round 3)
 
-The `(base)` jobs can't bind the **bootstrap PR** (the PR that first puts `agents-governance.yml` (planned; arrives with the harness build PR) on `main`; ADR §8), because a `_target` workflow runs only from `main`. **Helms ruling (b), relayed by 6:21 PM ET:** the two-PR shape is confirmed; the bootstrap PR is governance-only, touches no app code, uses the arming rule, and gets Code Reviewer's full governance review as its human review. **Under Leo's hold (ADR §8 H18), the bootstrap PR and the build PR are each delivered as a GitHub issue that Claude Code implements; the preconditions and this review are unchanged.** Run the checklist on the bootstrap PR (item 3: "n/a, no restore block in this PR" if the block isn't in it) and again on the harness build work (Claude Code issue) as a second pair of eyes, even though the base checks bind that one. **Code Reviewer + TC** run this checklist and record the results in the PR body:
+The `(base)` jobs can't bind the **bootstrap PR** (the PR that first puts `agents-governance.yml` on `main`; ADR §8), because a `_target` workflow runs only from `main`. **Helms ruling (b), relayed by 6:21 PM ET:** the two-PR shape is confirmed; the bootstrap PR is governance-only, touches no app code, uses the arming rule, and gets Code Reviewer's full governance review as its human review. **Under Leo's hold (ADR §8 H18), the bootstrap PR and the build PR are each delivered as a GitHub issue that Claude Code implements; the preconditions and this review are unchanged.** Run the checklist on the bootstrap PR (item 3: "n/a, no restore block in this PR" if the block isn't in it) and again on the harness build work (Claude Code issue) as a second pair of eyes, even though the base checks bind that one. **The Orca pr-reviewer (advisory) and Leo, or Helms on his behalf,** run this checklist and record the results in the PR body (Leo, 2026-10-17: the Code Reviewer and TC roles were retired on 2026-10-09; the same owners run the U18 canary):
 
-1. walk all 17 guards and D20 line by line against the real `agents-governance.yml` (planned; arrives with the harness build PR), including `package-manager-cache: false` (R3-F2);
+1. walk all 17 guards and D20 line by line against the real `agents-governance.yml`, including `package-manager-cache: false` (R3-F2);
 2. run `actionlint` plus a pinned workflow security linter (e.g. `zizmor`) over every changed workflow;
 3. confirm `review-restore-matrix` is green on the real block with **41/41, 14/14 and 18/18**;
 4. review `pr-data.mjs`, `governance.mjs` and `check-drift.mjs` for any `import`/`require`/`eval`/`spawn`/`exec` reachable from PR data;
