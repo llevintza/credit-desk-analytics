@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHECKS, armed, main, runChecks, summary, treeView } from "../check-drift.mjs";
+import { CHECKS, USAGE, armed, gitListing, main, runChecks, summary, treeView } from "../check-drift.mjs";
 import { CHECK_ID, TREE_CHECKS, frontmatter, validateArming } from "../lib/checks-tree.mjs";
 import { capture, scratch } from "./helpers.mjs";
 
@@ -198,6 +198,13 @@ function gitRepo(files) {
   return d;
 }
 
+/** A repo's listing as a --paths file, the form pr-data writes. */
+function pathsFor(dir) {
+  const f = join(scratch(), "paths.json");
+  writeFileSync(f, JSON.stringify(gitListing(dir)));
+  return f;
+}
+
 // The text checks need the real gate copies and ci.yml.
 // Root AGENTS.md links into the whole repo, so its links are dropped here (checks-text.test covers D23).
 const REAL = Object.fromEntries(["AGENTS.md", "README.md", "docs/deployment-setup.md", ".github/workflows/ci.yml"].map((p) => [p, readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8")]));
@@ -208,13 +215,14 @@ test("main: a real checkout against a base checkout, the summary file, exit code
   const baseDir = gitRepo({ ...GOOD, ...own });
   const sum = join(scratch(), "s.md");
   const ok = capture();
-  assert.equal(main(["--root", gitRepo({ ...GOOD, ...own }), "--base", baseDir], { GITHUB_STEP_SUMMARY: sum }, { write: ok.write }), 0);
+  const good = gitRepo({ ...GOOD, ...own });
+  assert.equal(main(["--root", good, "--paths", pathsFor(good), "--base", baseDir], { GITHUB_STEP_SUMMARY: sum }, { write: ok.write }), 0);
   assert.match(ok.text(), /^agents-drift: 22 checks, 0 failed; disarmed: D12\n/);
   assert.match(readFileSync(sum, "utf8"), /22 checks run, 0 failed/);
 
   const bad = capture();
   const head = gitRepo({ ...GOOD, ...own, "web/AGENTS.md": "x\n".repeat(61), ".env.dev": "x" });
-  assert.equal(main(["--root", head, "--base", baseDir], {}, { write: bad.write }), 1);
+  assert.equal(main(["--root", head, "--paths", pathsFor(head), "--base", baseDir], {}, { write: bad.write }), 1);
   assert.match(bad.text(), /"D13 warn: web\/AGENTS.md: 61 lines[\s\S]*"D19 fail: tracked env file \.env\.dev"[\s\S]*::error::agents-drift failed: D19\n$/);
 });
 
@@ -240,7 +248,7 @@ test("main: --paths listing (the base-job form), no base, disarmed notice, usage
   assert.equal(main([], {}, { write: u.write }), 1);
   assert.match(u.text(), /usage/);
   const e = capture();
-  assert.equal(main(["--root", scratch()], {}, { write: e.write }), 1);
+  assert.equal(main(["--root", scratch(), "--paths", join(scratch(), "absent.json")], {}, { write: e.write }), 1);
   assert.match(e.text(), /lookup or parse error \(fail closed\)/);
   const r = spawnSync(process.execPath, [fileURLToPath(new URL("../check-drift.mjs", import.meta.url))], { encoding: "utf8" });
   assert.equal(r.status, 1);
@@ -262,7 +270,9 @@ test("D22 strict arming.json shape: strings for arrays, unknown ids, extra keys,
   };
   for (const [what, x] of Object.entries(bad)) fails("D22", as(x), /arming.json is malformed/, {});
   fails("D22", { "scripts/agents/arming.json": "null" }, /malformed: arming.json must be an object/);
-  assert.throws(() => validateArming({ alwaysArmed: ["D2x"], subjects: {} }, new Set(["D1"])), /unknown check id D2x/);
+  assert.throws(() => validateArming({ alwaysArmed: ["D2x"], subjects: {} }, new Set(["D1"])), (e) => e.message === "arming.json: unknown check id" && e.detail === "D2x");
+  assert.throws(() => validateArming({ alwaysArmed: [], subjects: { "D1\n::error::x": ["a"] } }, new Set(["D1"])), (e) => e.message === "arming.json: unknown check id" && e.detail === "D1\n::error::x");
+  fails("D22", as({ alwaysArmed: [...ARMING.alwaysArmed, "Dz9"], subjects: ARMING.subjects }), /malformed: arming.json: unknown check id "Dz9"/);
   assert.ok(CHECK_ID.test("D8a") && CHECK_ID.test("DEP") && !CHECK_ID.test("D8 ") && !CHECK_ID.test("d1"));
 });
 
@@ -271,12 +281,26 @@ test("main: a malformed or unknown-id trusted arming.json fails closed", () => {
     const own = { "scripts/agents/arming.json": JSON.stringify(arming), "scripts/agents/adapters.json": JSON.stringify(ADAPTERS) };
     const d = gitRepo({ ...GOOD, ...own });
     const c = capture();
-    assert.equal(main(["--root", d, "--base", d], {}, { write: c.write }), 1);
+    assert.equal(main(["--root", d, "--paths", pathsFor(d), "--base", d], {}, { write: c.write }), 1);
     assert.match(c.text(), /^::error::agents-drift: arming.json/);
   }
 });
 
-test("main: an unsafe --paths entry is printed only escaped; a --root inside another repo fails", () => {
+// #505 (c1): an injected listing path yields one fixed ::error:: line; the path reaches stdout
+// only JSON-escaped inside the stop-commands block, and nothing raw leaks outside it.
+test("main: a listing path with ::error::, a newline and %0A stays inside the stop-commands block", () => {
+  const evil = "x::error::spoofed\n::error::two%0A::warning::three";
+  const paths = join(scratch(), "paths.json");
+  writeFileSync(paths, JSON.stringify([{ path: evil, mode: "100644", type: "blob" }]));
+  const c = capture();
+  assert.equal(main(["--root", scratch(), "--paths", paths], {}, { write: c.write }), 1);
+  const m = /^::error::agents-drift: unsafe path in listing\n::stop-commands::(\w+)\n(.*)\n::\1::\n$/.exec(c.text());
+  assert.ok(m, c.text());
+  assert.equal(m[2], JSON.stringify(evil));
+  assert.ok(!m[2].includes("\n") && !c.text().replace(m[2], "").includes("spoofed"));
+});
+
+test("main: an unsafe --paths entry is printed only escaped; a --base inside another repo fails", () => {
   const paths = join(scratch(), "paths.json");
   writeFileSync(paths, JSON.stringify([{ path: "a\n::warning::x", mode: "100644", type: "blob" }]));
   const c = capture();
@@ -284,6 +308,26 @@ test("main: an unsafe --paths entry is printed only escaped; a --root inside ano
   assert.match(c.text(), /^::error::agents-drift: unsafe path in listing\n::stop-commands::\w+\n"a\\n::warning::x"\n/);
   const repo = gitRepo({ "AGENTS.md": "x\n", "sub/f.txt": "y" });
   const n = capture();
-  assert.equal(main(["--root", join(repo, "sub")], {}, { write: n.write }), 1);
+  assert.equal(main(["--root", repo, "--paths", pathsFor(repo), "--base", join(repo, "sub")], {}, { write: n.write }), 1);
   assert.match(n.text(), /must be the top of a git work tree/);
+});
+
+// #505 (c2): the head listing comes only from --paths. Without it, check-drift stops with the
+// usage error before any lookup, so a --root inside another work tree can't list that repo.
+test("main: --root without --paths is a usage error and spawns no git", () => {
+  const repo = gitRepo({ "AGENTS.md": "x\n", "sub/f.txt": "y" });
+  for (const argv of [["--root", join(repo, "sub")], ["--root", repo], ["--root", repo, "--base", repo], ["--root", repo, "--paths"]]) {
+    const c = capture();
+    assert.equal(main(argv, {}, { write: c.write }), 1, argv.join(" "));
+    assert.equal(c.text(), `::error::agents-drift: ${USAGE}\n`);
+  }
+  assert.match(USAGE, /^usage: check-drift\.mjs --root <dir> --paths <paths\.json> \[--base <dir>\]$/);
+  // A git stub first on PATH records any call; the CLI must fail before reaching it.
+  const bin = scratch();
+  const log = join(scratch(), "git-calls");
+  writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`, { mode: 0o755 });
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("../check-drift.mjs", import.meta.url)), "--root", join(repo, "sub")], { encoding: "utf8", env: { PATH: bin } });
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, `::error::agents-drift: ${USAGE}\n`);
+  assert.equal(existsSync(log), false, "git was spawned");
 });

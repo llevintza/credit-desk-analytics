@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { githubApi } from "../lib/common.mjs";
-import { BASELINE, evaluate, isGovernance, main, raiseOnly, summary } from "../governance.mjs";
+import { BASELINE, GOVERNANCE_PATHS, evaluate, isGovernance, main, raiseOnly, summary } from "../governance.mjs";
 import { BASE, HEAD, capture, eventFile, fakeGithub, scratch } from "./helpers.mjs";
 
 const BASE_JSON = { dotnet: { line: 99.9, branch: 98.9 }, web: { line: 99.8, branch: 100 } };
@@ -32,8 +32,21 @@ test("the governance path list (governance.md), case-insensitive", () => {
     "docs/agents/README.md", "scripts/agents/guard.mjs", ".gitleaks.toml", "perf/coverage-gate.mjs", "tests/testconfig.json",
     ".gitmodules", ".GITHUB/workflows/x.yml", "Web/agents.md", ".cursorrules", ".github", ".claude", "docs/agents", "scripts/agents", "deploy",
   ]) assert.ok(isGovernance(p), p);
+  // #505 (b1): a bare directory path is governed under the same case folding (#501 nit).
+  for (const p of [".cursor", ".grok", ".github", "deploy", "docs/agents", "scripts/agents", ".Github", "Docs/Agents", ".CURSOR"]) assert.ok(isGovernance(p), p);
+  // ...but only the directory itself, never a sibling sharing its prefix.
+  for (const p of ["docsx", "scripts/agentsx", "docs/agentsx", ".cursorx", ".grokx", "deployx"]) assert.ok(!isGovernance(p), p);
   for (const p of ["docs", "scripts", ".githubx", "src/Desk.UserAdmin/UserAdminApp.cs", "src/Desk.Api/Program.cs", "README.md", "docs/adr/0001-stack.md", "perf/payload-size.mjs", "web/src/app.ts"])
     assert.ok(!isGovernance(p), p);
+});
+
+// #505 (b2): the code list and governance.md's "Path list" change together.
+test("every GOVERNANCE_PATHS glob is on governance.md's path list", () => {
+  const doc = readFileSync(new URL("../../../docs/agents/governance.md", import.meta.url), "utf8");
+  const list = doc.slice(doc.indexOf("- **Path list:**"), doc.indexOf("- **Not on the list"));
+  assert.ok(list.length > 100, "path list section not found");
+  const named = new Set([...list.matchAll(/`([^`]+)`/g)].map((m) => m[1]));
+  for (const g of GOVERNANCE_PATHS) assert.ok(named.has(g), `${g} is missing from governance.md`);
 });
 
 test("a governance path needs a [workflows] title; app-only PRs pass", async () => {

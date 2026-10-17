@@ -4,9 +4,9 @@
 
 ## Scripts (single files, `node:` builtins only)
 
-- `check-drift.mjs --root <dir> [--paths <tree.json>] [--base <dir>] [--regen]` runs D1–D22.
+- `check-drift.mjs --root <dir> --paths <tree.json> [--base <dir>] [--regen]` runs D1–D22.
   - `--root` is the tree under test.
-  - `--paths` is the full head tree listing (with blob `sha`), used for the presence, absence, case, mode and link checks.
+  - `--paths` is the full head tree listing (with blob `sha`), used for the presence, absence, case, mode and link checks. It is required: the head is never listed with git, so a `--root` inside another work tree can't list that repo (#505). Without it the script exits 1 with the usage line.
   - `--base` is the trusted base checkout, used for the comparisons in D10 and D17 and the R3-F4 supersets.
 - `generate.mjs [--check] [--root <dir>]` renders the adapters.
 - `pr-data.mjs` fetches PR data via the REST API; `governance.mjs` is the governance-paths logic (both in `governance.md`).

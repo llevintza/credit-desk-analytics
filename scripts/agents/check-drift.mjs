@@ -2,11 +2,13 @@
 /**
  * ADR-0020 drift checks (docs/agents/drift-checks.md).
  *
- *   node scripts/agents/check-drift.mjs --root <dir> [--paths <paths.json>] [--base <dir>]
+ *   node scripts/agents/check-drift.mjs --root <dir> --paths <paths.json> [--base <dir>]
  *
  * --root   the tree under test: pr-data's scratch tree in `agents-drift (base)`, or a checkout.
- * --paths  the full head listing (pr-data's paths.json); without it, `git ls-tree` of --root.
- * --base   the trusted base checkout (presence rule P, D22, and the base-relative checks).
+ * --paths  the full head listing (pr-data's paths.json). Required: the head is never listed
+ *          with git, so a --root inside another work tree can't list that repo (#505).
+ * --base   the trusted base checkout (presence rule P, D22, and the base-relative checks),
+ *          listed with `git ls-tree`; it must be the top of its own work tree.
  *
  * PR files are DATA: read with readFileSync and parsed only by JSON.parse or line-anchored
  * markers; nothing from --root is imported or run. Arming (which checks run) always comes
@@ -21,6 +23,8 @@ import { TEXT_CHECKS } from "./lib/checks-text.mjs";
 import { TREE_CHECKS, validateArming } from "./lib/checks-tree.mjs";
 
 export const CHECKS = Object.freeze({ ...TREE_CHECKS, ...TEXT_CHECKS });
+
+export const USAGE = "usage: check-drift.mjs --root <dir> --paths <paths.json> [--base <dir>]";
 
 /** `git ls-tree -r -z` of HEAD in `dir`: [{path, mode, type, sha}]. */
 export function gitListing(dir) {
@@ -98,10 +102,10 @@ const arg = (argv, name) => {
 export function main(argv, env, { write = (s) => process.stdout.write(s) } = {}) {
   try {
     const rootArg = arg(argv, "--root");
-    if (!rootArg) throw new CheckError("usage: check-drift.mjs --root <dir> [--paths <paths.json>] [--base <dir>]");
-    const root = resolve(rootArg);
     const pathsFile = arg(argv, "--paths");
-    const head = treeView(root, pathsFile ? JSON.parse(readFileSync(pathsFile, "utf8")) : gitListing(root));
+    if (!rootArg || !pathsFile) throw new CheckError(USAGE);
+    const root = resolve(rootArg);
+    const head = treeView(root, JSON.parse(readFileSync(pathsFile, "utf8")));
     const baseDir = arg(argv, "--base");
     const base = baseDir ? treeView(resolve(baseDir), gitListing(resolve(baseDir))) : null;
     // Arming and the input globs are always the trusted copies, never the PR's.

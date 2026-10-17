@@ -62,10 +62,10 @@ The workflow is the file itself; this page no longer copies it. Since the rev 13
 ## `governance-paths (base)` (required once DEP-R1/DEP-R2; H1)
 
 - **Code:** main's `governance.mjs`. It reads the PR number from `$GITHUB_EVENT_PATH`, and the title from the same event JSON; the title is never printed. The file list comes from the shared `pr-data.mjs` functions (guard 10): the 3,000 cap, the count assertion and the status whitelist.
-- **Matching:** both `filename` and `previous_filename`, so a rename out of `.github/` still matches. Deletions are included. Case-insensitive.
+- **Matching:** both `filename` and `previous_filename`, so a rename out of `.github/` still matches. Deletions are included. Case-insensitive. A bare directory path (a file or link named `.github` or `docs/agents`) matches its `dir/**` glob; a sibling such as `docsx` doesn't (#501 nit, #505).
 - **Path list:**
   - `.github/**`, `**/Dockerfile*`, `**/*.Dockerfile`, `render.yaml`, `deploy/**`, `**/docker-compose*.y*ml`, `**/compose*.y*ml` (recursive, so a nested override such as `e2e/docker-compose.e2e.yml` matches as well as the root `docker-compose.yml`; #157)
-  - `.claude/**`, `**/.claude/**`, `.cursor/**`, `.cursorignore`, `.grok/**`, `.mcp.json`
+  - `.claude/**`, `**/.claude/**`, `.cursor/**`, `.cursorignore`, `.cursorrules`, `.grok/**`, `.mcp.json` (Cursor rules are harness config in `adapters.json` since #498; #505)
   - `**/AGENTS.md`, `**/AGENT.md`, `**/CLAUDE.md`, `**/CLAUDE.local.md`, `.claudeignore`
   - `docs/agents/**`, `scripts/agents/**`, `.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json`, `.gitmodules` (`.gitleaks.toml`, `perf/coverage-*`, `tests/testconfig.json` as in main's AGENTS `[workflows]` bullet since #5)
   - **Not on the list (rev 11, H19):** `src/Desk.UserAdmin/**` and other feature or auth code. governance-paths covers the rules that judge PRs; feature PRs such as #122 must not be forced under `[workflows]` titles (H9). The UserAdmin area file is covered by `**/AGENTS.md`/`**/CLAUDE.md`, and the auth directories get advisory CODEOWNERS lines (below).
