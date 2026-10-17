@@ -35,6 +35,7 @@ Any unchecked item means request changes.
 ## What agents never do here
 
 - Never dispatch, rerun, cancel, enable or disable a workflow (`deploy.yml` and `db-ops.yml` act on production). Tech Coordinator does these outside the harness.
+- A red k6 p95 in `budgets`: report it and follow the over-budget procedure in README §10 (#87); never re-run it, loosen the budget or add `continue-on-error`.
 - Never edit rulesets, environments, secrets or variables. Never rename a job that is a required check without a governance PR that says so.
 - Workflows may run `curl` on the runner (e.g. `compose-smoke`); the curl/wget deny is for agent sessions. Edit those files with the edit tool, and don't search for the word from a shell.
 
