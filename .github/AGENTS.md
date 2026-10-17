@@ -58,6 +58,7 @@ Any unchecked item means request changes.
 | Deploy Swagger/OpenAPI exposure smoke (#110) | `node --test .github/scripts/swagger-exposure-smoke.test.mjs` |
 | Render deploy id and status helper, stubbed Render (#302) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/render-deploy.mjs .github/scripts/render-deploy.test.mjs` |
 | Cloudflare IP range comparison, fixture only (#161) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/cloudflare-ips.mjs .github/scripts/cloudflare-ips.test.mjs` (never run `cloudflare-ips.mjs` itself in a session: its fetch belongs to the weekly `cloudflare-ips.yml`) |
+| scripts/agents tests, stubbed GitHub API (#171; `agents-tests` in `agents.yml`) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include='scripts/agents/**/*.mjs' --test-coverage-exclude='scripts/agents/test/**' 'scripts/agents/test/*.test.mjs'` |
 | What CI would run for recent merges | `node perf/ci-changes-replay.mjs 15` |
 
 A new top-level path, project or test project matches no area, so it runs every job until you add it to `AREA_PREFIXES` in `.github/scripts/ci-changes.mjs` (with a fixture in its test).
