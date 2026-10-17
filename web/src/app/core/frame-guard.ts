@@ -12,10 +12,23 @@ export function isFramed(win: Window): boolean {
   }
 }
 
-/** Returns true (and shows a plain notice in place of the app) when the page is framed; the caller then skips bootstrap. */
+/**
+ * Returns true (and shows a notice in place of the app) when the page is framed; the caller then skips bootstrap.
+ * The notice is an alert so screen readers announce it, styled inline with the global tokens (styles.css is loaded
+ * before main.js runs); CSSOM assignments aren't inline-style markup, so they never trip style-src.
+ */
 export function refuseFraming(win: Window, doc: Document): boolean {
   if (!isFramed(win)) return false;
   const notice = doc.createElement('p');
+  notice.setAttribute('role', 'alert');
+  Object.assign(notice.style, {
+    margin: '16px',
+    padding: '12px 16px',
+    border: '1px solid var(--line)',
+    borderRadius: '4px',
+    background: 'var(--surface-2)',
+    color: 'var(--text)',
+  });
   notice.textContent = 'Credit Desk Analytics cannot be shown inside a frame. Open it in its own tab.';
   doc.body.replaceChildren(notice);
   return true;

@@ -43,6 +43,20 @@ describe('frame guard (#66)', () => {
     expect(doc.body.firstElementChild?.tagName).toBe('P');
   });
 
+  it('announces the notice as an alert, styled with the design tokens', () => {
+    const doc = document.implementation.createHTMLDocument('t');
+    doc.body.innerHTML = '<app-root></app-root>';
+    refuseFraming({ self: {} as Window, top } as Window, doc);
+    const notice = doc.body.firstElementChild as HTMLElement;
+    expect(notice.getAttribute('role')).toBe('alert');
+    expect(notice.style.margin).toBe('16px');
+    expect(notice.style.padding).toBe('12px 16px');
+    expect(notice.style.border).toBe('1px solid var(--line)');
+    expect(notice.style.borderRadius).toBe('4px');
+    expect(notice.style.background).toBe('var(--surface-2)');
+    expect(notice.style.color).toBe('var(--text)');
+  });
+
   it('starts the app at top level and never when framed', async () => {
     const doc = document.implementation.createHTMLDocument('t');
     doc.body.innerHTML = '<app-root></app-root>';
