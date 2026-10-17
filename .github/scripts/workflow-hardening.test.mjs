@@ -296,8 +296,14 @@ test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:
 test("#451: no workflow but agents-governance.yml has a job id or name containing ci-wiring", () => {
   for (const [f, yml] of WORKFLOWS) {
     if (f === "agents-governance.yml") continue;
-    const jobs = yml.slice(yml.indexOf("\njobs:\n"));
-    assert.doesNotMatch(jobs, /^ {2}[^\s#]*ci-wiring[^:]*:\s*$/im, `${f}: job id`);
-    assert.doesNotMatch(jobs, /^ {4}name:.*ci-wiring/im, `${f}: job name`);
+    // Any indent, quoted or not, block or flow (#504 review): no key and no name: value that
+    // contains ci-wiring. Comment lines are skipped; run: text such as the test file path is not a key.
+    const code = yml.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    assert.doesNotMatch(code, /^\s*(-\s+)?["']?[\w.-]*ci-wiring[\w.-]*["']?\s*:/im, `${f}: a key containing ci-wiring`);
+    assert.doesNotMatch(code, /["']?\bname["']?\s*:[^\n]*ci-wiring/i, `${f}: a name containing ci-wiring`);
   }
+  // The rule's own fixtures: the forms a 2-space, unquoted match would miss.
+  const re = /["']?\bname["']?\s*:[^\n]*ci-wiring/i;
+  for (const spoof of ['    "name": ci-wiring (base)', "      name: ci-wiring (base)", "  x: {name: ci-wiring (base)}"]) assert.match(spoof, re);
+  assert.match('    "ci-wiring":', /^\s*(-\s+)?["']?[\w.-]*ci-wiring[\w.-]*["']?\s*:/im);
 });
