@@ -85,6 +85,7 @@ public static class InsightCatalog
             """,
             ["Portfolio", "Carry", "Roll-down", "Rates", "Spread", "Idio", "Total"], ["text", "money0", "money0", "money0", "money0", "money0", "money0"]),
 
+        // Mirrored in perf/explain-random-page-cost.sql; update both.
         new(Core, "top_issuers_mv", "Top 5 issuers by market value",
             $"""
             WITH by_issuer AS (
@@ -132,6 +133,7 @@ public static class InsightCatalog
             ["Sector", "Deals held", "Deal orig. bal.", "Watchlist", "Watchlist MV", "Watchlist % MV"], ["text", "int", "money0", "int", "money0", "pct1"]),
 
         // ---------- market (3): index levels for the sector × rating cells the book holds ----------
+        // Mirrored in perf/explain-random-page-cost.sql; update both.
         new(Market, "spread_change_1m", "Spread change 1M (bp) by sector × rating",
             $"""
             WITH t AS (SELECT max(as_of_date) t1 FROM market.spread_index WHERE as_of_date <= @asOf),
