@@ -1,3 +1,5 @@
 {
+  ".cursor/cli.json": "sha256:a3fa9107a61fa9a94cb148534e745dce69edd40d26710dcf4bd1e98e6fb4c675",
+  ".cursorignore": "sha256:ba6930180155944ac01daec696ef1fedd89e5b92eca8393a6d1293a7540307df",
   "scripts/agents/hooks/secret-patterns.txt": "sha256:be347484dde151096c141e216eec93372573522cba6a9e2a06c7ccd0ba9d65ce"
 }
