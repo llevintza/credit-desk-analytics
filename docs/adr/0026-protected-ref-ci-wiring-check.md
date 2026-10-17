@@ -1,6 +1,6 @@
 # ADR-0026: Protected-ref check for the CI classifier wiring tests (ruleset required workflow vs base-sourced `_target` check vs checklist)
 
-- **Status:** Proposed (evaluation only; any ruleset change is Leo's)
+- **Status:** Accepted, option B (Leo, 2026-10-17; #171 A5a/A5b). Helms's extension of the `pull_request_target` sign-off and the ruleset entry are still pending; any ruleset change is Leo's.
 - **Date:** 2026-10-16
 - **Phase / PR:** cross-cutting docs (#451, follow-up to #187 and #441)
 
@@ -19,7 +19,7 @@ Constraints:
 
 - **Agents never change rulesets or settings.** This ADR evaluates and documents. It adds no workflow and changes no setting; Leo makes any ruleset change.
 - **The repo.** `llevintza/credit-desk-analytics` is owned by a **personal account** (not an organization) and is **public**. On 2026-10-16 it had **no ruleset** and **no branch protection** on `main` (read-only checks: `gh repo view --json owner,isInOrganization,visibility` gave `isInOrganization: false`, `visibility: PUBLIC`; the rulesets listing was empty; branch protection returned 404 "Branch not protected"). The `main` ruleset (DEP-R1 in [`docs/agents/governance.md`](../agents/governance.md)) is still PENDING.
-- **Free tier.** Actions minutes must stay free. `pull_request_target` is allowed only in `agents-governance.yml` (planned; arrives with the harness build PR), under Helms's scoped sign-off (`.github/AGENTS.md`).
+- **Free tier.** Actions minutes must stay free. `pull_request_target` is allowed only in `agents-governance.yml`, under Helms's scoped sign-off (`.github/AGENTS.md`).
 
 ### How GitHub ruleset required workflows work (GitHub docs, fetched 2026-10-16)
 
@@ -219,6 +219,8 @@ Proposed, for Leo and Helms to rule on:
 2. **Recommend option B** as the protected-ref control, with the parse-only invariant (dedicated `ci-wiring.test.mjs`, guard step, `node --permission`). Add the `ci-wiring (base)` job to `agents-governance.yml` in the harness build PR (or in its own `[workflows]` PR once Helms extends the `pull_request_target` allowance). When Leo creates the DEP-R1 `main` ruleset, he adds `ci-wiring (base)` to its required status checks.
 3. **Keep option D** (the #441 checklist) in any case. It stays the control until B is live, and afterwards it covers what B can't: a same-named head job, and changes to the tests themselves that land on `main`.
 4. **Reject option C**: with agents pushing as `llevintza`, required code-owner review can't be satisfied without Leo's bypass on every such PR.
+
+**As implemented (#171).** Leo approved option B with one change to the draft below: the job never fetches `refs/pull/N/head` and never puts the head SHA in `env:`. D20 and Helms's H1 rules forbid both. Instead, `scripts/agents/pr-data.mjs` reads the head `ci.yml` as a blob through the REST API (with the head-moved and symlink checks), and the job copies it over main's checkout. The job uses the default `_target` checkout (main's tip) and shares `agents-governance.yml`'s trigger types and `contents: read` + `pull-requests: read`. The parse-only grep and `node --permission` run are as drafted. `gate-tests` runs the same file under `--permission`.
 
 ## Consequences
 
