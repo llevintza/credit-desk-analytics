@@ -8,20 +8,17 @@
  *   the signature and that no analyser has proven safe exits 2 (R5-F1 class A).
  */
 import { normalize, hasSignature, payloadTexts } from "./input.mjs";
+import { analyseGh } from "./gh.mjs";
 import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
+import { decideMcp } from "./mcp.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
+import { ASSIGN, base, head } from "./words.mjs";
+
+export { head };
 
 const block = (reason, call) => ({ code: 2, reason, call });
 const allow = (call) => ({ code: 0, call });
-
-const base = (s) => s.slice(s.lastIndexOf("/") + 1);
-const ASSIGN = /^[A-Za-z_]\w*=/;
-
-/** The command word of a segment: the first word after `VAR=x` assignments. */
-export function head(seg) {
-  return seg.words.find((w) => w.quoted || !ASSIGN.test(w.text)) ?? null;
-}
 
 // Heads whose arguments are only text, so a signature in them is a mention, not a command,
 // unless their output is piped into a shell (adapters.md "Exempt").
@@ -39,7 +36,7 @@ function exempt(seg, next) {
 
 // Per-concern analysers: each returns undefined (not mine) or a decision { code, reason }.
 // A signature-carrying segment that no analyser has decided fails closed.
-const ANALYSERS = [analyseGit];
+const ANALYSERS = [analyseGit, analyseGh];
 
 // curl/wget are denied outright (G18, H16): the word, case-insensitive, after removing
 // backslashes and quotes, and in every decoded token. Words that only contain the letters
@@ -81,7 +78,8 @@ function unnamed(seg) {
   const rest = seg.words.slice(seg.words.indexOf(h) + 1);
   if (WRAPPERS.has(name) && rest.some((w) => (w.dynamic || w.glob) && !(ASSIGN.test(w.text) && !w.glob)))
     return `a dynamic or glob word behind ${name} (G4, G20)`;
-  if (name === "gh" && rest.slice(0, 2).some((w) => w.dynamic || w.glob)) return "gh with a dynamic group or verb (G14)";
+  // `gh api "$EP"`: the endpoint is gh.mjs's to decide (a quoted pure GET passes, G15).
+  if (name === "gh" && rest.slice(0, rest[0]?.text === "api" ? 1 : 2).some((w) => w.dynamic || w.glob)) return "gh with a dynamic group or verb (G14)";
   if (name === "git" || name === "hub") {
     for (let i = 0; i < rest.length; i++) {
       if (rest[i].dynamic || rest[i].glob) return `${name} with a dynamic subcommand or option ${rest[i].raw} (G4)`;
@@ -163,7 +161,6 @@ export function decide(raw, opts = {}) {
   if (call.kind === "command") return command(call.command, call, { deadline, repoAt });
   if (call.kind === "read") return isSecretPath(call.path) ? block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call) : allow(call);
   if (call.kind === "write") return write(call, patterns);
-  if (call.kind === "mcp" && hasSignature(...payloadTexts(JSON.stringify(call.args), call.args)))
-    return block("an MCP call carrying the push/merge signature that the guard can't prove safe", call);
+  if (call.kind === "mcp") return { ...decideMcp(call), call };
   return allow(call);
 }
