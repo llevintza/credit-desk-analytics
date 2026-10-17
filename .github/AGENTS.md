@@ -13,7 +13,8 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 - Pin every `uses:` to a full 40-character commit SHA with a `# v…` comment.
 - Keep a top-level `permissions:` block with least privilege. Never grant `statuses: write` or `checks: write`.
 - `pull_request_target` is allowed only in `agents-governance.yml` (planned; arrives with the harness build PR), under Helms's scoped sign-off. Nowhere else.
-- No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)` or `governance-paths (base)`.
+- No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)`, `governance-paths (base)` or `ci-wiring (base)` ([ADR-0026](../docs/adr/0026-protected-ref-ci-wiring-check.md); `workflow-hardening.test.mjs` checks `ci-wiring`).
+- `.github/scripts/ci-wiring.test.mjs` only parses `ci.yml`: no process, worker, `vm`, dynamic-import or `eval` route, and imports only `node:test`, `node:assert/strict`, `node:fs` and `./ci-changes.mjs` (ADR-0026 parse-only invariant). A test that runs a `ci.yml` step goes in `ci-changes.test.mjs`.
 - Secrets live only in the `production` environment (sole exception: the capped Claude key in `claude-review`). gitleaks stays on. Nothing removed or loosened.
 - Keep the `# agents-drift:` markers, `disableAllHooks` (planned; arrives with the harness build PR), the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
 - A script that decides or polices a PR's checks runs from the `_base` checkout, never the head copy: the classifier, the coverage gate and the PR-time Pages script check (#278). A base without the script fails closed or runs every job; it never falls back to the head.
@@ -28,7 +29,7 @@ The classifier runs from `_base`, but on `pull_request` the PR's own `ci.yml` ex
 - [ ] One pinned diff base (#213, #278): the `changes` job's `base` step has no `if:` (it runs on push too), sets `base_sha`, and writes a `::warning::` whenever a PR keeps the event base. The classifier gets `--base "$DIFF_BASE"` from `steps.base.outputs.base_sha`. The coverage gate's `DIFF_BASE` is `needs.changes.outputs.base_sha` with the event base only as the fallback, and writes a `::warning::` when that output is empty. `_base` (classifier rules, gate script, thresholds, floor) stays at the event base, never at the pinned SHA. The `#213` tests and the `coverage gate step: …` test (#278) in `ci-changes.test.mjs` fall under the last item.
 - [ ] Every job that needs `api` or `web` has a job-level `if:` with `!cancelled()` plus `contains(fromJSON('["success", "skipped"]'), needs.<job>.result)` for each of `needs.api.result` and `needs.web.result` it needs.
 - [ ] No workflow-level `paths:` or `paths-ignore:` under `on:`.
-- [ ] The ci.yml wiring tests in `.github/scripts/ci-changes.test.mjs` (the `ci.yml: …` tests and the dependency checker) are unchanged or only strengthened: no assertion removed, loosened or skipped.
+- [ ] The ci.yml wiring tests in `.github/scripts/ci-wiring.test.mjs` (the `ci.yml: …` tests and the dependency checker, moved there from `ci-changes.test.mjs` by ADR-0026) and the step-running tests left in `ci-changes.test.mjs` are unchanged or only strengthened: no assertion removed, loosened or skipped.
 
 Any unchecked item means request changes.
 
@@ -46,6 +47,7 @@ Any unchecked item means request changes.
 | Lint workflows | `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest` |
 | Gate-script tests | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=perf/coverage-gate.mjs perf/coverage-gate.test.mjs` |
 | Change-classifier tests (#169) | `node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-include=.github/scripts/ci-changes.mjs .github/scripts/ci-changes.test.mjs` |
+| CI wiring tests, parse-only (ADR-0026, #451) | `node --permission --allow-fs-read="$PWD" .github/scripts/ci-wiring.test.mjs` |
 | CI/Deploy concurrency wiring tests (#207) | `node --test .github/scripts/concurrency-wiring.test.mjs` |
 | k6 handleSummary and budgets jq (#271) | `node --test .github/scripts/k6-summary.test.mjs` |
 | Workflow hardening tests (#137, #139, #155, #256, #257) | `node --test .github/scripts/workflow-hardening.test.mjs` |
