@@ -162,7 +162,7 @@ test("D22 arming.json may only grow; P keeps subjects present on main", () => {
 
 test("arming: subject-armed checks run only when the subject is on main or in the PR", () => {
   const noNested = tree({ "AGENTS.md": "x" });
-  assert.deepEqual(armed(ARMING, noNested, null).off, ["D2", "D12"]);
+  assert.deepEqual(armed(ARMING, noNested, null).off, ["D2", "D12", "D10"]);
   const marked = tree({ ".github/workflows/claude-review.yml": "  # agents-drift:claude-args\n" });
   assert.ok(armed(ARMING, noNested, marked).on.has("D12"), "D12 is armed by a marker in main's claude-review.yml");
   assert.ok(armed(ARMING, noNested, tree(GOOD)).on.has("D2"), "armed by main");
@@ -217,8 +217,8 @@ test("main: a real checkout against a base checkout, the summary file, exit code
   const ok = capture();
   const good = gitRepo({ ...GOOD, ...own });
   assert.equal(main(["--root", good, "--paths", pathsFor(good), "--base", baseDir], { GITHUB_STEP_SUMMARY: sum }, { write: ok.write }), 0);
-  assert.match(ok.text(), /^agents-drift: 22 checks, 0 failed; disarmed: D12\n/);
-  assert.match(readFileSync(sum, "utf8"), /22 checks run, 0 failed/);
+  assert.match(ok.text(), /^agents-drift: 24 checks, 0 failed; disarmed: D12, D10\n/);
+  assert.match(readFileSync(sum, "utf8"), /24 checks run, 0 failed/);
 
   const bad = capture();
   const head = gitRepo({ ...GOOD, ...own, "web/AGENTS.md": "x\n".repeat(61), ".env.dev": "x" });
@@ -242,7 +242,7 @@ test("main: --paths listing (the base-job form), no base, disarmed notice, usage
   writeFileSync(paths, JSON.stringify([...Object.keys(REAL).map(blob), blob("CLAUDE.md"), blob("scripts/agents/arming.json"), blob("docs/agents/roles-and-skills.md"), { path: "docs", type: "tree" }]));
   const c = capture();
   assert.equal(main(["--root", d, "--paths", paths], {}, { write: c.write }), 0);
-  assert.match(c.text(), /disarmed: D2, D12/);
+  assert.match(c.text(), /disarmed: D2, D12, D10/);
 
   const u = capture();
   assert.equal(main([], {}, { write: u.write }), 1);

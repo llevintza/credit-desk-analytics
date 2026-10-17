@@ -4,6 +4,7 @@
  * Each check gets the context from check-drift.mjs and reports through fail()/warn().
  */
 import { CheckError, fail, fold, matchesAny } from "./common.mjs";
+import { d18Harness } from "./checks-harness.mjs";
 
 const STUB = "@AGENTS.md\n";
 const base = (p) => p.slice(p.lastIndexOf("/") + 1);
@@ -170,6 +171,7 @@ export const TREE_CHECKS = {
   },
 
   D18: ({ head }, r) => {
+    d18Harness(head, r);
     for (const p of head.glob([".claude/skills/**/*.md", ".claude/agents/**/*.md"])) {
       const fm = frontmatter(head.read(p)) ?? {};
       for (const k of ["hooks", "allowed-tools"]) if (k in fm) r.fail(`${p}: frontmatter key ${k}: is not allowed`);
