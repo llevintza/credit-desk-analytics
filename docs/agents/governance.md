@@ -88,7 +88,7 @@ jobs:
    - Write `paths.json` with path, mode, type, size **and blob `sha`** for every entry (R3-N2).
    - **Path validation:** reject empty, `.` or `..` segments, a leading `/`, backslashes and control characters. The job fails closed.
 4. **Modes:**
-   - Mode `120000` (symlink) at a steering or enforcement path fails (D15). Elsewhere it is recorded and never written.
+   - Mode `120000` (symlink) **anywhere** in the head tree fails (D15; #171 A1 review, 2026-10-17). A symlinked directory such as `.claude`, `docs/agents` or any directory that could hold an `AGENTS.md` would hide the steering files behind it from the API tree, and `main` has no symlinks. (Was: only at a steering or enforcement path.)
    - Mode `160000` (submodule) fails if it is new, changed or at a steering path.
 5. **Blobs:** `GET /git/blobs/{sha}` only for the **input set** declared in **main's** `adapters.json`:
    - `**/AGENTS.md`, `**/CLAUDE.md`, `.claude/**`, `.cursor/**`, `.cursorignore`, `docs/agents/**`, `scripts/agents/*.json`, `scripts/agents/hooks/**`;
