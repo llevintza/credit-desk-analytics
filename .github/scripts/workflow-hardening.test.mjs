@@ -277,6 +277,36 @@ test("#461: the scan step, run with a stub docker: clean, a job secret, a gitlea
   assert.equal(missing.output, "");
 });
 
+// #171 B7 (ADR-0020, docs/agents/review-restore.md): the restore steps are the page's blocks byte for byte,
+// hooks are off with a canary around the action, and Skill/Agent/Task are denied.
+test("#171: claude-review.yml carries §A and the scripts step verbatim, the hook canary and the new claude_args", () => {
+  const runBody = (step) => /\n {8}run: \|\n((?: {10}.*\n?|\s*\n)+)/.exec(step)[1].split("\n").map((l) => l.slice(10)).join("\n").trimEnd();
+  const page = readFileSync(new URL("../../docs/agents/review-restore.md", import.meta.url), "utf8");
+  const [secA, scripts] = [...page.matchAll(/^```bash\n([\s\S]*?)\n```$/gm)].map((m) => m[1]);
+  const marked = /^ {6}# agents-drift:restore-step:begin\n([\s\S]*?)^ {6}# agents-drift:restore-step:end$/m.exec(REVIEW)?.[1];
+  assert.ok(marked, "restore markers missing");
+  for (const [name, want] of [["Replace PR-controlled agent config with the base copies", secA], ["Restore scripts/agents from base", scripts]]) {
+    const step = stepBlock(marked, name);
+    assert.equal(runBody(step), want, `${name} differs from review-restore.md`);
+    assert.match(step, /^ {8}shell: bash --noprofile --norc -euo pipefail \{0\}$/m);
+    assert.match(step, /^ {8}if: steps\.key\.outputs\.present == 'true'$/m);
+  }
+  assert.match(stepBlock(marked, "Replace PR-controlled"), /^ {10}BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}$/m);
+  const order = ["Remove planted review directories", "Checkout trusted rules from the base commit", "Replace PR-controlled", "Restore scripts/agents", "Clear the hook canary", "Claude review\n", "Check the hook canary"];
+  const at = order.map((n) => REVIEW.indexOf(`- name: ${n}`));
+  assert.deepEqual([...at].sort((a, b) => a - b), at, `step order: ${order.join(" < ")}`);
+  assert.ok(!at.includes(-1), "a restore or canary step is missing");
+  assert.match(stepBlock(REVIEW, "Clear the hook canary"), /rm -f -- "\$RUNNER_TEMP\/agents-hooks-ran" "\$\{TMPDIR:-\/tmp\}\/agents-hooks-ran"/);
+  const post = stepBlock(REVIEW, "Check the hook canary");
+  assert.match(post, /^ {8}if: always\(\)$/m);
+  for (const f of ["$RUNNER_TEMP", "${TMPDIR:-/tmp}"]) assert.ok(post.includes(`if [ -e "${f}/agents-hooks-ran" ]; then echo "::error::disableAllHooks not honoured`), f);
+  const args = /^ {10}# agents-drift:claude-args\n {10}claude_args: \|\n((?: {12}.*\n)+)/m.exec(REVIEW)?.[1];
+  assert.ok(args, "claude-args marker must sit directly above claude_args");
+  assert.match(args, /^ {12}--settings '\{"disableAllHooks": true\}'$/m);
+  assert.match(args, /^ {12}--disallowedTools "Read\(\.\/\.git\/\*\*\),Read\(\.\/\.review-base\/\.git\/\*\*\),Skill,Agent,Task"$/m);
+  assert.doesNotMatch(/--allowedTools "([^"]*)"/.exec(args)[1], /\b(Skill|Agent|Task)\b/);
+});
+
 // The ci-jobs.mjs ban list: any import, or a process, worker, vm or eval route (#500 review, #505).
 const CI_JOBS_BANNED = /^\s*import\b|\bimport\s*\(|\brequire\s*\(|child_process|worker_threads|node:vm|eval\(|Function\(|process\./m;
 

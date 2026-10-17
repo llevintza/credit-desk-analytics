@@ -2,7 +2,8 @@ name: agents
 
 # ADR-0020 head-run agent checks (docs/agents/testing.md). This PR's own code runs here on
 # pull_request, so these jobs test the change; the base-run checks that judge a PR live in
-# agents-governance.yml. review-restore-matrix joins this file with Stage B7.
+# agents-governance.yml. review-restore-matrix tests the claude-review.yml restore blocks;
+# agents-generate runs the generator check and every drift check on the head.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -47,6 +48,48 @@ jobs:
             awk '/start of coverage report/,/end of coverage report/' "$RUNNER_TEMP/agents-tests.out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # docs/agents/testing.md: runs the marked restore blocks of the head claude-review.yml through the
+  # rebuilt matrix (41 cases x 3 modes), matrix-scripts (14 runs) and mutations (18 faults) scripts.
+  review-restore-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # On pull_request the base copies of the scripts also judge the head block, so a PR can't
+      # weaken the tests and the block together.
+      - name: Checkout the base restore tests
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _base
+          persist-credentials: false
+          sparse-checkout: scripts/agents/test/restore
+      - name: Restore tests (head scripts)
+        run: |
+          set -o pipefail
+          for s in matrix matrix-scripts mutations; do
+            bash "scripts/agents/test/restore/$s.sh" .github/workflows/claude-review.yml | tee -a "$RUNNER_TEMP/restore.out"
+          done
+          { echo "## review-restore-matrix (head scripts)"; echo; grep -E '^(matrix|mutations)' "$RUNNER_TEMP/restore.out"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore tests (base scripts, head block)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -o pipefail
+          # Bootstrap: base has no restore tests until the PR that adds them merges.
+          if [ ! -d _base/scripts/agents/test/restore ]; then
+            echo "::notice::base has no scripts/agents/test/restore yet (bootstrap); head scripts only."
+            exit 0
+          fi
+          for s in matrix matrix-scripts mutations; do
+            bash "_base/scripts/agents/test/restore/$s.sh" .github/workflows/claude-review.yml | tee -a "$RUNNER_TEMP/restore-base.out"
+          done
+          { echo "## review-restore-matrix (base scripts)"; echo; grep -E '^(matrix|mutations)' "$RUNNER_TEMP/restore-base.out"; } >> "$GITHUB_STEP_SUMMARY"
 
   # The generator and every drift check, with this PR's own code (drift-checks.md "Head job").
   agents-generate:
