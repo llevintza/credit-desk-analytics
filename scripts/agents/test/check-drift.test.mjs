@@ -179,7 +179,7 @@ test("frontmatter and the summary escaping", () => {
 });
 
 test("treeView fails closed on unsafe listing paths and unreadable listed files", () => {
-  assert.throws(() => treeView(scratch(), [{ path: "../x", type: "blob" }]), /unsafe path in listing/);
+  assert.throws(() => treeView(scratch(), [{ path: "../x", type: "blob" }]), (e) => e.message === "unsafe path in listing" && e.detail === "../x");
   const v = treeView(scratch(), [{ path: "AGENTS.md", mode: "100644", type: "blob" }]);
   assert.throws(() => v.read("AGENTS.md"), /ENOENT/);
   assert.equal(v.read("absent.md"), null);
@@ -274,4 +274,16 @@ test("main: a malformed or unknown-id trusted arming.json fails closed", () => {
     assert.equal(main(["--root", d, "--base", d], {}, { write: c.write }), 1);
     assert.match(c.text(), /^::error::agents-drift: arming.json/);
   }
+});
+
+test("main: an unsafe --paths entry is printed only escaped; a --root inside another repo fails", () => {
+  const paths = join(scratch(), "paths.json");
+  writeFileSync(paths, JSON.stringify([{ path: "a\n::warning::x", mode: "100644", type: "blob" }]));
+  const c = capture();
+  assert.equal(main(["--root", scratch(), "--paths", paths], {}, { write: c.write }), 1);
+  assert.match(c.text(), /^::error::agents-drift: unsafe path in listing\n::stop-commands::\w+\n"a\\n::warning::x"\n/);
+  const repo = gitRepo({ "AGENTS.md": "x\n", "sub/f.txt": "y" });
+  const n = capture();
+  assert.equal(main(["--root", join(repo, "sub")], {}, { write: n.write }), 1);
+  assert.match(n.text(), /must be the top of a git work tree/);
 });

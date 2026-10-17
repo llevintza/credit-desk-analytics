@@ -13,10 +13,10 @@
  * from the base copy of arming.json. Any lookup error fails the job.
  */
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CheckError, capNames, escapeHtml, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
+import { CheckError, capNames, escapeHtml, fail, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
 import { TEXT_CHECKS } from "./lib/checks-text.mjs";
 import { TREE_CHECKS, validateArming } from "./lib/checks-tree.mjs";
 
@@ -24,6 +24,9 @@ export const CHECKS = Object.freeze({ ...TREE_CHECKS, ...TEXT_CHECKS });
 
 /** `git ls-tree -r -z` of HEAD in `dir`: [{path, mode, type, sha}]. */
 export function gitListing(dir) {
+  // Never list an enclosing repository: `dir` must be the top of its own work tree (#502 nit).
+  const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  if (realpathSync(top) !== realpathSync(dir)) throw new CheckError("--root/--base must be the top of a git work tree");
   const out = execFileSync("git", ["-C", dir, "ls-tree", "-r", "-z", "--full-tree", "HEAD"], { encoding: "utf8", maxBuffer: 64 << 20 });
   return out.split("\0").filter(Boolean).map((l) => {
     const [meta, path] = l.split("\t");
@@ -35,7 +38,7 @@ export function gitListing(dir) {
 /** Read-only view of one tree for the checks. Unknown paths read as null; listed ones must read. */
 export function treeView(root, listing) {
   const entries = listing.filter((e) => e.type !== "tree");
-  for (const e of entries) if (!isSafePath(e.path)) throw new CheckError(`unsafe path in listing: ${JSON.stringify(e.path)}`);
+  for (const e of entries) if (!isSafePath(e.path)) fail("unsafe path in listing", e.path);
   const byPath = new Map(entries.map((e) => [e.path, e]));
   const folded = new Map();
   for (const e of entries) folded.set(fold(e.path), [...(folded.get(fold(e.path)) ?? []), e.path]);
@@ -116,6 +119,7 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     return failed.length ? 1 : 0;
   } catch (err) {
     write(`::error::agents-drift: ${err instanceof CheckError ? err.message : "lookup or parse error (fail closed)"}\n`);
+    if (err instanceof CheckError && err.detail !== undefined) logUntrusted(write, [err.detail]);
     return 1;
   }
 }
