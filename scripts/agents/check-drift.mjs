@@ -17,7 +17,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CheckError, capNames, escapeHtml, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
-import { TREE_CHECKS } from "./lib/checks-tree.mjs";
+import { TREE_CHECKS, validateArming } from "./lib/checks-tree.mjs";
 
 export const CHECKS = Object.freeze({ ...TREE_CHECKS });
 
@@ -100,7 +100,8 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     const base = baseDir ? treeView(resolve(baseDir), gitListing(resolve(baseDir))) : null;
     // Arming is always the trusted copy, never the PR's.
     const own = (f) => (base ? join(base.root, "scripts/agents", f) : fileURLToPath(new URL(`./${f}`, import.meta.url)));
-    const arming = JSON.parse(readFileSync(own("arming.json"), "utf8"));
+    // The trusted copy must name only checks this checker has (P is the presence rule).
+    const arming = validateArming(JSON.parse(readFileSync(own("arming.json"), "utf8")), new Set(Object.keys(CHECKS)));
     const ctx = { head, base, arming, armed: armed(arming, head, base) };
     const results = runChecks(ctx);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary(results, ctx.armed.off));

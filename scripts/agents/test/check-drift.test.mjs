@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECKS, armed, main, runChecks, summary, treeView } from "../check-drift.mjs";
-import { frontmatter } from "../lib/checks-tree.mjs";
+import { CHECK_ID, frontmatter, validateArming } from "../lib/checks-tree.mjs";
 import { capture, scratch } from "./helpers.mjs";
 
 const ARMING = JSON.parse(readFileSync(new URL("../arming.json", import.meta.url), "utf8"));
@@ -152,7 +152,7 @@ test("D22 arming.json may only grow; P keeps subjects present on main", () => {
   fails("D22", { "scripts/agents/arming.json": null }, /missing is a fail/);
   fails("D22", { "scripts/agents/arming.json": JSON.stringify({ ...ARMING, alwaysArmed: ARMING.alwaysArmed.slice(1) }) }, /drops always-armed D1/);
   fails("D22", { "scripts/agents/arming.json": JSON.stringify({ ...ARMING, subjects: { D2: ["*/**/AGENTS.md"] } }) }, /drops subject \*\/\*\*\/CLAUDE.md of D2/);
-  fails("D22", { "scripts/agents/arming.json": JSON.stringify({ alwaysArmed: [] }) }, /drops/, {});
+  fails("D22", { "scripts/agents/arming.json": JSON.stringify({ alwaysArmed: [], subjects: {} }) }, /drops/, {});
   passes("D22", { "scripts/agents/arming.json": JSON.stringify({ ...ARMING, alwaysArmed: [...ARMING.alwaysArmed, "D99"] }) }, {});
   fails("P", { "web/AGENTS.md": null, "web/CLAUDE.md": null }, /web\/AGENTS.md is on main and missing from the PR/, {});
   passes("P", { "Web/AGENTS.md": "x", "web/AGENTS.md": null }, {});
@@ -233,4 +233,34 @@ test("main: --paths listing (the base-job form), no base, disarmed notice, usage
   assert.match(e.text(), /lookup or parse error \(fail closed\)/);
   const r = spawnSync(process.execPath, [fileURLToPath(new URL("../check-drift.mjs", import.meta.url))], { encoding: "utf8" });
   assert.equal(r.status, 1);
+});
+
+test("D22 strict arming.json shape: strings for arrays, unknown ids, extra keys, duplicates (#502 review)", () => {
+  const as = (x) => ({ "scripts/agents/arming.json": JSON.stringify(x) });
+  const bad = {
+    "space-joined string": { alwaysArmed: ARMING.alwaysArmed.join(" "), subjects: ARMING.subjects },
+    "subject globs as a string": { alwaysArmed: ARMING.alwaysArmed, subjects: { D2: ARMING.subjects.D2.join(" ") } },
+    "unknown id": { alwaysArmed: [...ARMING.alwaysArmed, "X1"], subjects: ARMING.subjects },
+    "unknown subject id": { alwaysArmed: ARMING.alwaysArmed, subjects: { ...ARMING.subjects, "../x": ["a"] } },
+    "extra key": { ...ARMING, disarmed: ["D1"] },
+    "missing key": { alwaysArmed: ARMING.alwaysArmed },
+    duplicate: { alwaysArmed: [...ARMING.alwaysArmed, "D1"], subjects: ARMING.subjects },
+    "empty glob": { alwaysArmed: ARMING.alwaysArmed, subjects: { D2: [""] } },
+    "subjects array": { alwaysArmed: ARMING.alwaysArmed, subjects: [] },
+    "not an object": [ARMING],
+  };
+  for (const [what, x] of Object.entries(bad)) fails("D22", as(x), /arming.json is malformed/, {});
+  fails("D22", { "scripts/agents/arming.json": "null" }, /malformed: arming.json must be an object/);
+  assert.throws(() => validateArming({ alwaysArmed: ["D2x"], subjects: {} }, new Set(["D1"])), /unknown check id D2x/);
+  assert.ok(CHECK_ID.test("D8a") && CHECK_ID.test("DEP") && !CHECK_ID.test("D8 ") && !CHECK_ID.test("d1"));
+});
+
+test("main: a malformed or unknown-id trusted arming.json fails closed", () => {
+  for (const arming of [{ alwaysArmed: "D1 D3", subjects: {} }, { alwaysArmed: ["D99"], subjects: {} }]) {
+    const own = { "scripts/agents/arming.json": JSON.stringify(arming), "scripts/agents/adapters.json": JSON.stringify(ADAPTERS) };
+    const d = gitRepo({ ...GOOD, ...own });
+    const c = capture();
+    assert.equal(main(["--root", d, "--base", d], {}, { write: c.write }), 1);
+    assert.match(c.text(), /^::error::agents-drift: arming.json/);
+  }
 });
