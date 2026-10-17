@@ -30,3 +30,7 @@ secrets/
 .vscode/*
 !.vscode/extensions.json
 perf/out/
+
+# Local agent files that must never be committed (ADR-0020 §1; D3)
+CLAUDE.local.md
+.claude/settings.local.json
