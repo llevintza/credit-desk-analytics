@@ -203,3 +203,35 @@ test("D12 claude-review.yml once armed", () => {
   fails("D12", { ...files, [`${W}claude-review.yml`]: good.replace(",Task", "") }, /lacks Task/);
   fails("D12", { ...files, "AGENTS.md": "See README §99.\n" }, /cites README §99/);
 });
+
+test("D20 canonical layout: the #504 review's non-canonical forms fail closed", () => {
+  const wf = (jobs) => `name: x\non: push\npermissions:\n  contents: read\njobs:\n${jobs}`;
+  const rows = {
+    "quoted key": wf('  spoof:\n    "name": governance-paths (base)\n    runs-on: ubuntu-24.04\n'),
+    "job keys at 6": wf("  spoof:\n      name: governance-paths (base)\n      runs-on: ubuntu-24.04\n"),
+    "job ids at 4": wf("    spoof:\n      name: governance-paths (base)\n"),
+    "jobs: # comment": "name: x\non: push\npermissions: {}\njobs: # c\n  a:\n    runs-on: x\n".replace("jobs: # c", "jobs: {a: {name: x}}"),
+    "flow-style job": wf("  spoof: {name: governance-paths (base), runs-on: ubuntu-24.04}\n"),
+    "ci.yml quoted if": wf('  secrets:\n    "if": always()\n    runs-on: ubuntu-24.04\n'),
+    "ci.yml keys at 6 with if": wf("  secrets:\n      if: always()\n      runs-on: ubuntu-24.04\n"),
+    "job key at 3": wf("  a:\n   name: x\n"),
+    "job key at 5": wf("  a:\n    name: x\n     runs-on: y\n"),
+    "flow job key": wf("  a:\n    steps: [{uses: x}]\n"),
+    "flow step": wf("  a:\n    steps:\n      - {uses: actions/checkout@main}\n"),
+    "anchor": wf("  a: &base\n    runs-on: x\n"),
+    "merge key": wf("  a:\n    <<: *base\n"),
+    alias: wf("  a:\n    permissions: *p\n"),
+  };
+  for (const [what, text] of Object.entries(rows)) assert.ok(run("D20", { [`${W}x.yml`]: text }).some((m) => /non-canonical layout/.test(m)), what);
+  passes("D20", { [`${W}x.yml`]: wf("  a: # ok\n    needs: [b, c]\n    runs-on: x\n    steps:\n      - run: |\n          echo hi\n\n  b:\n    # a comment\n    runs-on: y\n") });
+  // The same layout trick in the governance file and in agents.yml's uses: fails too.
+  const govShifted = GOV.replace(/^ {2}agents-drift-base:$/m, "    agents-drift-base:").replace("    timeout-minutes: 5", "    if: always()\n    timeout-minutes: 5");
+  fails("D20", gov(govShifted), /non-canonical layout/);
+  assert.ok(run("D21", { [`${W}agents.yml`]: 'jobs:\n  a:\n    steps:\n      - "uses": actions/checkout@main\n' }).length > 0, "quoted uses");
+});
+
+test("D23 reference-style link definitions resolve too", () => {
+  const base = { "docs/agents/README.md": "# Index\n", "docs/agents/guidelines/a.md": "# a\n" };
+  passes("D23", { ...base, "docs/agents/README.md": "[g](guidelines/a.md) [x][r]\n\n[r]: guidelines/a.md\n" });
+  fails("D23", { ...base, "docs/agents/README.md": "[g](guidelines/a.md) [x][r]\n\n[r]: <nope.md>\n" }, /link nope.md does not resolve/);
+});

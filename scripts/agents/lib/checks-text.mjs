@@ -42,11 +42,52 @@ export function jobs(yml) {
   return out;
 }
 
+/**
+ * The checks below read workflows by layout, so a file must use the canonical layout or it
+ * fails (closed): no quoted keys, anchors, aliases or merge keys; exactly `jobs:`; job ids at
+ * 2 spaces and job keys at exactly 4; no flow-style job, step or job key (but `needs: [..]`).
+ * Valid YAML in another layout would otherwise slip past the line-anchored rules (#504 review).
+ */
+export function layoutProblems(yml) {
+  const out = [];
+  const lines = yml.split("\n");
+  let inJobs = false;
+  let firstKey = false;
+  let seenId = false;
+  lines.forEach((l, n) => {
+    const at = `line ${n + 1}`;
+    if (/^\s*(#.*)?$/.test(l)) return;
+    if (/^\s*(-\s+)?["'][^"']*["']\s*:/.test(l)) out.push(`${at}: quoted mapping key`);
+    if (/(^|\s)<<\s*:|:\s+[&*][A-Za-z_]|^\s*-\s+[&*][A-Za-z_]/.test(l)) out.push(`${at}: YAML anchor, alias or merge key`);
+    if (/^\s*-\s*[{[]/.test(l)) out.push(`${at}: flow-style sequence item`);
+    if (/^\S/.test(l)) {
+      inJobs = /^jobs\s*:/.test(l);
+      seenId = false;
+      if (inJobs && !/^jobs:\s*(#.*)?$/.test(l)) out.push(`${at}: jobs must be a plain block mapping`);
+      return;
+    }
+    if (!inJobs) return;
+    const indent = /^ */.exec(l)[0].length;
+    if (indent === 2) {
+      if (!/^ {2}[A-Za-z_][\w-]*:\s*(#.*)?$/.test(l)) out.push(`${at}: a job id must be a plain key at 2 spaces`);
+      firstKey = true;
+      seenId = true;
+      return;
+    }
+    if (!seenId) out.push(`${at}: the first line under jobs: must be a job id at 2 spaces`);
+    if (indent < 4 || indent === 5 || (firstKey && indent !== 4)) out.push(`${at}: job keys must be at exactly 4 spaces`);
+    firstKey = false;
+    if (indent === 4 && /^ {4}[\w-]+:\s*[{[]/.test(l) && !/^ {4}needs:\s*\[[\w\s,-]*\]\s*$/.test(l)) out.push(`${at}: flow-style job key`);
+  });
+  return out;
+}
+
 /** NFKC, zero-width characters removed, case-folded: the D20 look-alike normalization. */
 const norm = (s) => s.normalize("NFKC").replace(/[​-‏⁠﻿]/g, "").toLowerCase();
 
 // D21, verbatim from drift-checks.md (rev 5 regex).
-const USES_SELECT = /(^|[\s{,-])uses\s*:/;
+// The selector also catches a quoted key (#504 review), wider than the rev 5 text.
+const USES_SELECT = /(^|[\s{,-])["']?uses["']?\s*:/;
 const USES_OK = /^\s*(-\s+)?uses:\s+(\.\/[\w./-]+(\s+#.*)?|[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s+#\s*v\d\S*.*)$/;
 
 function governanceFile(yml, r) {
@@ -189,6 +230,7 @@ export const TEXT_CHECKS = {
       const c = code(yml);
       if (!c.some((l) => /^permissions:/.test(l))) r.fail(`${p}: no top-level permissions: block`);
       if (c.some((l) => /statuses:\s*write|checks:\s*write|write-all/.test(l))) r.fail(`${p}: grants statuses/checks write or write-all`);
+      for (const m of layoutProblems(yml)) r.fail(`${p}: non-canonical layout (fails closed): ${m}`);
       if (fold(p) === fold(GOVERNANCE_WF)) {
         governanceFile(yml, r);
         continue;
@@ -212,12 +254,15 @@ export const TEXT_CHECKS = {
     for (const p of files) {
       const text = head.read(p) ?? "";
       const d = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-      for (const m of text.replace(/`[^`\n]*`/g, "").matchAll(/\]\(([^)\s]+)\)/g)) {
-        const [target, frag] = m[1].split("#");
+      const plain = text.replace(/`[^`\n]*`/g, "");
+      // Inline links, and reference-style definitions (`[ref]: path`, #504 nit).
+      const targets = [...plain.matchAll(/\]\(([^)\s]+)\)/g), ...plain.matchAll(/^ {0,3}\[[^\]]+\]:\s*<?([^>\s]+)>?/gm)].map((m) => m[1]);
+      for (const link of targets) {
+        const [target, frag] = link.split("#");
         if (/^[a-z][\w+.-]*:/i.test(target)) continue; // URL or mailto
         const path = target === "" ? p : join(d, target);
         if (path === null || !(head.has(path) || head.paths.some((x) => x.startsWith(`${path}/`)))) {
-          r.fail(`${p}: link ${m[1]} does not resolve`);
+          r.fail(`${p}: link ${link} does not resolve`);
           continue;
         }
         if (frag && /\.md$/.test(path) && matchesAny(path, inputs) && !anchors(head.read(path)).has(frag)) r.fail(`${p}: anchor #${frag} not found in ${path}`);
