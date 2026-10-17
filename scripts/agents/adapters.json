@@ -1,0 +1,32 @@
+{
+  "inputs": [
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
+    ".claude/**",
+    ".cursor/**",
+    ".cursorignore",
+    ".cursorrules",
+    "docs/agents/**",
+    "scripts/agents/*.json",
+    "scripts/agents/hooks/**",
+    "README.md",
+    "docs/deployment-setup.md",
+    ".gitleaks.toml",
+    ".github/workflows/*.y*ml",
+    ".mcp.json",
+    ".gitignore",
+    "perf/coverage-baseline.json"
+  ],
+  "enforcement": [
+    ".github/**",
+    "scripts/agents/**",
+    "perf/coverage-*",
+    "tests/testconfig.json",
+    ".gitmodules",
+    "**/.claude/**",
+    ".grok/**",
+    "**/CLAUDE.local.md",
+    ".claudeignore",
+    ".cursorrules"
+  ]
+}
