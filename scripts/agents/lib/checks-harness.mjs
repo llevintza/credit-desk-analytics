@@ -16,29 +16,68 @@ const CLI = ".cursor/cli.json";
 const GENERATOR = "scripts/agents/generate.mjs";
 const CI_LINE = (h) => `if (process.env.CI || process.env.GITHUB_ACTIONS === 'true') { markCiHookRan('${h}'); process.exit(0); }`;
 
+const isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * A present file must parse to a plain object: `null`, `false`, `0`, `""` or an array would
+ * otherwise read as "no settings" and skip every rule (#513 review). Absent is null.
+ */
 const json = (view, p, r) => {
   const t = view?.read(p) ?? null;
   if (t === null) return null;
+  let v;
   try {
-    return JSON.parse(t);
+    v = JSON.parse(t);
   } catch {
     r.fail(`${p} is not valid JSON`);
     return undefined;
   }
+  if (!isObj(v)) {
+    r.fail(`${p} must be a JSON object`);
+    return undefined;
+  }
+  return v;
 };
-const perms = (s) => s?.permissions ?? {};
+/** The permission lists, as string arrays; a malformed list reads as empty (shape() fails it). */
+const perms = (s) => {
+  const p = isObj(s?.permissions) ? s.permissions : {};
+  const list = (k) => (Array.isArray(p[k]) ? p[k].filter((e) => typeof e === "string") : []);
+  return { allow: list("allow"), ask: list("ask"), deny: list("deny") };
+};
+
+// D18 allowlists (#513 review): any other settings key fails closed, so a new Claude Code key
+// that runs code or loosens permissions (defaultMode, additionalDirectories, enabledPlugins,
+// awsCredentialExport, enableAllProjectMcpServers, …) needs a reviewed checker change first.
+const SETTINGS_KEYS = { "": ["$schema", "permissions", "hooks"], permissions: ["allow", "ask", "deny"] };
+const CLI_KEYS = { "": ["permissions"], permissions: ["allow", "deny"] };
+
+/** Only the allowlisted keys, and each permission list an array of strings. */
+function shape(v, p, keys, r) {
+  for (const k of Object.keys(v)) if (!keys[""].includes(k)) r.fail(`${p}: key ${k} is not allowed`);
+  if (v.permissions === undefined) return;
+  if (!isObj(v.permissions)) return r.fail(`${p}: permissions must be an object`);
+  for (const [k, list] of Object.entries(v.permissions)) {
+    if (!keys.permissions.includes(k)) r.fail(`${p}: permissions.${k} is not allowed`);
+    else if (!Array.isArray(list) || list.some((e) => typeof e !== "string")) r.fail(`${p}: permissions.${k} must be an array of strings`);
+  }
+}
 
 /** Bare and `**\/` forms of a Read/Edit glob are the same rule (Helms/CR ruling 2). */
 const norm = (e) => e.replace(/^(Read|Edit|Write)\((!?)(?!\*\*\/)([^)]*)\)$/, "$1($2**/$3)");
 
-/** `e` is in `set`, or a broader `*` entry in `set` covers it. */
+/**
+ * `e` is in `set`, or a broader prefix entry covers it: `Tool(prefix *)` covers every
+ * `Tool(prefix …)`. Only a trailing ` *` counts, the form whose meaning is plain in every
+ * harness; a mid-string `*` never covers anything (fail closed, and linear: #513 review).
+ * Read/Edit/Write globs match exactly.
+ */
 export function covered(e, set) {
   const n = norm(e);
   return set.some((s) => {
     const x = norm(s);
     if (x === n) return true;
-    if (!x.includes("*") || /^(Read|Edit|Write)\(/.test(x)) return false;
-    return new RegExp(`^${x.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(n);
+    const m = /^(Bash|Shell)\(([^*]*) \*\)$/.exec(x);
+    return m !== null && n.startsWith(`${m[1]}(${m[2]} `);
   });
 }
 
@@ -47,31 +86,41 @@ const extra = (have, cap) => have.filter((e) => !cap.some((c) => norm(c) === nor
 
 function claudeChecks(head, base, map, r) {
   const s = json(head, SETTINGS, r);
-  if (!s) return;
+  if (s === undefined) return;
+  if (s === null) {
+    if (base?.has(SETTINGS)) r.fail(`${SETTINGS} is on main and missing from the PR`);
+    return;
+  }
+  shape(s, SETTINGS, SETTINGS_KEYS, r);
   const b = json(base, SETTINGS, r);
   const { deny = [], allow = [], ask = [] } = perms(s);
   const carve = deny.filter((e) => /^\w+\(!/.test(e));
   const denies = deny.filter((e) => !carve.includes(e));
-  const okCarve = b ? perms(b).deny?.filter((e) => /^\w+\(!/.test(e)) ?? [] : CLAUDE_CARVE_OUTS;
+  const okCarve = b ? perms(b).deny.filter((e) => /^\w+\(!/.test(e)) : CLAUDE_CARVE_OUTS;
   for (const e of carve) if (!okCarve.includes(e)) r.fail(`${SETTINGS}: a new ! carve-out loosens the deny list: ${e}`);
-  const floor = b ? perms(b).deny?.filter((e) => !/^\w+\(!/.test(e)) ?? [] : MIN_DENY;
+  const floor = b ? perms(b).deny.filter((e) => !/^\w+\(!/.test(e)) : MIN_DENY;
   for (const e of missing(floor, denies)) r.fail(`${SETTINGS}: deny lacks ${e} (${b ? "on main" : "MIN_DENY"})`);
   if (!deny.includes(BARE_PUSH)) r.fail(`${SETTINGS}: deny lacks the exact ${BARE_PUSH} (H11)`);
-  for (const e of extra(allow, b ? perms(b).allow ?? [] : MAX_ALLOW)) r.fail(`${SETTINGS}: allow ${e} is not ${b ? "on main" : "within MAX_ALLOW"}`);
-  for (const e of missing(b ? perms(b).ask ?? [] : ASK, ask)) r.fail(`${SETTINGS}: ask lacks ${e}`);
+  for (const e of extra(allow, b ? perms(b).allow : MAX_ALLOW)) r.fail(`${SETTINGS}: allow ${e} is not ${b ? "on main" : "within MAX_ALLOW"}`);
+  for (const e of missing(b ? perms(b).ask : ASK, ask)) r.fail(`${SETTINGS}: ask lacks ${e}`);
   for (const e of [...deny, ...allow]) if (/^Bash\(/.test(e) && e !== BARE_PUSH && !(map && e in map)) r.fail(`${SETTINGS}: ${e} has no permission-map.json entry`);
   return s;
 }
 
 function cursorChecks(head, base, settings, mapText, r) {
   const c = json(head, CLI, r);
-  if (!c) return;
+  if (c === undefined) return;
+  if (c === null) {
+    if (base?.has(CLI)) r.fail(`${CLI} is on main and missing from the PR`);
+    return;
+  }
+  shape(c, CLI, CLI_KEYS, r);
   const b = json(base, CLI, r);
   const { deny = [], allow = [] } = perms(c);
   for (const e of [...deny, ...allow]) if (/^Shell\([^:)]* /.test(e)) r.fail(`${CLI}: ${e} uses the space form; only Shell(cmd:args) (U9)`);
   for (const e of CURSOR_FORBIDDEN_DENY) if (deny.includes(e)) r.fail(`${CLI}: ${e} is a broad push deny (H7, H11)`);
-  for (const e of missing(b ? perms(b).deny ?? [] : MIN_DENY_CURSOR, deny)) r.fail(`${CLI}: deny lacks ${e} (${b ? "on main" : "MIN_DENY_CURSOR"})`);
-  for (const e of extra(allow, b ? perms(b).allow ?? [] : MAX_ALLOW_CURSOR)) r.fail(`${CLI}: allow ${e} is not ${b ? "on main" : "within MAX_ALLOW_CURSOR"}`);
+  for (const e of missing(b ? perms(b).deny : MIN_DENY_CURSOR, deny)) r.fail(`${CLI}: deny lacks ${e} (${b ? "on main" : "MIN_DENY_CURSOR"})`);
+  for (const e of extra(allow, b ? perms(b).allow : MAX_ALLOW_CURSOR)) r.fail(`${CLI}: allow ${e} is not ${b ? "on main" : "within MAX_ALLOW_CURSOR"}`);
   if (settings && mapText !== null) {
     let mapped;
     try {
@@ -107,7 +156,9 @@ export const HARNESS_CHECKS = {
     for (const p of head.glob(["**/.cursor/rules/**"])) {
       if (!/^\.cursor\/rules\/areas\/[^/]+\.mdc$/.test(p)) r.fail(`${p}: .cursor rules may exist only as root .cursor/rules/areas/*.mdc`);
       else if (!manifest.some((o) => o.path === p)) r.fail(`${p} is not a generated output (cursorAreaRules is off)`);
-      if (/^alwaysApply:\s*true\s*$/m.test(head.read(p) ?? "")) r.fail(`${p}: alwaysApply: true is not allowed`);
+      // Any alwaysApply other than a plain `false` fails: True, yes, "true", `alwaysApply :` (#513 nit).
+      for (const m of (head.read(p) ?? "").matchAll(/^\s*["']?alwaysApply["']?\s*:\s*(.*?)\s*(#.*)?$/gim))
+        if (m[1] !== "false") r.fail(`${p}: alwaysApply must be false`);
     }
   },
 
@@ -129,6 +180,7 @@ export const HARNESS_CHECKS = {
       const first = (head.read(p) ?? "").split("\n", 1)[0];
       if (/^(#|<!--) GENERATED from /.test(first) && !outputs.has(p)) r.fail(`${p} has a generated header but is not a manifest output`);
     }
+    if (base?.has(GENERATOR) && !head.has(GENERATOR)) return r.fail(`${GENERATOR} is on main and missing from the PR`);
     const changed = base && head.entry(GENERATOR)?.sha !== base.entry(GENERATOR)?.sha;
     const want = render(manifest, head.read);
     for (const p of outputs) {
@@ -155,6 +207,7 @@ export function d18Harness(head, r) {
   const s = json(head, SETTINGS, r);
   if (s) {
     for (const k of SETTINGS_FORBIDDEN_KEYS) if (k in s) r.fail(`${SETTINGS}: key ${k} is not allowed`);
+    if (s.hooks !== undefined && !isObj(s.hooks)) r.fail(`${SETTINGS}: hooks must be an object`);
     for (const [event, groups] of Object.entries(s.hooks ?? {}))
       for (const g of [].concat(groups))
         for (const h of [].concat(g?.hooks ?? [])) if (!HOOK_ALLOWLIST.includes(h?.command)) r.fail(`${SETTINGS}: a ${event} hook command is not on the allowlist`);

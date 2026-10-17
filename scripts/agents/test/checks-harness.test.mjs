@@ -125,7 +125,9 @@ test("D4: .cursor rules only as generated root areas/*.mdc, never alwaysApply: t
   fails("D4", { ".cursor/rules/x.mdc": "x" }, /only as root \.cursor\/rules\/areas/);
   fails("D4", { "web/.cursor/rules/areas/x.mdc": "x" }, /only as root/);
   fails("D4", { ".cursor/rules/areas/web.mdc": "x" }, /not a generated output/);
-  fails("D4", { ".cursor/rules/areas/web.mdc": "---\nalwaysApply: true\n---\n" }, /alwaysApply: true/);
+  for (const v of ["alwaysApply: true", "alwaysApply: True", "alwaysApply : true", '"alwaysApply": true', 'alwaysApply: "true"', "alwaysApply: yes", "alwaysApply: true # c"])
+    fails("D4", { ".cursor/rules/areas/web.mdc": `---\n${v}\n---\n` }, /alwaysApply must be false/, undefined, undefined);
+  assert.ok(!run("D4", { ".cursor/rules/areas/web.mdc": "---\nalwaysApply: false\n---\n" }).fails.some((m) => /alwaysApply/.test(m)));
 });
 
 const LINE1 = (h) => `if (process.env.CI || process.env.GITHUB_ACTIONS === 'true') { markCiHookRan('${h}'); process.exit(0); }`;
@@ -151,6 +153,37 @@ test("covered(): exact, bare = **/, and a broader * entry", () => {
   assert.ok(covered("Bash(git push * main)", ["Bash(git push *)"]));
   assert.ok(!covered("Bash(git push * main)", ["Bash(git push origin)"]));
   assert.ok(!covered("Read(**/.env)", ["Read(**)"]), "Read/Edit globs only match exactly");
+  assert.ok(!covered("Bash(git push * main)", ["Bash(git * main)"]), "a mid-string * never covers");
+  assert.ok(!covered("Bash(gh api *rulesets*)", ["Bash(gh *)x"]));
+  const slow = `Bash(${"a*".repeat(16)}Z)`;
+  const t0 = Date.now();
+  assert.ok(!covered("Bash(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)", [slow]));
+  assert.ok(Date.now() - t0 < 50, "linear, no regex backtracking");
   assert.ok(covered("Shell(curl)", ["Shell(curl)"]));
   assert.equal(renderCursorCli(JSON.stringify(SETTINGS), MAP), GOOD[C]);
+});
+
+test("D10/D18 shape (#513 review): a present file must be an object with allowlisted keys only", () => {
+  for (const lit of ["null", "false", "0", '""', "[]", "[1]"]) {
+    fails("D10", { ...GOOD, [S]: lit }, /settings.json must be a JSON object/, GOOD);
+    fails("D18", { ...GOOD, [S]: lit }, /settings.json must be a JSON object/);
+    fails("D10", { ...GOOD, [C]: lit }, /cli.json must be a JSON object/, GOOD);
+  }
+  const add = (fn) => settings((p, st) => fn(p, st));
+  fails("D10", add((p) => (p.defaultMode = "bypassPermissions")), /permissions.defaultMode is not allowed/);
+  fails("D10", add((p) => (p.additionalDirectories = ["/"])), /permissions.additionalDirectories is not allowed/);
+  for (const k of ["awsCredentialExport", "enabledPlugins", "extraKnownMarketplaces", "enableAllProjectMcpServers", "env", "statusLine", "model"])
+    fails("D10", add((p, st) => (st[k] = k === "enabledPlugins" ? { "x@y": true } : "x")), new RegExp(`key ${k} is not allowed`));
+  fails("D10", add((p) => (p.deny = "Bash(*)")), /permissions.deny must be an array of strings/);
+  fails("D10", add((p) => p.allow.push(1)), /permissions.allow must be an array of strings/);
+  fails("D10", add((p, st) => (st.permissions = [])), /permissions must be an object/);
+  fails("D10", { ...GOOD, [C]: JSON.stringify({ permissions: { deny: [...MIN_DENY_CURSOR], allow: [] }, x: 1 }) }, /cli.json: key x is not allowed/);
+  fails("D10", { ...GOOD, [C]: JSON.stringify({ permissions: { deny: [...MIN_DENY_CURSOR], allow: [], ask: [] } }) }, /cli.json: permissions.ask is not allowed/);
+  fails("D18", add((p, st) => (st.hooks = [])), /hooks must be an object/);
+  fails("D10", { ...GOOD, [S]: null }, /settings.json is on main and missing from the PR/, GOOD);
+  fails("D10", { ...GOOD, [C]: null }, /cli.json is on main and missing from the PR/, GOOD);
+});
+
+test("D14: a generator that is on main and missing from the PR fails outright (#513 nit)", () => {
+  fails("D14", { ...GOOD, "scripts/agents/generate.mjs": null }, /generate.mjs is on main and missing from the PR/, GOOD);
 });
