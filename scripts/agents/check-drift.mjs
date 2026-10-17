@@ -19,10 +19,11 @@ import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CheckError, capNames, escapeHtml, fail, fold, isSafePath, logUntrusted, matchesAny } from "./lib/common.mjs";
+import { HARNESS_CHECKS } from "./lib/checks-harness.mjs";
 import { TEXT_CHECKS } from "./lib/checks-text.mjs";
 import { TREE_CHECKS, validateArming } from "./lib/checks-tree.mjs";
 
-export const CHECKS = Object.freeze({ ...TREE_CHECKS, ...TEXT_CHECKS });
+export const CHECKS = Object.freeze({ ...TREE_CHECKS, ...TEXT_CHECKS, ...HARNESS_CHECKS });
 
 export const USAGE = "usage: check-drift.mjs --root <dir> --paths <paths.json> [--base <dir>]";
 
@@ -113,7 +114,7 @@ export function main(argv, env, { write = (s) => process.stdout.write(s) } = {})
     // The trusted copy must name only checks this checker has (P is the presence rule).
     const arming = validateArming(JSON.parse(readFileSync(own("arming.json"), "utf8")), new Set(Object.keys(CHECKS)));
     const adapters = JSON.parse(readFileSync(own("adapters.json"), "utf8"));
-    const ctx = { head, base, arming, inputs: adapters.inputs, armed: armed(arming, head, base) };
+    const ctx = { head, base, arming, inputs: adapters.inputs, manifest: adapters.outputs ?? [], armed: armed(arming, head, base) };
     const results = runChecks(ctx);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary(results, ctx.armed.off));
     const failed = results.filter((r) => r.fails.length);
