@@ -1,0 +1,49 @@
+name: agents
+
+# ADR-0020 head-run agent checks (docs/agents/testing.md). This PR's own code runs here on
+# pull_request, so these jobs test the change; the base-run checks that judge a PR live in
+# agents-governance.yml. agents-generate and review-restore-matrix join this file with the
+# harness build (Stage B).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agents-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agents-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Coverage thresholds need >= 22.8; the base jobs run the same pin.
+          node-version: 22.12.0
+          package-manager-cache: false
+      - name: scripts/agents tests (≥80% line/branch)
+        run: |
+          set -o pipefail
+          node --test --experimental-test-coverage \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-include='scripts/agents/**/*.mjs' \
+            --test-coverage-exclude='scripts/agents/test/**' \
+            'scripts/agents/test/*.test.mjs' | tee "$RUNNER_TEMP/agents-tests.out"
+          {
+            echo "## scripts/agents coverage"
+            echo
+            echo '```'
+            awk '/start of coverage report/,/end of coverage report/' "$RUNNER_TEMP/agents-tests.out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
