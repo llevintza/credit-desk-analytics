@@ -14,8 +14,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: agents-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'push' && format('agents-push-{0}', github.sha) || format('agents-pr-{0}', github.event.pull_request.number) }}
+  # Only PR runs cancel a superseded sha; push runs on main are never cancelled (#207).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   agents-tests:
