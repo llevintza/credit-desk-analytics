@@ -9,11 +9,10 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { parse } from "./shell.mjs";
+import { ASSIGN, base, headIndex } from "./words.mjs";
 
-const base = (s) => s.slice(s.lastIndexOf("/") + 1);
 const block = (reason) => ({ code: 2, reason });
 const ok = { code: 0 };
-const ASSIGN = /^[A-Za-z_]\w*=/;
 // G3: these select the repo, its config, the global gitconfig or the git binary.
 const GIT_ENV = /^(?:GIT_\w*|HOME|XDG_CONFIG_HOME|PATH)$/;
 // `-c` keys a one-off command may set: display, identity and history-shaping keys only. Any
@@ -59,7 +58,7 @@ export function gitRepo(cwd, run = runGit) {
  * (`!` aliases come back as { shell }), or undefined when the segment isn't git or hub.
  */
 export function gitCommand(seg, repoAt, cwd) {
-  const at = seg.words.findIndex((w) => w.quoted || !ASSIGN.test(w.text));
+  const at = headIndex(seg);
   const h = seg.words[at];
   if (!h || h.dynamic || !["git", "hub"].includes(base(h.text))) return undefined;
   const env = seg.words.slice(0, at).filter((w) => ASSIGN.test(w.text)).map((w) => w.text.slice(0, w.text.indexOf("=")));
