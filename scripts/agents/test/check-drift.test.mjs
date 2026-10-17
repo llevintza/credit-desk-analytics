@@ -331,3 +331,21 @@ test("main: --root without --paths is a usage error and spawns no git", () => {
   assert.equal(r.stdout, `::error::agents-drift: ${USAGE}\n`);
   assert.equal(existsSync(log), false, "git was spawned");
 });
+
+test("list-paths.mjs writes a checkout's listing in the paths.json shape", async () => {
+  const { main: listPaths } = await import("../list-paths.mjs");
+  const repo = gitRepo({ "AGENTS.md": "x\n", "web/a.txt": "y" });
+  const out = join(scratch(), "paths.json");
+  const c = capture();
+  assert.equal(listPaths(["--root", repo, "--out", out], { write: c.write }), 0);
+  assert.match(c.text(), /^list-paths: 2 entries\n$/);
+  const listing = JSON.parse(readFileSync(out, "utf8"));
+  assert.deepEqual(listing.map((e) => e.path).sort(), ["AGENTS.md", "web/a.txt"]);
+  assert.match(listing[0].sha, /^[0-9a-f]{40}$/);
+  const u = capture();
+  assert.equal(listPaths([], { write: u.write }), 1);
+  assert.match(u.text(), /usage/);
+  const e = capture();
+  assert.equal(listPaths(["--root", join(repo, "web"), "--out", out], { write: e.write }), 1);
+  assert.match(e.text(), /^::error::list-paths: /);
+});
