@@ -5,6 +5,7 @@
     ".claude/**",
     ".cursor/**",
     ".cursorignore",
+    ".cursorrules",
     "docs/agents/**",
     "scripts/agents/*.json",
     "scripts/agents/hooks/**",
@@ -25,6 +26,7 @@
     "**/.claude/**",
     ".grok/**",
     "**/CLAUDE.local.md",
-    ".claudeignore"
+    ".claudeignore",
+    ".cursorrules"
   ]
 }

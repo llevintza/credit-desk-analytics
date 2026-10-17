@@ -59,13 +59,10 @@ test("rejects unsafe paths anywhere in the PR data", async () => {
   await rejects(fakeGithub({ files: [{ filename: "a", previous_filename: "../b", status: "renamed" }] }), /unsafe path/);
 });
 
-test("symlinks and submodules (D15 at fetch time)", async () => {
+test("every symlink fails, incl. one at a steering directory; submodules (D15 at fetch time)", async () => {
   const link = { mode: "120000", type: "blob", size: 5 };
-  await rejects(fakeGithub({ tree: { "web/AGENTS.md": link } }), /symlink at a steering path/);
-  await rejects(fakeGithub({ tree: { ".github/workflows/x.yml": link } }), /symlink at a steering path/);
-  await rejects(fakeGithub({ tree: { "Scripts/Agents/hooks/g.mjs": link } }), /symlink at a steering path/, "case-insensitive");
-  const { n } = await run(fakeGithub({ tree: { "web/public/logo.svg": link } }));
-  assert.equal(n.blobs, 0, "a symlink elsewhere is recorded, never written");
+  for (const p of ["web/AGENTS.md", ".github/workflows/x.yml", "Scripts/Agents/hooks/g.mjs", ".claude", ".Claude", ".github", ".cursor", "docs", "docs/agents", "src/Desk.Api", "web/public/logo.svg"])
+    await rejects(fakeGithub({ tree: { [p]: link } }), /symlink in the PR tree/);
 
   const sub = { mode: "160000", type: "commit" };
   await rejects(fakeGithub({ files: files("vendor/lib"), tree: { "vendor/lib": sub } }), /submodule/);

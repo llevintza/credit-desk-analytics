@@ -53,12 +53,16 @@ export async function collectFiles(api, event) {
   return files;
 }
 
-/** Guard 11 modes: no symlink at a steering path; no submodule that is new, changed or steering. */
+/**
+ * Guard 11 modes. Any symlink fails: a symlinked directory (`.claude`, `docs/agents`, or any
+ * directory under the `**\/AGENTS.md` globs) would hide the steering files behind it from
+ * this API tree, and main has none (#498 review). No submodule that is new, changed or steering.
+ */
 export function checkModes(entries, files, adapters) {
   const steering = [...adapters.inputs, ...adapters.enforcement];
   const touched = new Set(files.filter((f) => f.status !== "removed").map((f) => f.filename));
   for (const e of entries) {
-    if (e.mode === SYMLINK && matchesAny(e.path, steering)) fail("symlink at a steering path", e.path);
+    if (e.mode === SYMLINK) fail("symlink in the PR tree (none are allowed; D15)", e.path);
     if (e.mode === SUBMODULE && (touched.has(e.path) || matchesAny(e.path, steering)))
       fail("new, changed or steering submodule", e.path);
   }
@@ -93,7 +97,7 @@ export async function fetchPrData({ api, event, adapters, outDir }) {
   const entries = tree.tree.map((e) => ({ path: assertSafePath(e.path), mode: e.mode, type: e.type, size: e.size, sha: e.sha }));
   checkModes(entries, files, adapters);
 
-  const wanted = entries.filter((e) => e.type === "blob" && e.mode !== SYMLINK && matchesAny(e.path, adapters.inputs));
+  const wanted = entries.filter((e) => e.type === "blob" && matchesAny(e.path, adapters.inputs));
   if (wanted.length > MAX_BLOBS) fail(`more than ${MAX_BLOBS} steering blobs`);
   for (const e of wanted) if (!(e.size <= MAX_BLOB_BYTES)) fail("steering blob over 1 MB", e.path);
 
