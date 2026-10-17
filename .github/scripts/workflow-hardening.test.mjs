@@ -154,6 +154,15 @@ test("#256 item 2: k6 errors are rc-specific and the compose logs follow a k6 fa
   assert.match(BUDGETS, /- if: failure\(\) \|\| steps\.k6\.outcome == 'failure'\n {8}run: docker compose logs/);
 });
 
+test("#87: the k6 step is blocking: no continue-on-error, so a p95 breach fails budgets", () => {
+  const k6 = stepBlock(BUDGETS, "API latency p95 (k6)");
+  assert.doesNotMatch(k6, /continue-on-error/);
+  // k6's own exit code is the step's: nothing swallows a breach (exit 99) or a failed run.
+  assert.doesNotMatch(k6, /\|\| true|^\s+exit 0$/m);
+  assert.match(k6, /\n {10}exit "\$rc"\n/);
+  assert.doesNotMatch(BUDGETS, /non-blocking|until #87/i);
+});
+
 test("#256 item 2: the k6 step's rc handling, run for 0, 99 and 107 (MIN_BOOK=abc)", () => {
   const k6 = stepBlock(BUDGETS, "API latency p95 (k6)");
   const body = /\n {8}run: \|\n((?: {10}.*\n?|\s*\n)+)/.exec(k6)[1].split("\n").map((l) => l.slice(10)).join("\n");
@@ -171,7 +180,7 @@ test("#256 item 2: the k6 step's rc handling, run for 0, 99 and 107 (MIN_BOOK=ab
   const ok = run(0);
   assert.equal(ok.status, 0);
   assert.doesNotMatch(ok.out, /::error::/);
-  assert.match(ok.summary, /k6 exit code: 0\. Non-blocking/);
+  assert.match(ok.summary, /k6 exit code: 0\./);
   assert.doesNotMatch(ok.summary, /non-zero|did not complete|threshold/);
   const breach = run(99);
   assert.equal(breach.status, 99);

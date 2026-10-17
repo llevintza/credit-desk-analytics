@@ -555,7 +555,7 @@ jobs:
     # README §10 / §14.1 step 9: P1 first-block payload budgets on the compose stack, seeded at scale 1.0.
     # Fails above the "Risk" budget (60 KB on the wire); warns above "All" (250 KB). Then #43 AC4 (#134): with 18k+
     # rows, the last block and every summary SUM equal independent SQL. Then #135: k6 p95 latency (MISS ≤ 150 ms for
-    # the Risk and All presets, HIT ≤ 15 ms), reported but non-blocking until #87. No secrets: the database password
+    # the Risk and All presets, HIT ≤ 15 ms), blocking since #87. No secrets: the database password
     # and the throwaway account's password are generated per run and masked.
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -635,12 +635,10 @@ jobs:
           BASE_URL=http://localhost:8080 node perf/bundle-wire-bytes.mjs "$RUNNER_TEMP/spa" | tee -a "$GITHUB_STEP_SUMMARY"
       # README §10 P1 latency (#135): perf/positions.js on the same scale-1.0 stack, the worst-case MISS (#129, the
       # whole book, never asked for before) for the Risk and All presets, and HIT with X-Cache: HIT asserted. The p95s
-      # go to the step summary against 150 / 15 ms. Non-blocking until #87 makes it required: a breach or a failed
-      # check fails this step (k6 exits non-zero) and is marked OVER, but the job carries on. #87 removes
-      # continue-on-error so that a breach fails the job.
+      # go to the step summary against 150 / 15 ms. Blocking (#87): a breach or a failed check makes k6 exit
+      # non-zero, is marked OVER, and fails this step and the budgets job (a required check on main).
       - name: API latency p95 (k6)
         id: k6
-        continue-on-error: true
         env:
           DESK_EMAIL: budgets@example.com
         run: |
@@ -680,11 +678,11 @@ jobs:
             fi
             echo
             if [ "$rc" -eq 0 ]; then
-              echo "k6 exit code: 0. Non-blocking until #87."
+              echo "k6 exit code: 0."
             elif [ "$rc" -eq 99 ]; then
-              echo "k6 exit code: 99 (a threshold was crossed or a check failed). Non-blocking until #87."
+              echo "k6 exit code: 99 (a threshold was crossed or a check failed)."
             else
-              echo "k6 exit code: $rc (k6 did not complete: 104 config, 107 script exception, 108 abort). Non-blocking until #87."
+              echo "k6 exit code: $rc (k6 did not complete: 104 config, 107 script exception, 108 abort)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -eq 99 ]; then
@@ -693,7 +691,7 @@ jobs:
             echo "::error::k6 did not complete (exit $rc: config, script or setup error). See the compose logs below."
           fi
           exit "$rc"
-      # continue-on-error keeps the job green on a k6 failure, so check the step's own outcome too.
+      # Compose logs after any failure, k6 included.
       - if: failure() || steps.k6.outcome == 'failure'
         run: docker compose logs
 
