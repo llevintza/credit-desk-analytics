@@ -1,6 +1,7 @@
 {
-  "alwaysArmed": ["D1", "D3", "D5", "D6", "D7", "D8", "D8a", "D9", "D11", "D13", "D15", "D16", "D18", "D19", "D22", "P"],
+  "alwaysArmed": ["D1", "D3", "D5", "D6", "D7", "D8", "D8a", "D9", "D11", "D13", "D15", "D16", "D17", "D18", "D19", "D20", "D21", "D22", "D23", "DEP", "P"],
   "subjects": {
-    "D2": ["*/**/AGENTS.md", "*/**/CLAUDE.md"]
+    "D2": ["*/**/AGENTS.md", "*/**/CLAUDE.md"],
+    "D12": [".claude/settings.json"]
   }
 }

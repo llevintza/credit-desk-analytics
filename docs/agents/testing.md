@@ -130,6 +130,15 @@ Build-PR drift fixture for the DEP-R1 rule that no required job may be condition
 | `budgets` gains a job-level `if:` | fail |
 | a step-level `if: failure()` added to any job | pass |
 
+**Spec change (Leo, 2026-10-17; for Helms to confirm; #171 A4):** ADR-0023 added per-area skips, so at `cc16727` seven `ci.yml` jobs (`api`, `web`, `coverage`, `compose-smoke`, `budgets`, `e2e`, `db-tools`) have a job-level `if:`, and the ruleset (25285930) requires all 12 jobs. The fixtures above would fail `main`. The drift check (`DEP` in `scripts/agents/lib/checks-text.mjs`, always armed) therefore allows a job-level `if:` **only in the exact ADR-0023 shape**: `${{ !cancelled() && needs.changes.outputs.run_<job id, - as _> != 'false' … }}`, the job `needs: changes`, and one `contains(fromJSON('["success", "skipped"]'), needs.<job>.result)` term for each other job it needs, and nothing else. Any other job-level `if:` fails. A heavy job skipped by an exact `'false'` flag is "not affected", not "skipped" (ADR-0023; gate clause 1). The fixtures that replace the table above:
+
+| Fixture | Expected |
+|---|---|
+| `ci.yml` at the build-PR base (the seven ADR-0023 conditions) | pass |
+| `run_api != 'false'` becomes `== 'true'`; `!cancelled()` dropped from `web`; `budgets` gated on another job's flag; a `needs` job without its success/skipped term | fail (each) |
+| a job-level `if:` on a job without one today (e.g. `secrets`) | fail |
+| a step-level `if: failure()` added to any job | pass |
+
 ## Guard prototype (rev 5 → rev 10; R4-M1, R5-F1, R6-F1, R7-M1, R7-F1, R8-M1–M4, R8-F1, R8-F2)
 
 **Honest evidence line:** rev 5's rev 5 *guard proto* evidence passed 56/56 fake-context rows and CR's 10 CR's *push sim* evidence holes, but only **74/118** CR5 real-git rows (39 holes, 5 over-blocks). rev 6 *guard proto* evidence (draft, `node:` builtins only) implements G1–G9: **real-git 118 rows: 116 match, 0 holes, 2 over-blocks** (L04 `-f` and L05 `+feat` to the own branch, blocked by policy per G9) (rev 6 *probe 118* evidence, CR5's probe unmodified except paths); fake-context **56/56** (rev 6 *push sim* evidence); benign workflows **21/21** (rev 6 *benign* evidence). The prototype is tuned to these rows; the build work's own guard must pass the same fixtures, and DEP-R1 remains the primary control.
