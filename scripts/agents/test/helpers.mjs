@@ -65,10 +65,10 @@ export const capture = () => {
   return { out, write: (s) => out.push(s), text: () => out.join("") };
 };
 
-/** The settings.json B1b commits: the rev 10 lists in adapters.md order. */
+/** The settings.json B1b commits: the rev 10 lists in adapters.md order (each `!` carve-out after the rules it narrows). */
 export const SETTINGS = {
   permissions: {
-    deny: [...MIN_DENY.slice(0, 3), CLAUDE_CARVE_OUTS[0], ...MIN_DENY.slice(3, 6), CLAUDE_CARVE_OUTS[1], ...MIN_DENY.slice(6)],
+    deny: [...MIN_DENY.slice(0, 2), CLAUDE_CARVE_OUTS[0], ...MIN_DENY.slice(2, 5), CLAUDE_CARVE_OUTS[1], ...MIN_DENY.slice(5)],
     ask: [...ASK],
     allow: [...MAX_ALLOW],
   },

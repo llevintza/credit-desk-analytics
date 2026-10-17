@@ -194,13 +194,14 @@ test("jobs(): ids, job-level keys, multi-line values", () => {
 test("D12 claude-review.yml once armed", () => {
   const good = [
     "# agents-drift:restore-step:begin", "# agents-drift:restore-step:end", "# agents-drift:claude-args", "# agents-drift:hook-canary",
-    `--settings '{"disableAllHooks": true}'`, '--disallowedTools "Read(./.git/**),Read(./.review-base/.git/**),Skill,Agent,Task"',
+    `--settings '{"disableAllHooks": true}'`, '--disallowedTools "Read(./.git/**),Grep(./.git/**),Glob(./.git/**),Read(./.review-base/.git/**),Skill,Agent,Task"',
   ].join("\n");
   const files = { [`${W}claude-review.yml`]: good, "README.md": "## 14. CI\n### 14.5 Review\n", "AGENTS.md": "README §14.5 and §14\n" };
   passes("D12", files);
   fails("D12", { ...files, [`${W}claude-review.yml`]: good.replace("# agents-drift:hook-canary", "") }, /lacks the marker # agents-drift:hook-canary/);
   fails("D12", { ...files, [`${W}claude-review.yml`]: good.replace("disableAllHooks", "x") }, /lacks --settings/);
   fails("D12", { ...files, [`${W}claude-review.yml`]: good.replace(",Task", "") }, /lacks Task/);
+  fails("D12", { ...files, [`${W}claude-review.yml`]: good.replace(",Glob(./.git/**)", "") }, /lacks Glob\(\.\/\.git\/\*\*\)/);
   fails("D12", { ...files, "AGENTS.md": "See README §99.\n" }, /cites README §99/);
 });
 
