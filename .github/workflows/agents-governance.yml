@@ -91,8 +91,14 @@ jobs:
             echo "::error file=$f::ci-wiring.test.mjs must only parse ci.yml (ADR-0026)"
             exit 1
           fi
-          if grep -nE '^import ' "$f" | grep -vE 'from "(node:test|node:assert/strict|node:fs|\./ci-changes\.mjs)";$'; then
+          if grep -nE '^import ' "$f" | grep -vE 'from "(node:test|node:assert/strict|node:fs|\./ci-jobs\.mjs)";$'; then
             echo "::error file=$f::unexpected import in ci-wiring.test.mjs (ADR-0026)"
+            exit 1
+          fi
+          # Its one local import must import nothing and touch no process API (#500 review).
+          j=.github/scripts/ci-jobs.mjs
+          if grep -nE '^\s*import\b|\bimport\s*\(|\brequire\s*\(|child_process|worker_threads|node:vm|eval\(|Function\(|process\.' "$j"; then
+            echo "::error file=$j::ci-jobs.mjs must have no imports or process access (ADR-0026)"
             exit 1
           fi
       - name: Wiring tests from main (no child processes, workers or writes)

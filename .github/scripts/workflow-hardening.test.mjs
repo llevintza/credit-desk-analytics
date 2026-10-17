@@ -279,13 +279,16 @@ test("#461: the scan step, run with a stub docker: clean, a job secret, a gitlea
 
 // ADR-0026 parse-only invariant: ci-wiring (base) runs the base copy of this file against a
 // PR's ci.yml, so it may only parse. The protected job repeats this grep on the base copy.
-test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:fs and ./ci-changes.mjs, and never spawns", () => {
+test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:fs and ./ci-jobs.mjs, and never spawns", () => {
   const src = readFileSync(new URL("./ci-wiring.test.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /child_process|worker_threads|node:vm|import\(|eval\(|Function\(/);
   const imports = src.split("\n").filter((l) => /^import /.test(l));
   assert.ok(imports.length >= 4);
-  for (const l of imports) assert.match(l, /from "(node:test|node:assert\/strict|node:fs|\.\/ci-changes\.mjs)";$/, l);
+  for (const l of imports) assert.match(l, /from "(node:test|node:assert\/strict|node:fs|\.\/ci-jobs\.mjs)";$/, l);
   assert.doesNotMatch(src, /\brequire\s*\(|process\.binding|createRequire/);
+  // Its one local import has no imports of its own, so nothing it loads can spawn (#500 review).
+  const jobs = readFileSync(new URL("./ci-jobs.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(jobs, /^\s*import\b|\bimport\s*\(|\brequire\s*\(|child_process|worker_threads|node:vm|eval\(|Function\(|process\./m);
 });
 
 // #451: `ci-wiring (base)` is a required base-run check name; a head job with the same name

@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { JOBS } from "./ci-changes.mjs";
+import { JOBS } from "./ci-jobs.mjs";
 
 // ADR-0026 (#451): the parse-only ci.yml wiring tests, moved out of ci-changes.test.mjs so
 // `ci-wiring (base)` can run the base copy of this one file against a PR's ci.yml. These
 // tests only PARSE ci.yml: no process, worker, vm, dynamic-import or eval route, and no
-// import beyond the four above (workflow-hardening.test.mjs checks it, and the protected
+// import beyond the four above (`./ci-jobs.mjs` has no imports at all) (workflow-hardening.test.mjs checks it, and the protected
 // job greps the base copy and runs it under node --permission). A test that executes a
 // ci.yml step belongs in ci-changes.test.mjs.
 
