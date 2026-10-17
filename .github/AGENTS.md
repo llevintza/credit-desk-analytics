@@ -12,9 +12,9 @@ Area file for `.github/` (workflows, composite actions, Dependabot, CODEOWNERS, 
 
 - Pin every `uses:` to a full 40-character commit SHA with a `# v…` comment.
 - Keep a top-level `permissions:` block with least privilege. Never grant `statuses: write` or `checks: write`.
-- `pull_request_target` is allowed only in `agents-governance.yml` (planned; arrives with the harness build PR), under Helms's scoped sign-off. Nowhere else.
-- No job id or job `name:` outside `agents-governance.yml` (planned; arrives with the harness build PR) may contain `agents-drift (base)`, `governance-paths (base)` or `ci-wiring (base)` ([ADR-0026](../docs/adr/0026-protected-ref-ci-wiring-check.md); `workflow-hardening.test.mjs` checks `ci-wiring`).
-- `.github/scripts/ci-wiring.test.mjs` only parses `ci.yml`: no process, worker, `vm`, dynamic-import or `eval` route, and imports only `node:test`, `node:assert/strict`, `node:fs` and `./ci-changes.mjs` (ADR-0026 parse-only invariant). A test that runs a `ci.yml` step goes in `ci-changes.test.mjs`.
+- `pull_request_target` is allowed only in `agents-governance.yml`, under Helms's scoped sign-off (its third job, `ci-wiring (base)`, waits for Helms to extend it). Nowhere else.
+- No job id or job `name:` outside `agents-governance.yml` may contain `agents-drift (base)`, `governance-paths (base)` or `ci-wiring (base)` ([ADR-0026](../docs/adr/0026-protected-ref-ci-wiring-check.md); `workflow-hardening.test.mjs` checks `ci-wiring`).
+- `.github/scripts/ci-wiring.test.mjs` only parses `ci.yml`: no process, worker, `vm`, dynamic-import or `eval` route, and imports only `node:test`, `node:assert/strict`, `node:fs` and `./ci-jobs.mjs`, which itself has no imports (ADR-0026 parse-only invariant). A test that runs a `ci.yml` step goes in `ci-changes.test.mjs`.
 - Secrets live only in the `production` environment (sole exception: the capped Claude key in `claude-review`). gitleaks stays on. Nothing removed or loosened.
 - Keep the `# agents-drift:` markers, `disableAllHooks` (planned; arrives with the harness build PR), the Skill/Agent/Task deny and the restore block in `claude-review.yml` ([`docs/agents/review-restore.md`](../docs/agents/review-restore.md)).
 - A script that decides or polices a PR's checks runs from the `_base` checkout, never the head copy: the classifier, the coverage gate and the PR-time Pages script check (#278). A base without the script fails closed or runs every job; it never falls back to the head.

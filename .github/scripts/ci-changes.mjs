@@ -25,20 +25,13 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { JOBS } from "./ci-jobs.mjs";
 
 export const AREAS = Object.freeze(["api", "web", "db", "app", "perf"]);
 
-// Heavy jobs in ci.yml and the areas that run them (README §14.1). `secrets`,
-// `workflows` and `gate-tests` always run and are not listed.
-export const JOBS = Object.freeze({
-  run_api: Object.freeze(["api", "db"]), // every .NET suite, then migrate + seed
-  run_web: Object.freeze(["web"]),
-  run_db_tools: Object.freeze(["db"]),
-  run_compose_smoke: Object.freeze(["app"]),
-  run_e2e: Object.freeze(["app"]),
-  run_budgets: Object.freeze(["app", "perf"]), // seeded compose stack + perf/payload-size.mjs
-  run_coverage: Object.freeze(["api", "db", "web"]), // whenever the api or web job runs
-});
+// Heavy jobs and their areas live in ci-jobs.mjs, a side-effect-free module that the
+// parse-only ci-wiring tests can import (ADR-0026; #500 review).
+export { JOBS };
 
 const SHARED_BASENAMES = new Set([
   "global.json",
