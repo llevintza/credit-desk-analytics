@@ -182,7 +182,7 @@ test("DEP: job-level if: only in the exact ADR-0023 shape", () => {
 });
 
 test("jobs(): ids, job-level keys, multi-line values", () => {
-  const j = jobs("on: x\njobs:\n  a:\n    name: A\n    if: >-\n      x\n      && y\n    permissions:\n      contents: read\n  'b':\n    needs: [a]\nafter: 1\n");
+  const j = jobs("on: x\njobs:\n  a: # a comment does not hide the job\n    name: A\n    if: >-\n      x\n      && y\n    permissions:\n      contents: read\n  'b':\n    needs: [a]\nafter: 1\n");
   assert.deepEqual(j.map((x) => x.id), ["a", "b"]);
   assert.equal(j[0].key("if"), "x && y");
   assert.equal(j[0].key("permissions"), "contents: read");

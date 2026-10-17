@@ -24,7 +24,7 @@ export function jobs(yml) {
   if (start < 0) return [];
   const out = [];
   for (let i = start + 1; i < lines.length && !/^\S/.test(lines[i]); i++) {
-    const m = /^ {2}([^\s#][^:]*):\s*$/.exec(lines[i]);
+    const m = /^ {2}([^\s#][^:]*):\s*(#.*)?$/.exec(lines[i]);
     if (m) out.push({ id: m[1].replace(/^["']|["']$/g, ""), body: [] });
     else if (out.length) out[out.length - 1].body.push(lines[i]);
   }
