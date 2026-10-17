@@ -4,7 +4,7 @@
  * "pr-data.mjs"; guards 5, 7, 10, 11). Runs from the base checkout in the
  * `pull_request_target` jobs; it never checks out, imports or runs anything from the PR.
  *
- *   node scripts/agents/pr-data.mjs --out <dir>
+ *   node scripts/agents/pr-data.mjs --out <dir> [--only <path>]
  *
  * Writes <dir>/paths.json (every head tree entry with mode, type, size and blob sha),
  * <dir>/files.json (the changed-file list) and <dir>/tree/<path> for each blob in the
@@ -90,14 +90,15 @@ export function writeData(root, path, text) {
   writeFileSync(target, text, { flag: "wx", mode: 0o644 });
 }
 
-export async function fetchPrData({ api, event, adapters, outDir }) {
+export async function fetchPrData({ api, event, adapters, outDir, only }) {
   const files = await collectFiles(api, event);
   const tree = await api(`git/trees/${event.headSha}?recursive=1`);
   if (tree.truncated !== false || !Array.isArray(tree.tree)) fail("head tree listing is truncated");
   const entries = tree.tree.map((e) => ({ path: assertSafePath(e.path), mode: e.mode, type: e.type, size: e.size, sha: e.sha }));
   checkModes(entries, files, adapters);
 
-  const wanted = entries.filter((e) => e.type === "blob" && matchesAny(e.path, adapters.inputs));
+  // --only narrows the input set to exact paths (ci-wiring (base) needs only ci.yml); it can never widen it.
+  const wanted = entries.filter((e) => e.type === "blob" && matchesAny(e.path, adapters.inputs) && (!only || only.includes(e.path)));
   if (wanted.length > MAX_BLOBS) fail(`more than ${MAX_BLOBS} steering blobs`);
   for (const e of wanted) if (!(e.size <= MAX_BLOB_BYTES)) fail("steering blob over 1 MB", e.path);
 
@@ -124,10 +125,12 @@ export function report(err, write) {
 export async function main(argv, env, { write = (s) => process.stdout.write(s), fetchImpl } = {}) {
   try {
     const i = argv.indexOf("--out");
-    if (i < 0 || !argv[i + 1]) fail("usage: pr-data.mjs --out <dir>");
+    if (i < 0 || !argv[i + 1]) fail("usage: pr-data.mjs --out <dir> [--only <path>]");
+    const o = argv.indexOf("--only");
+    const only = o >= 0 ? [argv[o + 1]] : undefined;
     const event = readEvent(env.GITHUB_EVENT_PATH);
     const api = githubApi({ token: env.GH_TOKEN, repo: env.GITHUB_REPOSITORY, fetchImpl });
-    const n = await fetchPrData({ api, event, adapters: loadAdapters(), outDir: argv[i + 1] });
+    const n = await fetchPrData({ api, event, adapters: loadAdapters(), outDir: argv[i + 1], only });
     write(`agents pr-data: ${n.files} changed files, ${n.entries} tree entries, ${n.blobs} steering blobs\n`);
     return 0;
   } catch (err) {

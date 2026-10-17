@@ -140,3 +140,18 @@ test("CLI entry point: run directly, a missing --out exits 1", () => {
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^::error::agents pr-data: usage/);
 });
+
+test("--only narrows the fetched blobs to exact paths and never widens the input set (#507 nit)", async () => {
+  const gh = fakeGithub({ tree: { "AGENTS.md": "x", ".github/workflows/ci.yml": "on: push\n", "src/a.cs": "y" } });
+  const api = githubApi({ repo: "o/r", fetchImpl: gh.fetchImpl });
+  const outDir = scratch();
+  const n = await fetchPrData({ api, event, adapters, outDir, only: [".github/workflows/ci.yml", "src/a.cs"] });
+  assert.equal(n.blobs, 1);
+  assert.equal(readFileSync(join(outDir, "tree/.github/workflows/ci.yml"), "utf8"), "on: push\n");
+  assert.equal(existsSync(join(outDir, "tree/AGENTS.md")), false);
+  assert.equal(existsSync(join(outDir, "tree/src/a.cs")), false, "not in main's input set");
+  assert.ok(!gh.calls.some((c) => c.startsWith("git/blobs/") && c.endsWith("1".padStart(40, "0"))));
+  const c = capture();
+  assert.equal(await main(["--out", scratch(), "--only", ".github/workflows/ci.yml"], { GITHUB_EVENT_PATH: eventFile(), GITHUB_REPOSITORY: "o/r" }, { write: c.write, fetchImpl: gh.fetchImpl }), 0);
+  assert.match(c.text(), /1 steering blobs/);
+});
