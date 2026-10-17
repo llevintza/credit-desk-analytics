@@ -23,7 +23,7 @@ The page is not the expensive part. The **summary**, a COUNT plus a SUM or marke
 
 Seed 42, scale 1.0, as-of 2026-10-06. 20,001 rows per as-of, 202 columns, about 63 MB of heap. Postgres 17.11 in Docker, Apple M5, .NET 10.0.12, 200 iterations after warm-up.
 
-**These are local measurements.** In CI, the `budgets` job enforces the payload budget (#125) on a scale-1.0 compose stack and runs the k6 p95 checks (#135); since #87 a k6 p95 over budget fails the `budgets` job, a required check on `main` (see the Addendum and #241).
+**These are local measurements.** In CI, the `budgets` job enforces the payload budget (#125) on a scale-1.0 compose stack and runs the k6 p95 checks (#135); since #87 a k6 p95 over budget fails the `budgets` job, a required check on `main` (see the Addendum and #241). A single breach is re-run once by Leo or the Tech Coordinator; a second consecutive breach on the same sha gets a P1 issue and a fix forward, and the 150 / 15 ms budgets change only by a Helms-signed amendment to this ADR (README §10).
 
 **The page (200 rows, sort `market_value DESC`, indexed):**
 
