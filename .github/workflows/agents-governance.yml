@@ -1,0 +1,99 @@
+name: agents-governance
+
+# Helms (CTO) governance sign-off, 2026-10-07: pull_request_target for agents-drift (base) and
+# governance-paths (base) only (docs/agents/governance.md H1). ci-wiring (base) is ADR-0026
+# option B in the form Leo approved on 2026-10-17 (head ci.yml read through the API, no
+# fetch of PR refs); Helms extends the sign-off to it before it is relied on.
+# Data-only. No secrets. Never checks out the PR. Any other _target use needs its own review (D20).
+# The default _target checkout is main's tip, so every script here is main's copy.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: agents-governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agents-drift-base: # no job-level if: (a skipped required check counts as passing)
+    name: agents-drift (base)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+      - name: Fetch PR steering files as data (API only)
+        env:
+          GH_TOKEN: ${{ github.token }} # contents: read + pull-requests: read; not a secret reference
+        run: node scripts/agents/pr-data.mjs --out "$RUNNER_TEMP/pr"
+      - name: Base checker over PR data
+        run: node scripts/agents/check-drift.mjs --root "$RUNNER_TEMP/pr/tree" --paths "$RUNNER_TEMP/pr/paths.json" --base .
+
+  governance-paths-base: # no job-level if:
+    name: governance-paths (base)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+      - name: Governance paths (API file list as data)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/agents/governance.mjs --base .
+
+  ci-wiring-base: # ADR-0026; no needs, no job-level if: it always reports
+    name: ci-wiring (base)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # --permission is stable from 22.13 (ADR-0026).
+          node-version: 22.13.1
+          package-manager-cache: false
+      - name: Fetch the PR's ci.yml as data (API only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/agents/pr-data.mjs --out "$RUNNER_TEMP/pr"
+      # The head ci.yml is the one PR-controlled input; it is only ever parsed. A head that
+      # deletes ci.yml (or makes it a symlink, which pr-data rejects) fails closed.
+      - name: Overlay the PR head's ci.yml on main's checkout
+        run: cp -- "$RUNNER_TEMP/pr/tree/.github/workflows/ci.yml" .github/workflows/ci.yml
+      - name: Guard - the base wiring tests are parse-only
+        run: |
+          f=.github/scripts/ci-wiring.test.mjs
+          if grep -nE 'child_process|worker_threads|node:vm|import\(|eval\(|Function\(' "$f"; then
+            echo "::error file=$f::ci-wiring.test.mjs must only parse ci.yml (ADR-0026)"
+            exit 1
+          fi
+          if grep -nE '^import ' "$f" | grep -vE 'from "(node:test|node:assert/strict|node:fs|\./ci-changes\.mjs)";$'; then
+            echo "::error file=$f::unexpected import in ci-wiring.test.mjs (ADR-0026)"
+            exit 1
+          fi
+      - name: Wiring tests from main (no child processes, workers or writes)
+        run: node --permission --allow-fs-read="$GITHUB_WORKSPACE" .github/scripts/ci-wiring.test.mjs
