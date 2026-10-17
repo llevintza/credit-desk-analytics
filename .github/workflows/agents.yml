@@ -3,7 +3,7 @@ name: agents
 # ADR-0020 head-run agent checks (docs/agents/testing.md). This PR's own code runs here on
 # pull_request, so these jobs test the change; the base-run checks that judge a PR live in
 # agents-governance.yml. review-restore-matrix tests the claude-review.yml restore blocks;
-# agents-generate joins with the harness build (Stage B).
+# agents-generate runs the generator check and every drift check on the head.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -90,3 +90,24 @@ jobs:
             bash "_base/scripts/agents/test/restore/$s.sh" .github/workflows/claude-review.yml | tee -a "$RUNNER_TEMP/restore-base.out"
           done
           { echo "## review-restore-matrix (base scripts)"; echo; grep -E '^(matrix|mutations)' "$RUNNER_TEMP/restore-base.out"; } >> "$GITHUB_STEP_SUMMARY"
+
+  # The generator and every drift check, with this PR's own code (drift-checks.md "Head job").
+  agents-generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.12.0
+          package-manager-cache: false
+      - name: Generated files are current
+        run: node scripts/agents/generate.mjs --check
+      - name: Head drift checks over the checkout
+        run: |
+          node scripts/agents/list-paths.mjs --root . --out "$RUNNER_TEMP/paths.json"
+          node scripts/agents/check-drift.mjs --root . --paths "$RUNNER_TEMP/paths.json"

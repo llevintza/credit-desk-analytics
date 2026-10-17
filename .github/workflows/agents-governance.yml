@@ -79,7 +79,7 @@ jobs:
       - name: Fetch the PR's ci.yml as data (API only)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/agents/pr-data.mjs --out "$RUNNER_TEMP/pr"
+        run: node scripts/agents/pr-data.mjs --out "$RUNNER_TEMP/pr" --only .github/workflows/ci.yml
       # The head ci.yml is the one PR-controlled input; it is only ever parsed. A head that
       # deletes ci.yml (or makes it a symlink, which pr-data rejects) fails closed.
       - name: Overlay the PR head's ci.yml on main's checkout
