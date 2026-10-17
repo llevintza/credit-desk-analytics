@@ -276,3 +276,25 @@ test("#461: the scan step, run with a stub docker: clean, a job secret, a gitlea
   assert.match(missing.out, /::warning::No Claude execution output at /);
   assert.equal(missing.output, "");
 });
+
+// ADR-0026 parse-only invariant: ci-wiring (base) runs the base copy of this file against a
+// PR's ci.yml, so it may only parse. The protected job repeats this grep on the base copy.
+test("#451: ci-wiring.test.mjs imports only node:test, node:assert/strict, node:fs and ./ci-changes.mjs, and never spawns", () => {
+  const src = readFileSync(new URL("./ci-wiring.test.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /child_process|worker_threads|node:vm|import\(|eval\(|Function\(/);
+  const imports = src.split("\n").filter((l) => /^import /.test(l));
+  assert.ok(imports.length >= 4);
+  for (const l of imports) assert.match(l, /from "(node:test|node:assert\/strict|node:fs|\.\/ci-changes\.mjs)";$/, l);
+  assert.doesNotMatch(src, /\brequire\s*\(|process\.binding|createRequire/);
+});
+
+// #451: `ci-wiring (base)` is a required base-run check name; a head job with the same name
+// could satisfy it (ADR-0026 residual, U18). Only agents-governance.yml may use it.
+test("#451: no workflow but agents-governance.yml has a job id or name containing ci-wiring", () => {
+  for (const [f, yml] of WORKFLOWS) {
+    if (f === "agents-governance.yml") continue;
+    const jobs = yml.slice(yml.indexOf("\njobs:\n"));
+    assert.doesNotMatch(jobs, /^ {2}[^\s#]*ci-wiring[^:]*:\s*$/im, `${f}: job id`);
+    assert.doesNotMatch(jobs, /^ {4}name:.*ci-wiring/im, `${f}: job name`);
+  }
+});
