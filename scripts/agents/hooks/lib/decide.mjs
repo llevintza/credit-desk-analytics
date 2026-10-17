@@ -8,6 +8,7 @@
  *   the signature and that no analyser has proven safe exits 2 (R5-F1 class A).
  */
 import { normalize, hasSignature, payloadTexts } from "./input.mjs";
+import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
 
@@ -26,22 +27,6 @@ export function head(seg) {
 // unless their output is piped into a shell (adapters.md "Exempt").
 const TEXT_ONLY = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "less", "more", "wc", "sort", "uniq", "tr", "cut", "jq", "diff", "ls"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "node", "python", "python3", "perl", "ruby", "deno", "bun", "source", ".", "eval", "xargs", "parallel"]);
-// git subcommands that only record or read text (commit messages, logs). Not with `-c`.
-const GIT_TEXT = new Set(["commit", "tag", "notes", "log", "show", "grep", "diff", "status", "blame", "shortlog", "describe", "rev-parse", "ls-files", "help"]);
-const GIT_GLOBAL_ARG = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
-
-/** git's subcommand after its global options, and whether a `-c` global was given. */
-export function gitSubcommand(words) {
-  let config = false;
-  for (let i = 1; i < words.length; i++) {
-    const t = words[i].text;
-    if (t === "-c" || t.startsWith("--config-env")) config = true;
-    if (GIT_GLOBAL_ARG.has(t)) i++;
-    else if (!t.startsWith("-")) return { sub: t, config };
-  }
-  return { sub: undefined, config };
-}
-
 const segText = (seg) => [...seg.words.map((w) => w.text), ...seg.redirs.flatMap((r) => [r.target, r.heredoc?.body ?? ""])].join(" ");
 
 function exempt(seg, next) {
@@ -49,16 +34,12 @@ function exempt(seg, next) {
   if (!h || h.dynamic) return false;
   const name = base(h.text);
   if (TEXT_ONLY.has(name)) return !(seg.sep === "|" || seg.sep === "|&") || !next || !SHELLS.has(base(head(next)?.text ?? ""));
-  if (name === "git") {
-    const { sub, config } = gitSubcommand(seg.words.slice(seg.words.indexOf(h)));
-    return !config && GIT_TEXT.has(sub);
-  }
   return false;
 }
 
 // Per-concern analysers: each returns undefined (not mine) or a decision { code, reason }.
 // A signature-carrying segment that no analyser has decided fails closed.
-const ANALYSERS = [];
+const ANALYSERS = [analyseGit];
 
 // curl/wget are denied outright (G18, H16): the word, case-insensitive, after removing
 // backslashes and quotes, and in every decoded token. Words that only contain the letters
@@ -84,6 +65,7 @@ function secretRead(seg) {
 }
 
 // Wrappers run their arguments as a command; behind one, a dynamic or glob word could be it.
+const GIT_GLOBAL_ARG = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
 const WRAPPERS = new Set(["env", "command", "exec", "nohup", "time", "builtin", "sudo", "doas", "nice", "timeout", "setsid", "flock", "ionice", "stdbuf", "busybox", "xargs", "parallel", "find"]);
 
 /**
@@ -103,6 +85,7 @@ function unnamed(seg) {
   if (name === "git" || name === "hub") {
     for (let i = 0; i < rest.length; i++) {
       if (rest[i].dynamic || rest[i].glob) return `${name} with a dynamic subcommand or option ${rest[i].raw} (G4)`;
+      if (GIT_GLOBAL_ARG.has(rest[i].text) && (rest[i + 1]?.dynamic || rest[i + 1]?.glob)) return `${name} ${rest[i].text} with a dynamic value (G3, G4)`;
       if (GIT_GLOBAL_ARG.has(rest[i].text)) i++;
       else if (!rest[i].text.startsWith("-")) break;
     }
@@ -110,7 +93,8 @@ function unnamed(seg) {
   return undefined;
 }
 
-function command(text, call, deadline) {
+function command(text, call, opts, depth = 0) {
+  const { deadline } = opts;
   if (HTTP.test(text.replace(/[\\'"]/g, ""))) return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
   const sig = hasSignature(...payloadTexts(text));
   let parsed;
@@ -122,6 +106,9 @@ function command(text, call, deadline) {
     return allow(call);
   }
   const segs = allSegments(parsed);
+  const p = payloadCheck({ segs, sig });
+  if (p) return block(p.reason, call);
+  const evaluate = (t) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, opts, depth + 1));
   for (const [i, seg] of segs.entries()) {
     if (seg.words.some((w) => HTTP.test(w.text) || (w.glob && couldName(w.text, ["curl", "wget"]))))
       return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
@@ -130,7 +117,7 @@ function command(text, call, deadline) {
     if (secretRead(seg)) return block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call);
     // Analysers see every segment: a git alias or a state change carries no signature.
     let d;
-    for (const analyse of ANALYSERS) if ((d = analyse(seg, { call, segs, parsed, index: i }))) break;
+    for (const analyse of ANALYSERS) if ((d = analyse(seg, { call, segs, parsed, index: i, evaluate, repoAt: opts.repoAt }))) break;
     if (d?.code === 2) return block(d.reason, call);
     if (d || !hasSignature(segText(seg)) || exempt(seg, segs[i + 1])) continue;
     return block("a push/merge-shaped command the guard can't prove safe (R4-M1)", call);
@@ -155,8 +142,10 @@ function write(call, patterns) {
  * opts.patterns: a function returning [{ id, re }] (loaded only for writes).
  * opts.deadline: ms epoch; a parse that runs past it throws (the caller exits 2).
  * opts.recorded: (call) => an earlier decision for this tool call, returned as is (C7).
+ * opts.repoAt: (dir) => git lookups (tests inject a fake; default runs read-only git).
  */
-export function decide(raw, { patterns = () => [], deadline = Infinity, recorded = () => undefined } = {}) {
+export function decide(raw, opts = {}) {
+  const { patterns = () => [], deadline = Infinity, recorded = () => undefined, repoAt } = opts;
   let json;
   try {
     json = JSON.parse(raw);
@@ -171,7 +160,7 @@ export function decide(raw, { patterns = () => [], deadline = Infinity, recorded
   if (call.malformed) return block(`malformed hook input: ${call.malformed}`, call);
   const prior = recorded(call);
   if (prior) return { ...prior, call };
-  if (call.kind === "command") return command(call.command, call, deadline);
+  if (call.kind === "command") return command(call.command, call, { deadline, repoAt });
   if (call.kind === "read") return isSecretPath(call.path) ? block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call) : allow(call);
   if (call.kind === "write") return write(call, patterns);
   if (call.kind === "mcp" && hasSignature(...payloadTexts(JSON.stringify(call.args), call.args)))
