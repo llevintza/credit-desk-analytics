@@ -372,7 +372,6 @@ jobs:
             --web web/coverage \
             --base "$DIFF_BASE" \
             --base-dir _base \
-            --default-dir _base \
             --default-sha "$BASE_SHA" \
             --default-branch "$DEFAULT_BRANCH" \
             --base-ref "${GITHUB_BASE_REF:-}" \

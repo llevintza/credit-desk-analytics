@@ -309,11 +309,10 @@ export function runGate(options = {}) {
     }
 
     const baseDir = args["base-dir"] ? resolve(repoRoot, args["base-dir"]) : null;
-    const defaultDir = args["default-dir"] ? resolve(repoRoot, args["default-dir"]) : null;
-    const defaultSha =
-      args["default-sha"] ??
-      env("DEFAULT_SHA") ??
-      resolveDefaultSha(repoRoot, defaultBranch, defaultDir, failHard);
+    // #110 R2-N4: --default-sha is the floor SHA (CI passes BASE_SHA while --base is the
+    // #213 diff base). Without it the floor is --base, never the default-branch tip,
+    // which on push is the pushed commit itself.
+    const defaultSha = args["default-sha"] ?? env("DEFAULT_SHA") ?? "";
 
     const gateOnBase = filePresent(repoRoot, baseDir, baseSha, gatePath, failHard);
     const headHasGate = existsSync(join(repoRoot, gatePath));
@@ -336,9 +335,8 @@ export function runGate(options = {}) {
     if (!headHasBaseline) failHard(`head is missing ${baselinePath}; refusing to run without a baseline.`);
 
     const floorSourceSha = defaultSha || baseSha;
-    const floorDir = defaultDir || baseDir;
-    const baseThresholds = loadJsonFromBase(repoRoot, floorDir, floorSourceSha, thresholdsPath, failHard);
-    const baseBaseline = loadJsonFromBase(repoRoot, floorDir, floorSourceSha, baselinePath, failHard);
+    const baseThresholds = loadJsonFromBase(repoRoot, baseDir, floorSourceSha, thresholdsPath, failHard);
+    const baseBaseline = loadJsonFromBase(repoRoot, baseDir, floorSourceSha, baselinePath, failHard);
 
     if (!baseThresholds.present) {
       failHard(`BASE_SHA has ${gatePath} but is missing ${thresholdsPath}; failing closed.`);
@@ -718,19 +716,6 @@ function filePresent(root, dir, sha, path, failHard) {
   if (sha && fileExistsAtRef(root, sha, path, failHard)) return true;
   if (dir && existsSync(join(dir, path))) return true;
   return false;
-}
-
-function resolveDefaultSha(root, defaultBranch, defaultDir, failHard) {
-  if (defaultDir) return null;
-  const candidates = [`origin/${defaultBranch}`, defaultBranch];
-  for (const name of candidates) {
-    if (gitOk(root, ["rev-parse", "--verify", `${name}^{commit}`])) {
-      return git(root, ["rev-parse", name], failHard).trim();
-    }
-  }
-  failHard(
-    `cannot resolve default branch '${defaultBranch}' tip; pass --default-sha or --default-dir.`,
-  );
 }
 
 function fileChangedVsBase(root, baseSha, path, failHard) {
