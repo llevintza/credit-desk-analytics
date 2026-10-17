@@ -44,7 +44,7 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
 
 ## Agent sessions (ADR-0020 §6, §8 H14–H17)
 
-These hold in every harness. The deny lists and the guard hook (planned; arrives with the harness build PR) back some of them up, but they are best-effort; the rule applies even where nothing blocks you.
+These hold in every harness. The deny lists and the guard hook back some of them up, but they are best-effort; the rule applies even where nothing blocks you.
 
 - **Never force-push**, including `--force-with-lease` (also `--force`, `-f`, `+<ref>`, `--force-if-includes`). **`main` is never rewritten.** Bring `main` into a pushed branch by merge, never by rebase (no `gh pr update-branch --rebase`).
 - **gitleaks flags your own unmerged commit:** stop and report to Tech Coordinator. No rewrite, no fix-up commit, no further push, and never a lease push; Leo runs any authorized rewrite in a plain terminal. A rewrite doesn't un-expose a pushed secret; the secret must be rotated.
