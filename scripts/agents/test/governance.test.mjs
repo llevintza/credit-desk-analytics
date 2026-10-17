@@ -32,6 +32,10 @@ test("the governance path list (governance.md), case-insensitive", () => {
     "docs/agents/README.md", "scripts/agents/guard.mjs", ".gitleaks.toml", "perf/coverage-gate.mjs", "tests/testconfig.json",
     ".gitmodules", ".GITHUB/workflows/x.yml", "Web/agents.md", ".cursorrules", ".github", ".claude", "docs/agents", "scripts/agents", "deploy",
   ]) assert.ok(isGovernance(p), p);
+  // #505 (b1): a bare directory path is governed under the same case folding (#501 nit).
+  for (const p of [".cursor", ".grok", ".github", "deploy", "docs/agents", "scripts/agents", ".Github", "Docs/Agents", ".CURSOR"]) assert.ok(isGovernance(p), p);
+  // ...but only the directory itself, never a sibling sharing its prefix.
+  for (const p of ["docsx", "scripts/agentsx", "docs/agentsx", ".cursorx", ".grokx", "deployx"]) assert.ok(!isGovernance(p), p);
   for (const p of ["docs", "scripts", ".githubx", "src/Desk.UserAdmin/UserAdminApp.cs", "src/Desk.Api/Program.cs", "README.md", "docs/adr/0001-stack.md", "perf/payload-size.mjs", "web/src/app.ts"])
     assert.ok(!isGovernance(p), p);
 });
