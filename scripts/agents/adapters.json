@@ -28,5 +28,30 @@
     "**/CLAUDE.local.md",
     ".claudeignore",
     ".cursorrules"
-  ]
+  ],
+  "outputs": [
+    {
+      "path": ".cursor/cli.json",
+      "sources": [
+        ".claude/settings.json",
+        "scripts/agents/permission-map.json"
+      ],
+      "render": "cursor-cli"
+    },
+    {
+      "path": ".cursorignore",
+      "sources": [
+        ".claude/settings.json"
+      ],
+      "render": "cursorignore"
+    },
+    {
+      "path": "scripts/agents/hooks/secret-patterns.txt",
+      "sources": [
+        ".gitleaks.toml"
+      ],
+      "render": "secret-patterns"
+    }
+  ],
+  "cursorAreaRules": false
 }
