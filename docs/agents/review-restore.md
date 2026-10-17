@@ -77,8 +77,8 @@ if [ -e ./scripts ]; then links=$(find ./scripts -type l -print -quit); test -z 
 
 3. **`claude_args`** (marker `# agents-drift:claude-args`):
    - Add `--settings '{"disableAllHooks": true}'`. Command-line settings take precedence over project settings, so this is the only control that survives the action's re-restore of `.claude/` from `origin/main` (CR M1). CR2 verified the pass-through at the pinned action.
-   - `--disallowedTools` becomes `"Read(./.git/**),Read(./.review-base/.git/**),Skill,Agent,Task"`.
-     - The `Grep(…)`/`Glob(…)` `.git` entries are dropped: Glob/Grep path rules are never consulted, and `Read(./.git/**)` is the rule that applies to Grep/Glob (R-i).
+   - `--disallowedTools` becomes `"Read(./.git/**),Grep(./.git/**),Glob(./.git/**),Read(./.review-base/.git/**),Grep(./.review-base/.git/**),Glob(./.review-base/.git/**),Skill,Agent,Task"`.
+     - The explicit `Grep(…)`/`Glob(…)` `.git` entries are kept next to `Read(./.git/**)` (#171 B1b, #508 review). Claude Code applies the `Read` rule to Grep and Glob only on a best-effort basis (R-i), and the extra entries cost nothing. D12 requires all three.
      - The `.review-pr/.git/**` entries are dropped because `.review-pr` is flat and verified.
    - `--allowedTools` stays as on `main`, with no `Skill`, `Agent` or `Task`.
    - Follow-up U16: spike `--setting-sources user`.

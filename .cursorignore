@@ -1,0 +1,4 @@
+# GENERATED from .claude/settings.json by scripts/agents/generate.mjs — do not edit
+**/.env
+**/.env.*
+**/secrets/**
