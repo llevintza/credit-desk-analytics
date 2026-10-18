@@ -11,7 +11,9 @@ import { normalize, hasSignature, payloadTexts } from "./input.mjs";
 import { analyseGh } from "./gh.mjs";
 import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
+import { globNamesGuarded, indirect } from "./indirect.mjs";
 import { decideMcp } from "./mcp.mjs";
+import { replayCheck } from "./replay.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
 import { ASSIGN, base, head } from "./words.mjs";
 
@@ -20,19 +22,11 @@ export { head };
 const block = (reason, call) => ({ code: 2, reason, call });
 const allow = (call) => ({ code: 0, call });
 
-// Heads whose arguments are only text, so a signature in them is a mention, not a command,
-// unless their output is piped into a shell (adapters.md "Exempt").
+// Heads whose arguments are only text, so a signature in them is a mention, not a command
+// (adapters.md "Exempt"; piping their output into a shell is G1, replay.mjs).
 const TEXT_ONLY = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "less", "more", "wc", "sort", "uniq", "tr", "cut", "jq", "diff", "ls"]);
-const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "node", "python", "python3", "perl", "ruby", "deno", "bun", "source", ".", "eval", "xargs", "parallel"]);
 const segText = (seg) => [...seg.words.map((w) => w.text), ...seg.redirs.flatMap((r) => [r.target, r.heredoc?.body ?? ""])].join(" ");
-
-function exempt(seg, next) {
-  const h = head(seg);
-  if (!h || h.dynamic) return false;
-  const name = base(h.text);
-  if (TEXT_ONLY.has(name)) return !(seg.sep === "|" || seg.sep === "|&") || !next || !SHELLS.has(base(head(next)?.text ?? ""));
-  return false;
-}
+const exempt = (seg) => TEXT_ONLY.has(base(head(seg)?.text ?? ""));
 
 // Per-concern analysers: each returns undefined (not mine) or a decision { code, reason }.
 // A signature-carrying segment that no analyser has decided fails closed.
@@ -51,14 +45,31 @@ export function isSecretPath(s) {
     return parts.slice(0, -1).some((p) => p.toLowerCase() === "secrets") || b === ".env" || (b.startsWith(".env.") && b !== ".env.example");
   });
 }
-const READERS = new Set(["cat", "head", "tail", "less", "more", "sed", "awk", "gawk", "cut", "base64", "xxd", "od", "hexdump", "strings", "cp", "source", ".", "printenv", "grep", "rg", "tac", "nl", "bat", "sort", "uniq", "diff", "jq", "python", "python3", "node", "perl", "ruby"]);
+const READERS = new Set(["cat", "head", "tail", "less", "more", "sed", "awk", "gawk", "cut", "base64", "xxd", "od", "hexdump", "strings", "cp", "source", ".", "printenv", "grep", "rg", "tac", "nl", "bat", "sort", "uniq", "diff", "jq", "python", "python3", "node", "perl", "ruby",
+  // #514 review: more programs that read or expose a file (git covers `git show HEAD:.env`, `cat-file`).
+  "dd", "paste", "rev", "tar", "rsync", "zip", "gzip", "vim", "vi", "nvim", "nano", "view", "emacs", "ed", "ln", "git", "hub"]);
 
 // A glob or brace word that could expand to a secret path counts as one (#512 review).
 const secretWord = (w) => isSecretPath(w.text) || (w.glob && couldBeSecret(w.text));
 
+// A recursive grep from a directory that holds a .env reads it without naming it (#514
+// review): `.`, `..`, `web`, or no path. rg/ag skip dotfiles and ignored files unless told not
+// to. Declared over-block: `grep -rn x .`; scope it to a source directory instead.
+const ENV_DIRS = new Set([".", "./", "..", "../", "web", "web/", "./web", "./web/"]);
+function recursiveRead(seg) {
+  const h = head(seg);
+  const name = base(h?.text ?? "");
+  const args = seg.words.slice(seg.words.indexOf(h) + 1);
+  if (["rg", "ag"].includes(name)) return args.some((w) => /^(?:--hidden|--no-ignore\S*|-[a-z]*u[a-z]*|-\.)$/i.test(w.text));
+  if (!["grep", "egrep", "fgrep"].includes(name)) return false;
+  if (!args.some((w) => /^(?:--recursive|--dereference-recursive|-[a-zA-Z]*[rR][a-zA-Z]*)$/.test(w.text))) return false;
+  const paths = args.filter((w) => !w.text.startsWith("-")).slice(1);
+  return paths.length === 0 || paths.some((w) => ENV_DIRS.has(w.text));
+}
+
 function secretRead(seg) {
   if (seg.redirs.some((r) => (r.op === "<" || r.op === "<>") && (isSecretPath(r.target) || (/[*?[{]/.test(r.target) && couldBeSecret(r.target))))) return true;
-  return seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord);
+  return (seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord)) || recursiveRead(seg);
 }
 
 // Wrappers run their arguments as a command; behind one, a dynamic or glob word could be it.
@@ -104,8 +115,11 @@ function command(text, call, opts, depth = 0) {
     return allow(call);
   }
   const segs = allSegments(parsed);
-  const p = payloadCheck({ segs, sig });
+  const cwd = call.cwd ?? process.cwd();
+  const p = payloadCheck({ segs, sig }) ?? replayCheck({ text, segs, parsed, sig, cwd });
   if (p) return block(p.reason, call);
+  const sweep = segs.flatMap((s) => [...s.words, ...s.redirs.map((r) => ({ text: r.target, glob: /[*?[{]/.test(r.target) }))]).find((w) => w.glob && globNamesGuarded(w));
+  if (sweep) return block(`the glob ${sweep.text} could name git, gh, hub, curl or wget (G20)`, call);
   const evaluate = (t) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, opts, depth + 1));
   for (const [i, seg] of segs.entries()) {
     if (seg.words.some((w) => HTTP.test(w.text) || (w.glob && couldName(w.text, ["curl", "wget"]))))
@@ -113,23 +127,35 @@ function command(text, call, opts, depth = 0) {
     const u = unnamed(seg);
     if (u) return block(u, call);
     if (secretRead(seg)) return block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call);
-    // Analysers see every segment: a git alias or a state change carries no signature.
-    let d;
-    for (const analyse of ANALYSERS) if ((d = analyse(seg, { call, segs, parsed, index: i, evaluate, repoAt: opts.repoAt }))) break;
+    const ind = indirect(seg, { cwd, hasSig: hasSignature(segText(seg)) });
+    if (ind.block) return block(ind.block, call);
+    for (const s of ind.strings) {
+      const e = evaluate(s);
+      if (e.code === 2) return block(`${e.reason} (in a shell string)`, call);
+    }
+    // A segment that only runs shell strings is decided by them.
+    let d = ind.strings.length && !ind.inner.words.length ? { code: 0 } : undefined;
+    // Analysers see every segment, unwrapped: a git alias or a state change carries no signature.
+    for (const analyse of ANALYSERS) {
+      const r = analyse(ind.inner, { call, segs, parsed, index: i, evaluate, repoAt: opts.repoAt });
+      if (r) { d = r; break; }
+    }
     if (d?.code === 2) return block(d.reason, call);
-    if (d || !hasSignature(segText(seg)) || exempt(seg, segs[i + 1])) continue;
+    if (d || !hasSignature(segText(seg)) || exempt(seg)) continue;
     return block("a push/merge-shaped command the guard can't prove safe (R4-M1)", call);
   }
   return allow(call);
 }
 
-// A literal password: `Password=` or `Pwd=` followed by a value that isn't a placeholder
-// (`…`, `<…>`, `$VAR`, `{…}`), like the gitleaks connection-string rule.
-const PASSWORD = /\b(?:password|pwd)=(?![\s;"'`$<>{}…]|$)/i;
+// A literal password: `Password=` or `Pwd=` (spaces allowed) followed by a value that isn't a
+// placeholder (`…`, `<…>`, `$VAR`, `{…}`), like the gitleaks connection-string rule; or a quoted
+// value after `=` or `:` (`"password": "x"`, `password: 'x'`; #514 review). An unquoted
+// `password: string` (a type annotation) passes; unquoted YAML is left to gitleaks.
+const PASSWORD = [/\b(?:password|pwd)\s*=\s*(?![\s;"'`$<>{}…]|$)/i, /\b(?:password|pwd)["']?\s*[:=]\s*["'][^"'$<>{}…\s]/i];
 
 function write(call, patterns) {
   for (const text of call.contents) {
-    if (PASSWORD.test(text)) return block("the write contains a Password= literal (no credentials in the tree)", call);
+    if (PASSWORD.some((re) => re.test(text))) return block("the write contains a Password= literal (no credentials in the tree)", call);
     const hit = patterns().find((p) => p.re.test(text));
     if (hit) return block(`the write matches secret pattern ${hit.id}`, call);
   }
