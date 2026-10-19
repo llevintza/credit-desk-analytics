@@ -66,7 +66,20 @@ export function renderSecretPatterns(toml) {
   return `${[header([".gitleaks.toml"]), ...rules.map((r) => `${r.id}\t${r.regex}`)].join("\n")}\n`;
 }
 
+export const GUARD = "node scripts/agents/hooks/guard.mjs";
+
+/**
+ * H8: the generated `.cursor/hooks.json` calls the same guard on `beforeShellExecution`. It is
+ * rendered only while `.claude/settings.json` wires the guard itself, so the two never diverge.
+ */
+export function renderCursorHooks(settingsText) {
+  const hooks = JSON.parse(settingsText).hooks?.PreToolUse ?? [];
+  const wired = [].concat(hooks).some((g) => [].concat(g?.hooks ?? []).some((h) => h?.command === GUARD));
+  return wired ? `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: GUARD }] } }, null, 2)}\n` : null;
+}
+
 const RENDERERS = {
+  "cursor-hooks": (src) => renderCursorHooks(src[0]),
   "cursor-cli": (src) => renderCursorCli(src[0], src[1]),
   cursorignore: (src) => renderCursorignore(src[0]),
   "secret-patterns": (src) => renderSecretPatterns(src[0]),
@@ -93,7 +106,9 @@ export function render(manifest, read) {
     if (src.some((s) => s === null)) continue;
     const fn = RENDERERS[o.render];
     if (!fn) throw new RenderError(`unknown renderer ${o.render}`);
-    files.set(o.path, fn(src));
+    const text = fn(src);
+    if (text === null) continue; // the source exists but asks for no such output
+    files.set(o.path, text);
     lock[o.path] = sourceHash(o.sources, read);
   }
   if (files.size) files.set(LOCK, `${JSON.stringify(lock, null, 2)}\n`);

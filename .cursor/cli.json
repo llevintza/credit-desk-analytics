@@ -78,7 +78,16 @@
       "Shell(gh:ruleset -*)",
       "Shell(gh:cache -*)",
       "Shell(gh:alias -*)",
-      "Shell(gh:api -*)"
+      "Shell(gh:api -*)",
+      "Shell(git:push * +*)",
+      "Shell(git:push +*)",
+      "Shell(gh:alias set*)",
+      "Shell(gh:alias import*)",
+      "Shell(gh:extension install*)",
+      "Shell(gh:extension exec*)",
+      "Shell(gh:extension -*)",
+      "Shell(gh:extensions *)",
+      "Shell(gh:ext *)"
     ]
   }
 }

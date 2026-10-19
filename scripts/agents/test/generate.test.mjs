@@ -12,16 +12,16 @@ const MAP = readFileSync(new URL("../permission-map.json", import.meta.url), "ut
 const GITLEAKS = readFileSync(new URL("../../../.gitleaks.toml", import.meta.url), "utf8");
 
 
-test("the policy counts: MIN_DENY 71, MIN_DENY_CURSOR 70, six allows, seven asks", () => {
-  assert.equal(MIN_DENY.length, 71);
-  assert.equal(MIN_DENY_CURSOR.length, 70);
-  assert.equal(new Set(MIN_DENY).size, 71);
+test("the policy counts: MIN_DENY 80, MIN_DENY_CURSOR 79, six allows, seven asks", () => {
+  assert.equal(MIN_DENY.length, 80);
+  assert.equal(MIN_DENY_CURSOR.length, 79);
+  assert.equal(new Set(MIN_DENY).size, 80);
   assert.deepEqual([MAX_ALLOW.length, MAX_ALLOW_CURSOR.length, ASK.length], [6, 6, 7]);
   assert.ok(MIN_DENY.includes("Bash(git push)") && MIN_DENY.includes("Bash(git push *--force-*)"));
   assert.ok(!MIN_DENY_CURSOR.some((e) => e === "Shell(git:push)" || e === "Shell(git:push*)"));
 });
 
-test("golden cli.json: colon form, the 70 Cursor denies, no bare push, Edit->Write, no !", () => {
+test("golden cli.json: colon form, the 79 Cursor denies, no bare push, Edit->Write, no !", () => {
   const cli = JSON.parse(renderCursorCli(JSON.stringify(SETTINGS), MAP)).permissions;
   assert.deepEqual(cli.deny, [...MIN_DENY_CURSOR]);
   assert.deepEqual(cli.allow, [...MAX_ALLOW_CURSOR]);
@@ -93,4 +93,21 @@ test("main: write, then --check passes; a hand edit or a bad source fails", () =
   assert.equal(main(["--root", gone], { write: capture().write }), 0, "nothing to render, nothing written");
   const r = spawnSync(process.execPath, [fileURLToPath(new URL("../generate.mjs", import.meta.url)), "--check"], { encoding: "utf8", cwd: fileURLToPath(new URL("../../../", import.meta.url)) });
   assert.equal(r.status, 0, r.stdout);
+});
+
+// #511: the rev-10 amendment denies, modelled as Claude matches them (`*` is any text, spaces
+// included) and in the Cursor colon form (the first colon read as a space).
+test("rev-10 amendment: +<refspec> pushes and gh alias/extension writes are denied in both lists (#511)", () => {
+  const re = (p) => new RegExp(`^${p.split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+  const claude = (cmd) => MIN_DENY.some((e) => e.startsWith("Bash(") && re(e.slice(5, -1)).test(cmd));
+  const cursor = (cmd) => MIN_DENY_CURSOR.some((e) => e.startsWith("Shell(") && re(e.slice(6, -1).replace(":", " ")).test(cmd));
+  for (const c of ["git push origin +feature", "git push +HEAD:dev", "git push origin +HEAD:other", "git push -u origin +x", "gh alias set p 'pr merge'",
+    "gh alias import a.yml", "gh extension install x/y", "gh extension exec y", "gh extension --x install y", "gh ext install x/y", "gh extensions exec y"]) {
+    assert.ok(claude(c), `Claude: ${c}`);
+    assert.ok(cursor(c), `Cursor: ${c}`);
+  }
+  for (const c of ["git push -u origin feat", "git push origin feat", "gh alias list", "gh extension list", "gh pr view 5"]) {
+    assert.ok(!claude(c), `Claude over-deny: ${c}`);
+    assert.ok(!cursor(c), `Cursor over-deny: ${c}`);
+  }
 });

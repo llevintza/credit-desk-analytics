@@ -74,6 +74,15 @@
       "Bash(gh cache -*)",
       "Bash(gh alias -*)",
       "Bash(gh api -*)",
+      "Bash(git push * +*)",
+      "Bash(git push +*)",
+      "Bash(gh alias set*)",
+      "Bash(gh alias import*)",
+      "Bash(gh extension install*)",
+      "Bash(gh extension exec*)",
+      "Bash(gh extension -*)",
+      "Bash(gh extensions *)",
+      "Bash(gh ext *)",
       "Bash(git push)"
     ],
     "ask": [

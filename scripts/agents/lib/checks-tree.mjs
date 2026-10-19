@@ -5,6 +5,7 @@
  */
 import { CheckError, fail, fold, matchesAny } from "./common.mjs";
 import { d18Harness } from "./checks-harness.mjs";
+import { render } from "../generate.mjs";
 
 const STUB = "@AGENTS.md\n";
 const base = (p) => p.slice(p.lastIndexOf("/") + 1);
@@ -88,10 +89,19 @@ export const TREE_CHECKS = {
     for (const p of head.glob([".github/copilot-instructions.md", ".github/instructions/**", ".github/prompts/**"])) r.fail(`Copilot instruction file ${p}`);
   },
 
-  D7: ({ head }, r) => {
+  D7: ({ head, manifest = [] }, r) => {
     for (const p of head.glob(".grok/**")) if (!matchesAny(p, [".grok/agents/*.md"])) r.fail(`.grok/ must be absent (Grok not enabled): ${p}`);
-    // H8: only the generated .cursor/hooks.json may exist; the generator lands in Stage B.
-    for (const p of head.glob(".cursor/hooks.json")) r.fail(`hand-written ${p} (only the generated file is allowed)`);
+    // H8: only the byte-exact generated .cursor/hooks.json may exist (the running checker's
+    // generator renders it from the PR's manifest and sources; fallback (ii) drops the output).
+    const hooks = head.glob(".cursor/hooks.json");
+    if (!hooks.length) return;
+    let want;
+    try {
+      want = render(manifest, head.read);
+    } catch {
+      want = new Map(); // a renderer the running generator doesn't know: nothing is generated
+    }
+    for (const p of hooks) if (!want.has(p) || want.get(p) !== head.read(p)) r.fail(`hand-written ${p} (only the generated file is allowed)`);
   },
 
   D8: ({ head }, r) => {

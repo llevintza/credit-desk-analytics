@@ -136,6 +136,14 @@ The group and the verb are the first two words after `gh`; for `gh api`, the end
 
 **Over-deny you will hit:** Claude's deny list also blocks harmless reads that contain an admin word (`gh api …/rulesets`, `…/protection`, `…/environments`, `…/secrets`, `…/keys`, `…/actions/…`) and `gh secret list` / `gh variable list|get`. Tech Coordinator does those reads.
 
+**Substring denies that also catch read flags (#516 review; kept as is, because a deny may only be added to, never narrowed below `MIN_DENY`):** the word can sit in a `--json` field or a `--jq` filter, not only in the verb or the path. Ask for the same data another way:
+
+| Denied | Why | Write instead |
+|---|---|---|
+| `gh run list --jq '.[] \| select(.conclusion == "cancelled")'` | `gh run *cancel*` | `gh run list --json databaseId,conclusion`, then read the field |
+| `gh api repos/o/r/actions/runs`, `…/actions/jobs/<id>/logs` | `gh api *actions/*` | `gh run list`, `gh run view <id>`, `gh run view <id> --log-failed`, `gh pr checks <n>` |
+| `gh api repos/o/r/pulls/<n> --jq .mergeable`, `gh api repos/o/r/pulls/<n> --jq .merge_commit_sha` | `gh api *merge*` | `gh pr view <n> --json mergeable,mergeStateStatus,mergeCommit` (`gh pr view` is not on the merge deny) |
+
 **Hidden `gh` names (rev 10):** wrapped, glob or copied `gh` binaries (`xargs /usr/bin/g[h] …`, a copied `gh`) are resolved and fail closed under G20/G21, then checked against this allowlist. The canonical form and the verb list are H16/G14 rules.
 
 ## Who signs off

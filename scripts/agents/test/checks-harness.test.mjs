@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runChecks, treeView } from "../check-drift.mjs";
-import { render, renderCursorCli } from "../generate.mjs";
+import { GUARD, render, renderCursorCli, renderCursorHooks } from "../generate.mjs";
 import { covered } from "../lib/checks-harness.mjs";
 import { MIN_DENY_CURSOR } from "../lib/harness-policy.mjs";
 import { SETTINGS, scratch } from "./helpers.mjs";
@@ -119,6 +119,38 @@ test("D14: regen-diff, headers, the lock; supersets when the generator changed",
   fails("D14", { ...GOOD, [sp]: GOOD[sp].split("\n").filter((l) => !l.startsWith("postgres-uri")).join("\n") }, /dropped or changed rule postgres-uri-password/, GOOD, gen);
   fails("D14", { ...GOOD, [C]: null }, /cli.json is on main and the PR removed it/, GOOD, gen);
   fails("D14", cli((p) => p.allow.push("Shell(git:log *)")), /widened allow Shell\(git:log \*\)/, GOOD, gen);
+});
+
+const HOOKS = ".cursor/hooks.json";
+const wired = (cmd = GUARD) => settings((p, s) => (s.hooks = { PreToolUse: [{ matcher: "Bash|Shell", hooks: [{ type: "command", command: cmd, timeout: 5 }] }] }));
+
+test("H8 renderer: .cursor/hooks.json only while settings.json wires the guard", () => {
+  assert.equal(renderCursorHooks(GOOD[S]), null);
+  assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PreToolUse: { hooks: { command: GUARD } } } })), `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: GUARD }] } }, null, 2)}\n`);
+  assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PostToolUse: [{ hooks: [{ command: GUARD }] }] } })), null, "only PreToolUse counts");
+  assert.equal(renderCursorHooks(wired("node scripts/agents/hooks/format.mjs")[S]), null);
+  assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PreToolUse: [null, {}] } })), null);
+  const w = wired();
+  assert.ok(HOOKS in w && JSON.parse(w["scripts/agents/generated.lock.json"])[HOOKS], "rendered with its lock entry");
+  assert.ok(!(HOOKS in GOOD) && !JSON.parse(GOOD["scripts/agents/generated.lock.json"])[HOOKS]);
+});
+
+test("D7 hand-written vs generated .cursor/hooks.json (H8)", () => {
+  const w = wired();
+  for (const id of ["D7", "D14", "D18"]) passes(id, w);
+  fails("D7", { ...GOOD, [HOOKS]: w[HOOKS] }, /hand-written \.cursor\/hooks.json/, undefined); // the guard is not wired: nothing is generated
+  fails("D7", { ...w, [HOOKS]: w[HOOKS].replace("\n}", ',\n  "x": 1\n}') }, /hand-written/);
+  fails("D7", { ...w, [HOOKS]: JSON.stringify(JSON.parse(w[HOOKS])) }, /hand-written/, undefined); // same content, other bytes
+  fails("D14", { ...GOOD, [HOOKS]: w[HOOKS] }, /hooks.json differs from what the generator renders/);
+  const ctx = (manifest) => ({ head: view(w), inputs: ADAPTERS.inputs, manifest, armed: { on: new Set(["D7"]) } });
+  assert.match(runChecks(ctx([]), ["D7"])[0].fails[0], /hand-written/, "fallback (ii): no manifest output, no allowance");
+  assert.match(runChecks(ctx([{ path: HOOKS, sources: [S], render: "no-such" }]), ["D7"])[0].fails[0], /hand-written/, "a renderer the checker lacks");
+});
+
+test("D18: the committed format.mjs and quick-test.mjs pass, and so does a wired settings.json", () => {
+  const real = Object.fromEntries(["format", "quick-test"].map((h) => [`scripts/agents/hooks/${h}.mjs`, readFileSync(new URL(`../hooks/${h}.mjs`, import.meta.url), "utf8")]));
+  passes("D18", { ...wired(), ...real });
+  fails("D18", wired("node scripts/agents/hooks/format.mjs --x"), /PreToolUse hook command is not on the allowlist/);
 });
 
 test("D4: .cursor rules only as generated root areas/*.mdc, never alwaysApply: true", () => {
