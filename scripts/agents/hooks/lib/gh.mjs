@@ -6,6 +6,8 @@
  * flag before the verb or endpoint, a dynamic group or verb, an alias or an extension blocks.
  * Only the listed read verbs and PR/issue flows pass. `gh api` passes any pure GET, and a
  * write only to the anchored PR/issue paths; GraphQL only as a literal read query.
+ * Agents never close issues or PRs or post review verdicts (AGENTS.md): no `close` verb, `pr review`
+ * only with `--comment`, and no `state` other than open or review `event` other than COMMENT in a write.
  */
 import { base, head } from "./words.mjs";
 
@@ -13,8 +15,8 @@ const block = (reason) => ({ code: 2, reason });
 const ok = { code: 0 };
 
 const VERBS = {
-  pr: ["view", "list", "status", "checks", "diff", "create", "edit", "comment", "review", "ready", "checkout", "update-branch", "close", "reopen"],
-  issue: ["view", "list", "status", "create", "comment", "edit", "close", "reopen"],
+  pr: ["view", "list", "status", "checks", "diff", "create", "edit", "comment", "review", "ready", "checkout", "update-branch", "reopen"],
+  issue: ["view", "list", "status", "create", "comment", "edit", "reopen"],
   run: ["list", "view", "watch", "download"],
   workflow: ["list", "view"],
   ruleset: ["list", "view", "check"],
@@ -96,9 +98,26 @@ function api(args) {
   if (a.input) return block("gh api --input (the request body isn't visible; G15)");
   const method = a.method ?? (a.fields.length ? "POST" : "GET");
   if (method === "GET" && !a.extra) return ok;
+  const verdict = a.fields.find(([k, v, w]) => (k === "state" && (w.dynamic || v !== "open")) || (k === "event" && (w.dynamic || v.toUpperCase() !== "COMMENT")));
+  if (verdict) return block(`gh api ${method} with ${verdict[0]}=${verdict[1]} (agents never close or post a review verdict; G14)`);
   if (ep.dynamic || /[?#%\\\s]|\.\.|\/\//.test(path)) return block(`gh api write to an unprovable path (G15)`);
   if (/(?:^|\/)merge(?:$|\/)|(?:^|\/)git\/|(?:^|\/)contents(?:\/|$)/.test(path)) return block(`gh api ${method} to a merge, git or contents path (G15)`);
   return WRITE_PATHS.test(path) ? ok : block(`gh api ${method} ${path} is outside the PR/issue write allowlist (G15, H14)`);
+}
+
+// `gh pr review` posts a comment only: `--comment` plus a body, nothing else (no -a/-r verdict).
+const REVIEW_VALUED = new Set(["-b", "--body", "-F", "--body-file", "-R", "--repo"]);
+function review(rest) {
+  let comment = false;
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i].text;
+    if (rest[i].dynamic) return block("gh pr review with a dynamic argument (G14)");
+    if (t === "-c" || t === "--comment") comment = true;
+    else if (REVIEW_VALUED.has(t)) i++;
+    else if (/^--(?:body|body-file|repo)=/.test(t) || !t.startsWith("-")) continue;
+    else return block(`gh pr review ${t}: agents post review comments only, never a verdict (G14)`);
+  }
+  return comment ? ok : block("gh pr review without --comment (agents never post a review verdict; G14)");
 }
 
 /** The segment analyser (decide.mjs ANALYSERS). */
@@ -116,5 +135,6 @@ export function analyseGh(seg) {
   if (g.text === "repo" && v.text === "deploy-key") return rest[0]?.text === "list" ? ok : block("gh repo deploy-key writes (H14)");
   if (!VERBS[g.text].includes(v.text)) return block(`gh ${g.text} ${v.text} is not on the allowlist (G14)`);
   if (g.text === "pr" && v.text === "update-branch" && rest.some((w) => w.text === "--rebase")) return block("gh pr update-branch --rebase (branches are updated by merge; G9)");
+  if (g.text === "pr" && v.text === "review") return review(rest);
   return ok;
 }

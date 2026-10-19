@@ -11,7 +11,7 @@ import { normalize, hasSignature, payloadTexts } from "./input.mjs";
 import { analyseGh } from "./gh.mjs";
 import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
-import { globNamesGuarded, indirect } from "./indirect.mjs";
+import { globNamesGuarded, indirect, unwrap } from "./indirect.mjs";
 import { decideMcp } from "./mcp.mjs";
 import { replayCheck } from "./replay.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
@@ -47,7 +47,9 @@ export function isSecretPath(s) {
 }
 const READERS = new Set(["cat", "head", "tail", "less", "more", "sed", "awk", "gawk", "cut", "base64", "xxd", "od", "hexdump", "strings", "cp", "source", ".", "printenv", "grep", "rg", "tac", "nl", "bat", "sort", "uniq", "diff", "jq", "python", "python3", "node", "perl", "ruby",
   // #514 review: more programs that read or expose a file (git covers `git show HEAD:.env`, `cat-file`).
-  "dd", "paste", "rev", "tar", "rsync", "zip", "gzip", "vim", "vi", "nvim", "nano", "view", "emacs", "ed", "ln", "git", "hub"]);
+  "dd", "paste", "rev", "tar", "rsync", "zip", "gzip", "vim", "vi", "nvim", "nano", "view", "emacs", "ed", "ln", "git", "hub",
+  // #520 review: copy and move tools (`mv .env x && cat x`).
+  "mv", "install", "ditto", "scp", "split", "cpio", "pax"]);
 
 // A glob or brace word that could expand to a secret path counts as one (#512 review).
 const secretWord = (w) => isSecretPath(w.text) || (w.glob && couldBeSecret(w.text));
@@ -67,7 +69,19 @@ function recursiveRead(seg) {
   return paths.length === 0 || paths.some((w) => ENV_DIRS.has(w.text));
 }
 
-function secretRead(seg) {
+// xargs/parallel turn stdin into arguments (#520 review): `echo .env | xargs cat`, `xargs cat
+// <<< .env`. The text fed in (the piped segment's words, a here-string or heredoc) is checked
+// as if it were the reader's arguments.
+const fed = (seg) => [...seg.words.map((w) => w.text), ...seg.redirs.flatMap((r) => [r.op === "<<<" ? r.target : "", r.heredoc?.body ?? ""])];
+function stdinRead(seg, prev) {
+  const u = unwrap(seg);
+  if (!u.completes || !u.words.some((w) => READERS.has(base(w.text)))) return false;
+  const texts = [...fed({ words: [], redirs: seg.redirs }), ...(prev && ["|", "|&"].includes(prev.sep) ? fed(prev) : [])];
+  return texts.some((t) => isSecretPath(t.replace(/\\[nt0]/g, " ")));
+}
+
+function secretRead(seg, prev) {
+  if (stdinRead(seg, prev)) return true;
   if (seg.redirs.some((r) => (r.op === "<" || r.op === "<>") && (isSecretPath(r.target) || (/[*?[{]/.test(r.target) && couldBeSecret(r.target))))) return true;
   return (seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord)) || recursiveRead(seg);
 }
@@ -102,6 +116,20 @@ function unnamed(seg) {
   return undefined;
 }
 
+// `alias name=value …` definitions in a payload: { name: value }.
+function aliasDefs(segs) {
+  const out = {};
+  for (const seg of segs) {
+    const h = head(seg);
+    if (base(h?.text ?? "") !== "alias") continue;
+    for (const w of seg.words.slice(seg.words.indexOf(h) + 1)) {
+      const m = /^([^\s=/$`'"]+)=([\s\S]*)$/.exec(w.text);
+      if (m) out[m[1]] = m[2];
+    }
+  }
+  return out;
+}
+
 function command(text, call, opts, depth = 0) {
   const { deadline } = opts;
   if (HTTP.test(text.replace(/[\\'"]/g, ""))) return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
@@ -120,13 +148,29 @@ function command(text, call, opts, depth = 0) {
   if (p) return block(p.reason, call);
   const sweep = segs.flatMap((s) => [...s.words, ...s.redirs.map((r) => ({ text: r.target, glob: /[*?[{]/.test(r.target) }))]).find((w) => w.glob && globNamesGuarded(w));
   if (sweep) return block(`the glob ${sweep.text} could name git, gh, hub, curl or wget (G20)`, call);
-  const evaluate = (t) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, opts, depth + 1));
+  const evaluate = (t, o = opts) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, o, depth + 1));
+  const aliases = { ...opts.aliases, ...aliasDefs(segs) };
   for (const [i, seg] of segs.entries()) {
+    // A shell alias defined in the same payload (`alias g=git` then `g push …`; #520 review) is
+    // expanded and evaluated; bash doesn't re-expand the alias being expanded.
+    const h = head(seg);
+    if (h && !h.quoted && !h.dynamic && h.raw === h.text && Object.hasOwn(aliases, h.text)) {
+      let { [h.text]: value, ...others } = aliases;
+      const rest = seg.words.slice(seg.words.indexOf(h) + 1).map((w) => w.raw);
+      // A value ending in a blank expands the next word too (`alias s='sudo '`).
+      while (/\s$/.test(value) && Object.hasOwn(others, rest[0] ?? "")) {
+        const next = rest.shift();
+        value += others[next];
+        delete others[next];
+      }
+      const e = evaluate([value, ...rest].join(" "), { ...opts, aliases: others });
+      if (e.code === 2) return block(`${e.reason} (through the alias ${h.text})`, call);
+    }
     if (seg.words.some((w) => HTTP.test(w.text) || (w.glob && couldName(w.text, ["curl", "wget"]))))
       return block("curl and wget are not allowed in agent sessions (G18); use the web fetch tool", call);
     const u = unnamed(seg);
     if (u) return block(u, call);
-    if (secretRead(seg)) return block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call);
+    if (secretRead(seg, segs[i - 1])) return block("reading .env, .env.* (except .env.example) or secrets/ is not allowed", call);
     const ind = indirect(seg, { cwd, hasSig: hasSignature(segText(seg)) });
     if (ind.block) return block(ind.block, call);
     for (const s of ind.strings) {
