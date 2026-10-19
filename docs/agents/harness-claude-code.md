@@ -40,7 +40,7 @@ Target file: `.claude/settings.json` (arrives with the harness build PR). It is 
 | **deny, rev-10 amendment (9; #511)** | `Bash(git push * +*)`, `Bash(git push +*)`, `Bash(gh alias set*)`, `Bash(gh alias import*)`, `Bash(gh extension install*)`, `Bash(gh extension exec*)`, `Bash(gh extension -*)`, `Bash(gh extensions *)`, `Bash(gh ext *)` | `+<refspec>` force-pushes to any ref; no gh aliases or extensions (AGENTS.md). `MIN_DENY` 80 |
 | ask (7) | `Edit(./**/AGENTS.md)`, `Edit(./**/CLAUDE.md)`, `Edit(./.claude/**)`, `Edit(./.cursor/**)`, `Edit(./.github/**)`, `Edit(./docs/agents/**)`, `Edit(./scripts/agents/**)` | Prompt before steering edits |
 | allow (6) | `dotnet build *`, `dotnet test *`, `npm run lint`, `npm test *`, `git status`, `git diff *` | Common reads/tests without prompts |
-| hooks | `PreToolUse` `Bash\|Shell\|Read\|Edit\|Write\|MultiEdit\|mcp__.*` → `node scripts/agents/hooks/guard.mjs`; `PostToolUse` `Edit\|Write\|MultiEdit` → `format.mjs`; `Stop` → `quick-test.mjs` | Guard (defense in depth), format, quick tests. **Rev 10:** the MCP part of the matcher (`mcp__.*` for Claude) is generated per adapter; UNVERIFIED until U22 |
+| hooks | `PreToolUse` `Bash\|Shell\|Read\|Edit\|Write\|MultiEdit\|mcp__.*` → `node "${CLAUDE_PROJECT_DIR:-.}/scripts/agents/hooks/guard.mjs"` with `onFailure: "block"`; `PostToolUse` `Edit\|Write\|MultiEdit` → `format.mjs`; `Stop` → `quick-test.mjs` (same path form, advisory) | Guard (defense in depth), format, quick tests. **Rev 10:** the MCP part of the matcher (`mcp__.*` for Claude) is generated per adapter; UNVERIFIED until U22 |
 
 - **MCP merge deny** (`mcp__*__merge_pull_request`) is left out of the draft JSON until U22 settles the exact tool names and wildcard support; the guard's `mcp__.*` matcher covers it meanwhile (also U22).
 - **Web fetch:** Claude Code's built-in `WebFetch` is the docs path (H16 (3)). It prompts per domain except a preapproved set of docs domains. Optional `WebFetch(domain:<host>)` allow entries stay under D10's caps; the draft adds none.
@@ -61,6 +61,6 @@ Target file: `.claude/settings.json` (arrives with the harness build PR). It is 
 | U17 `!` carve-out in the installed version | UNVERIFIED (documented) | Fallback: bare `!.env.example`, else drop the `!` rules |
 | U19 `disableAllHooks` honoured in a real run | UNVERIFIED (documented) | CI no-op hooks + canary |
 | U22 MCP tool names, wildcards, `mcp__.*` matcher | UNVERIFIED | MCP denies not counted |
-| Hooks fail open on timeout | VERIFIED (M§2) | Guard is best-effort |
+| Hooks fail open on timeout, crash or a script that can't start | VERIFIED (M§2) | The guard entry sets `onFailure: "block"`, which needs **Claude Code v2.1.295 or later** (hooks reference, per the #528 review). On an older version the key is ignored: a guard that can't start, crashes or times out is a non-blocking error and the tool call proceeds. Run a current Claude Code; the guard stays best-effort either way |
 | Read deny doesn't cover commands that read without naming the file (`grep -r KEY .`) | VERIFIED (U13) | Real control: no secrets in the tree (D19, gitleaks) |
 | `Bash(git push *--force-*)` | Rev 10 decision; count re-verified (`MIN_DENY` 71) | None for the count; the deny's own matching is checked by the golden file |

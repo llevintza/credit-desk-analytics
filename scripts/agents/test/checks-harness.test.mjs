@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runChecks, treeView } from "../check-drift.mjs";
-import { GUARD, render, renderCursorCli, renderCursorHooks } from "../generate.mjs";
+import { render, renderCursorCli, renderCursorHooks } from "../generate.mjs";
 import { covered } from "../lib/checks-harness.mjs";
-import { MIN_DENY_CURSOR } from "../lib/harness-policy.mjs";
+import { CURSOR_HOOK_ENTRY, HOOK_ENTRIES, MIN_DENY_CURSOR } from "../lib/harness-policy.mjs";
 import { SETTINGS, scratch } from "./helpers.mjs";
 
 const ADAPTERS = JSON.parse(readFileSync(new URL("../adapters.json", import.meta.url), "utf8"));
@@ -122,13 +122,20 @@ test("D14: regen-diff, headers, the lock; supersets when the generator changed",
 });
 
 const HOOKS = ".cursor/hooks.json";
-const wired = (cmd = GUARD) => settings((p, s) => (s.hooks = { PreToolUse: [{ matcher: "Bash|Shell", hooks: [{ type: "command", command: cmd, timeout: 5 }] }] }));
+const GUARD = HOOK_ENTRIES.PreToolUse.command;
+const entry = (event, over = {}) => ({ ...HOOK_ENTRIES[event], ...over });
+const wiredWith = (hooks) => settings((p, s) => (s.hooks = hooks));
+const wired = (over) => wiredWith({ PreToolUse: [{ matcher: "Bash|Shell", hooks: [entry("PreToolUse", over)] }] });
+const ALL = () => Object.fromEntries(Object.keys(HOOK_ENTRIES).map((ev) => [ev, [{ ...(ev === "Stop" ? {} : { matcher: "x" }), hooks: [entry(ev)] }]]));
 
 test("H8 renderer: .cursor/hooks.json only while settings.json wires the guard", () => {
   assert.equal(renderCursorHooks(GOOD[S]), null);
-  assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PreToolUse: { hooks: { command: GUARD } } } })), `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: GUARD }] } }, null, 2)}\n`);
+  const want = `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: "node scripts/agents/hooks/guard.mjs", failClosed: true }] } }, null, 2)}\n`;
+  assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PreToolUse: { hooks: { command: GUARD } } } })), want, "fails closed, path relative to the root");
+  assert.equal(JSON.parse(want).hooks.beforeShellExecution[0].failClosed, true);
   assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PostToolUse: [{ hooks: [{ command: GUARD }] }] } })), null, "only PreToolUse counts");
-  assert.equal(renderCursorHooks(wired("node scripts/agents/hooks/format.mjs")[S]), null);
+  assert.equal(renderCursorHooks(wired({ command: HOOK_ENTRIES.PostToolUse.command })[S]), null);
+  assert.equal(renderCursorHooks(wired({ command: "node scripts/agents/hooks/guard.mjs" })[S]), null, "the old relative form wires nothing");
   assert.equal(renderCursorHooks(JSON.stringify({ hooks: { PreToolUse: [null, {}] } })), null);
   const w = wired();
   assert.ok(HOOKS in w && JSON.parse(w["scripts/agents/generated.lock.json"])[HOOKS], "rendered with its lock entry");
@@ -150,7 +157,32 @@ test("D7 hand-written vs generated .cursor/hooks.json (H8)", () => {
 test("D18: the committed format.mjs and quick-test.mjs pass, and so does a wired settings.json", () => {
   const real = Object.fromEntries(["format", "quick-test"].map((h) => [`scripts/agents/hooks/${h}.mjs`, readFileSync(new URL(`../hooks/${h}.mjs`, import.meta.url), "utf8")]));
   passes("D18", { ...wired(), ...real });
-  fails("D18", wired("node scripts/agents/hooks/format.mjs --x"), /PreToolUse hook command is not on the allowlist/);
+  passes("D18", wiredWith(ALL()));
+  fails("D18", wired({ command: "node scripts/agents/hooks/format.mjs --x" }), /PreToolUse hook entry is not on the allowlist/);
+});
+
+test("D18 hook entries (#528 review): project-dir paths, the guard fails closed, exact keys per event", () => {
+  const bad = (hooks, re) => fails("D18", wiredWith(hooks), re);
+  const pre = (h) => ({ PreToolUse: [{ matcher: "Bash", hooks: [h] }] });
+  bad(pre(entry("PreToolUse", { command: "node scripts/agents/hooks/guard.mjs" })), /PreToolUse hook entry/); // the old bare relative form
+  const { onFailure, ...open } = HOOK_ENTRIES.PreToolUse;
+  assert.equal(onFailure, "block");
+  bad(pre(open), /PreToolUse hook entry/); // no onFailure: a crashed guard would allow
+  bad(pre(entry("PreToolUse", { onFailure: "allow" })), /PreToolUse hook entry/);
+  bad(pre(entry("PreToolUse", { timeout: 60 })), /PreToolUse hook entry/);
+  bad(pre(entry("PreToolUse", { extra: 1 })), /PreToolUse hook entry/);
+  bad({ PostToolUse: [{ hooks: [entry("PostToolUse", { onFailure: "block" })] }] }, /PostToolUse hook entry/); // advisory hooks never block
+  bad({ PostToolUse: [{ hooks: [entry("PreToolUse")] }] }, /PostToolUse hook entry/); // the guard on the wrong event
+  bad({ Stop: [{ hooks: [entry("PostToolUse")] }] }, /Stop hook entry/);
+  bad({ SessionStart: [{ hooks: [entry("PreToolUse")] }] }, /SessionStart hook entry/);
+  bad({ toString: [{ hooks: [{}] }] }, /toString hook entry/);
+  bad(pre("node x"), /PreToolUse hook entry/);
+  for (const h of Object.values(HOOK_ENTRIES)) assert.match(h.command, /^node "\$\{CLAUDE_PROJECT_DIR:-\.\}\/scripts\/agents\/hooks\/[a-z-]+\.mjs"$/);
+  const cursor = (h) => ({ [HOOKS]: JSON.stringify({ version: 1, hooks: { beforeShellExecution: [h] } }) });
+  passes("D18", cursor(CURSOR_HOOK_ENTRY));
+  fails("D18", cursor({ command: CURSOR_HOOK_ENTRY.command }), /beforeShellExecution hook entry/); // no failClosed
+  fails("D18", cursor({ ...CURSOR_HOOK_ENTRY, failClosed: false }), /beforeShellExecution hook entry/);
+  fails("D18", { [HOOKS]: JSON.stringify({ version: 1, hooks: { afterFileEdit: [CURSOR_HOOK_ENTRY] } }) }, /afterFileEdit hook entry/);
 });
 
 test("D4: .cursor rules only as generated root areas/*.mdc, never alwaysApply: true", () => {
@@ -164,12 +196,11 @@ test("D4: .cursor rules only as generated root areas/*.mdc, never alwaysApply: t
 
 const LINE1 = (h) => `if (process.env.CI || process.env.GITHUB_ACTIONS === 'true') { markCiHookRan('${h}'); process.exit(0); }`;
 test("D18 harness parts: settings keys, the hook allowlist, the format/quick-test CI line and imports", () => {
-  const hooked = (cmd) => settings((p, s) => (s.hooks = { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: cmd }] }] }));
-  passes("D18", hooked("node scripts/agents/hooks/guard.mjs"));
-  fails("D18", hooked("node scripts/agents/hooks/guard.mjs && x"), /PreToolUse hook command is not on the allowlist/);
+  passes("D18", wired());
+  fails("D18", wired({ command: `${GUARD} && x` }), /PreToolUse hook entry is not on the allowlist/);
   fails("D18", settings((p, s) => (s.env = { A: "1" })), /key env is not allowed/);
   fails("D18", settings((p, s) => (s.apiKeyHelper = "x")), /key apiKeyHelper/);
-  fails("D18", { ".cursor/hooks.json": JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: "sh x" }] } }) }, /\.cursor\/hooks.json: a beforeShellExecution hook command/);
+  fails("D18", { ".cursor/hooks.json": JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: "sh x" }] } }) }, /\.cursor\/hooks.json: a beforeShellExecution hook entry/);
   const fmt = (body) => ({ "scripts/agents/hooks/format.mjs": body });
   const ok = `${LINE1("format")}\nimport { appendFileSync } from "node:fs";\nfunction markCiHookRan(h) { appendFileSync("x", h); }\n`;
   passes("D18", fmt(ok));

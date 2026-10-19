@@ -151,6 +151,18 @@ The group and the verb are the first two words after `gh`; for `gh api`, the end
 - Gate: Tech Coordinator plus Code Reviewer (AGENTS item 6). Tech Coordinator merges.
 - `[workflows]` PRs are reviewed by hand by Tech Coordinator and Leo. Helms (CTO) signs off on `[workflows]` and rules PRs (any PR that changes agent rules: an `AGENTS.md` or `CLAUDE.md`, `.claude/`, `.cursor/`, `.grok/`, `docs/agents/` or `scripts/agents/`) on Leo's behalf (delegated 2026-10-07, 10:02 PM ET); Leo can take any PR back for his own review.
 
+## Switching the hooks off (Leo, locally)
+
+The hooks fire **only on an agent's tool calls**: Claude Code's Bash, Read, Edit, Write and MCP calls, and Cursor agent shell commands and imported hooks. They never run on your own editing in the editor, your own terminal and `git`, or Cursor Tab (the guard isn't wired to Tab hooks).
+
+To switch them off on your machine:
+
+- **Claude Code, one run:** `claude --settings '{"disableAllHooks": true}'`. This takes precedence over the project settings.
+- **Claude Code, until you re-arm:** put `{"disableAllHooks": true}` in `.claude/settings.local.json`, which is gitignored. Delete the file to re-arm. Never commit it: D3 fails any committed `.claude/settings.local.json`.
+- **Cursor:** turn the hooks off in Customize → Hooks, or rename `.cursor/hooks.json` locally and don't commit the rename (D7 still checks the committed file).
+
+Switching the hooks off removes only the guard's defense in depth. The deny lists in `.claude/settings.json` and `.cursor/cli.json` still apply, and so does the `main` ruleset, the primary control. Agent sessions keep the hooks on.
+
 ## Things only Tech Coordinator (or a human) does
 
 From outside the harness (ADR §8 H15; [`governance.md`](governance.md)):
