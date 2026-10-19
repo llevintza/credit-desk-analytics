@@ -103,3 +103,26 @@ test("leading reserved words are dropped so the first word is the command (#510 
   assert.deepEqual(words("! git push; { cd ..; git push; }; while x; do y; done; until z; do w; done"), [["git", "push"], ["cd", ".."], ["git", "push"], ["x"], ["y"], ["z"], ["w"]]);
   assert.deepEqual(words("'if' x; \\! y; for b in a; do git push; done"), [["if", "x"], ["!", "y"], ["for", "b", "in", "a"], ["git", "push"]]);
 });
+
+// #511: a push or merge hidden in $(…), backticks or eval surfaces as its own checked segment,
+// or the guard fails closed.
+test("$(…), backticks and eval: the inner command is a segment, and the guard blocks it (#511)", async () => {
+  const { decide } = await import("../hooks/lib/decide.mjs");
+  const { fakeRepo } = await import("./helpers.mjs");
+  const has = (src, inner) => assert.ok(words(src).some((w) => w.join(" ") === inner), `${src} -> ${inner}`);
+  has("echo $(git push --force origin main)", "git push --force origin main");
+  has("echo $(echo $(git push -f origin main))", "git push -f origin main");
+  has('echo "$(git push --force origin main)"', "git push --force origin main");
+  has("echo `git push -f`", "git push -f");
+  has("echo `echo \\`git push -f\\``", "git push -f");
+  has('echo "`git push -f`"', "git push -f");
+  has("eval 'git push -f'", "eval git push -f");
+  const reason = (command) => decide(JSON.stringify({ tool_name: "Bash", tool_input: { command } }), { repoAt: fakeRepo() });
+  for (const c of ["echo $(git push --force origin main)", "echo $(echo $(git push -f origin main))", 'echo "$(gh pr merge 1)"', "echo `git push -f`",
+    "echo `echo \\`git push -f\\``", 'echo "`gh pr merge 1`"', 'eval "git push -f"', "eval $'git push -f'", 'eval "$CMD"', "eval $CMD", "eval echo hi"])
+    assert.equal(reason(c).code, 2, c);
+  // eval fails closed whether its argument is literal, push-shaped or dynamic (AGENTS.md: no eval).
+  assert.match(reason('eval "$CMD"').reason, /eval is not allowed/);
+  assert.match(reason("eval 'git push -f'").reason, /eval is not allowed/);
+  for (const c of ["echo $(git status)", "echo `date`", 'echo "$(git log -1)"']) assert.equal(reason(c).code, 0, c);
+});
