@@ -287,6 +287,7 @@ test("the hook process: exit codes end to end, and stdin left open hits the hard
 });
 
 test("copy and move tools read a secret file (#520 review)", () => {
-  rows(["mv .env x && cat x", "install .env x && cat x", "ditto secrets/k x", "scp web/.env.dev h:x", "split .env.qa x"], 2);
-  rows(["mv a b", "install -m 755 bin/x /usr/local/bin/x", "cp .env.example x", "mv x.env y"], 0);
+  rows(["mv .env x && cat x", "mv .env x; cat x", "mv secrets s && cat s/k", "install -m 600 secrets/k x && cat x", "cp -r ./secrets /tmp/x", "tar czf x.tgz secrets/",
+    "install .env x && cat x", "ditto secrets/k x", "scp web/.env.dev h:x", "split .env.qa x"], 2);
+  rows(["mv a b", "grep -rn secrets docs/", "mkdir secrets", "install -m 755 bin/x /usr/local/bin/x", "cp .env.example x", "mv x.env y"], 0);
 });
