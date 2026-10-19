@@ -79,6 +79,19 @@ export const MAX_ALLOW_CURSOR = Object.freeze(MAX_ALLOW.map((e) => e.replace(/^B
 /** The steering-path asks (Cursor has no ask list). */
 export const ASK = Object.freeze(["**/AGENTS.md", "**/CLAUDE.md", ".claude/**", ".cursor/**", ".github/**", "docs/agents/**", "scripts/agents/**"].map((p) => `Edit(./${p})`));
 
-/** D18: the only hook commands, and settings keys that could run or leak anything. */
-export const HOOK_ALLOWLIST = Object.freeze(["guard", "format", "quick-test"].map((h) => `node scripts/agents/hooks/${h}.mjs`));
+/**
+ * D18: the only hook entries, matched exactly (every key and value), one per event. Claude runs a
+ * hook from the session's current directory, so the path is anchored on CLAUDE_PROJECT_DIR (`.`
+ * when unset: Cursor runs imported and project hooks from the root). The guard alone fails
+ * closed at the harness layer: `onFailure: "block"` (Claude) and `failClosed: true` (Cursor), so
+ * a guard that can't start, crashes or times out blocks instead of allowing (#528 review).
+ */
+const claudeHook = (h) => `node "\${CLAUDE_PROJECT_DIR:-.}/scripts/agents/hooks/${h}.mjs"`;
+export const HOOK_ENTRIES = Object.freeze({
+  PreToolUse: Object.freeze({ type: "command", command: claudeHook("guard"), timeout: 5, onFailure: "block" }),
+  PostToolUse: Object.freeze({ type: "command", command: claudeHook("format"), timeout: 30 }),
+  Stop: Object.freeze({ type: "command", command: claudeHook("quick-test"), timeout: 300 }),
+});
+export const CURSOR_HOOK_ENTRY = Object.freeze({ command: "node scripts/agents/hooks/guard.mjs", failClosed: true });
+export const HOOK_ALLOWLIST = Object.freeze([...Object.values(HOOK_ENTRIES).map((e) => e.command), CURSOR_HOOK_ENTRY.command]);
 export const SETTINGS_FORBIDDEN_KEYS = Object.freeze(["env", "apiKeyHelper", "awsAuthRefresh", "otelHeadersHelper", "statusLine"]);

@@ -7,7 +7,7 @@
  */
 import { LOCK, render, renderCursorCli } from "../generate.mjs";
 import {
-  ASK, BARE_PUSH, CLAUDE_CARVE_OUTS, CURSOR_FORBIDDEN_DENY, HOOK_ALLOWLIST, MAX_ALLOW, MAX_ALLOW_CURSOR, MIN_DENY, MIN_DENY_CURSOR,
+  ASK, BARE_PUSH, CLAUDE_CARVE_OUTS, CURSOR_FORBIDDEN_DENY, CURSOR_HOOK_ENTRY, HOOK_ENTRIES, MAX_ALLOW, MAX_ALLOW_CURSOR, MIN_DENY, MIN_DENY_CURSOR,
   SETTINGS_FORBIDDEN_KEYS,
 } from "./harness-policy.mjs";
 
@@ -198,9 +198,12 @@ export const HARNESS_CHECKS = {
   },
 };
 
+/** Exact match of a hook entry against the allowlisted one: same keys, same values. */
+const same = (h, want) => isObj(h) && want !== undefined && Object.keys(h).length === Object.keys(want).length && Object.entries(want).every(([k, v]) => h[k] === v);
+
 /**
- * D18's harness parts (always armed): no risky settings keys, every hook command on the exact
- * allowlist (settings.json and .cursor/hooks.json), and in format/quick-test the CI no-op on
+ * D18's harness parts (always armed): no risky settings keys, every hook entry exactly the
+ * allowlisted one for its event (settings.json and .cursor/hooks.json), and in format/quick-test the CI no-op on
  * line 1 with only `node:` static imports (R3-N5, R4-N7).
  */
 export function d18Harness(head, r) {
@@ -210,11 +213,12 @@ export function d18Harness(head, r) {
     if (s.hooks !== undefined && !isObj(s.hooks)) r.fail(`${SETTINGS}: hooks must be an object`);
     for (const [event, groups] of Object.entries(s.hooks ?? {}))
       for (const g of [].concat(groups))
-        for (const h of [].concat(g?.hooks ?? [])) if (!HOOK_ALLOWLIST.includes(h?.command)) r.fail(`${SETTINGS}: a ${event} hook command is not on the allowlist`);
+        for (const h of [].concat(g?.hooks ?? [])) if (!same(h, Object.hasOwn(HOOK_ENTRIES, event) ? HOOK_ENTRIES[event] : undefined)) r.fail(`${SETTINGS}: a ${event} hook entry is not on the allowlist`);
   }
   const ch = json(head, ".cursor/hooks.json", r);
   for (const [event, list] of Object.entries(ch?.hooks ?? {}))
-    for (const h of [].concat(list)) if (!HOOK_ALLOWLIST.includes(h?.command)) r.fail(`.cursor/hooks.json: a ${event} hook command is not on the allowlist`);
+    for (const h of [].concat(list))
+      if (event !== "beforeShellExecution" || !same(h, CURSOR_HOOK_ENTRY)) r.fail(`.cursor/hooks.json: a ${event} hook entry is not on the allowlist`);
   for (const h of ["format", "quick-test"]) {
     const p = `scripts/agents/hooks/${h}.mjs`;
     const t = head.read(p);

@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HOOK_ENTRIES } from "../lib/harness-policy.mjs";
 import { scratch } from "./helpers.mjs";
 
 const hook = (name) => fileURLToPath(new URL(`../hooks/${name}.mjs`, import.meta.url));
@@ -168,4 +169,17 @@ test("quick-test: outside a git repo, or with nothing changed, it is silent and 
   const r = run(QUICK, "", localEnv({ CLAUDE_PROJECT_DIR: scratch() }));
   assert.equal(r.status, 0);
   assert.equal(r.stderr, "");
+});
+
+test("the configured guard command runs from a subdirectory and still blocks (#528 review)", () => {
+  // Claude runs hook commands through a shell in the session's current directory.
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  const sh = (cwd, env, command) => spawnSync("sh", ["-c", HOOK_ENTRIES.PreToolUse.command], { cwd, env, encoding: "utf8", input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }), timeout: 30_000 });
+  const env = localEnv({ CLAUDE_PROJECT_DIR: root });
+  const sub = join(root, "web");
+  assert.equal(sh(sub, env, "git push --force origin main").status, 2);
+  assert.equal(sh(sub, env, "git status").status, 0);
+  const unset = localEnv();
+  delete unset.CLAUDE_PROJECT_DIR;
+  assert.equal(sh(root, unset, "git push --force origin main").status, 2, "unset (Cursor): relative to the root, where Cursor runs hooks");
 });

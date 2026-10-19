@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BARE_PUSH } from "./lib/harness-policy.mjs";
+import { BARE_PUSH, CURSOR_HOOK_ENTRY, HOOK_ENTRIES } from "./lib/harness-policy.mjs";
 
 export const LOCK = "scripts/agents/generated.lock.json";
 const header = (sources) => `# GENERATED from ${sources.join(", ")} by scripts/agents/generate.mjs — do not edit`;
@@ -66,16 +66,15 @@ export function renderSecretPatterns(toml) {
   return `${[header([".gitleaks.toml"]), ...rules.map((r) => `${r.id}\t${r.regex}`)].join("\n")}\n`;
 }
 
-export const GUARD = "node scripts/agents/hooks/guard.mjs";
-
 /**
- * H8: the generated `.cursor/hooks.json` calls the same guard on `beforeShellExecution`. It is
- * rendered only while `.claude/settings.json` wires the guard itself, so the two never diverge.
+ * H8: the generated `.cursor/hooks.json` calls the same guard on `beforeShellExecution`, failing
+ * closed. It is rendered only while `.claude/settings.json` wires the guard itself, so the two
+ * never diverge.
  */
 export function renderCursorHooks(settingsText) {
   const hooks = JSON.parse(settingsText).hooks?.PreToolUse ?? [];
-  const wired = [].concat(hooks).some((g) => [].concat(g?.hooks ?? []).some((h) => h?.command === GUARD));
-  return wired ? `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: GUARD }] } }, null, 2)}\n` : null;
+  const wired = [].concat(hooks).some((g) => [].concat(g?.hooks ?? []).some((h) => h?.command === HOOK_ENTRIES.PreToolUse.command));
+  return wired ? `${JSON.stringify({ version: 1, hooks: { beforeShellExecution: [CURSOR_HOOK_ENTRY] } }, null, 2)}\n` : null;
 }
 
 const RENDERERS = {
