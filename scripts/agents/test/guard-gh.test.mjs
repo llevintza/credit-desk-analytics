@@ -11,11 +11,18 @@ const SHAPES = [
   (command) => ({ tool_name: "Bash", tool_input: { command } }),
   (command) => ({ tool_name: "Shell", tool_input: { command } }),
   (command) => ({ hook_event_name: "beforeShellExecution", command, cwd: "/w" }),
+  (command) => ({ toolName: "run_terminal_command", toolInput: { command } }),
 ];
 const rows = (list, want) => {
   for (const c of list) for (const shape of SHAPES) assert.equal(decide(JSON.stringify(shape(c)), { repoAt: fakeRepo() }).code, want, c);
 };
 const mcp = (tool, args = {}) => decide(JSON.stringify({ tool_name: tool, tool_input: args })).code;
+// #519: the same MCP call in Claude, Cursor (`MCP:<tool>` + server) and Grok (`server__tool`) shapes.
+const mcpShapes = (tool, args) => {
+  const [, server, name] = /^mcp__(.*?)__(.*)$/.exec(tool);
+  return [{ tool_name: tool, tool_input: args }, { tool_name: `MCP:${name}`, mcp_server_name: server, tool_input: args }, { toolName: `${server}__${name}`, toolInput: args }]
+    .map((j) => decide(JSON.stringify(j)).code);
+};
 
 test("TC's check commands and the PR/issue flows stay allowed (governance.md)", () => {
   rows([
@@ -25,7 +32,9 @@ test("TC's check commands and the PR/issue flows stay allowed (governance.md)", 
     "gh api repos/o/r/git/refs/heads/main", "gh api repos/o/r/pulls/9", "gh api repos/o/r/pulls/9 --paginate --jq .title -H 'Accept: application/json'",
     'gh pr create --title t --body "use git push -u origin feat"', "gh pr create --body-file b.md", "gh pr edit 5 --add-label x", "gh pr comment 5 --body-file c.md",
     "gh pr review 5 --comment -b ok", "gh pr review 5 -c --body-file r.md -R o/r", "gh pr review --comment --body=x", "gh pr reopen 5", "gh issue reopen 3",
-    "gh api repos/o/r/issues/3 -X PATCH -f state=open", "gh api repos/o/r/pulls/5/reviews -f event=COMMENT -f body=x", "gh pr ready 5", "gh pr checks 5 --watch", "gh pr update-branch 5", "gh pr checkout 5", "gh pr view 96 -R o/r",
+    "gh api repos/o/r/issues/3 -X PATCH -f state=open", "gh api repos/o/r/pulls/5/reviews -f event=COMMENT -f body=x",
+    // #519: a body without an action flag is comment-only (gh rejects it), and a review without an event.
+    "gh pr review 5 -b x", "gh pr review 5 --body-file r.md", "gh pr review 5 --body=x", "gh api repos/o/r/pulls/5/reviews -f body=x", "gh pr ready 5", "gh pr checks 5 --watch", "gh pr update-branch 5", "gh pr checkout 5", "gh pr view 96 -R o/r",
     "gh issue create --title t --body-file b.md", "gh issue comment 3 --body x", "gh api repos/o/r/pulls/12/update-branch -X PUT",
     "gh api repos/{owner}/{repo}/issues/3/comments -f body=x", "gh api repos/o/r/pulls/comments/7/reactions -f content=+1",
     "gh api repos/o/r/pulls/5/comments/7/replies -f body=x", "gh api repos/o/r/pulls/5/reviews/2/events -X POST -f event=COMMENT",
@@ -50,7 +59,9 @@ test("H16 canonical-form over-blocks and the gh allowlist (G14)", () => {
     "gh pr update-branch 5 --rebase", "gh co 5",
     // #520 G14 tightening: agents never close issues or PRs or post a review verdict.
     "gh pr close 5", "gh issue close 3", "gh pr review 5 --approve", "gh pr review 5 -a", "gh pr review 5 --request-changes -b x", "gh pr review 5 -r -b x",
-    "gh pr review 5 -c -a", "gh pr review 5 --comment --approve=true", "gh pr review 5", "gh pr review 5 -b x", "gh pr review 5 -c $F",
+    "gh pr review 5 -c -a", "gh pr review 5 --comment --approve=true", "gh pr review 5", "gh pr review 5 -c $F",
+    // #519: every verdict spelling, bundled short flags, any position after the verb.
+    "gh pr review --approve=true 5", "gh pr review 5 -ab x", "gh pr review 5 -ca", "gh pr review 5 --request-changes=1", "gh pr review -r 5",
     "gh my-extension", "gh extension install o/gh-x", "gh extension exec x", "gh", "gh $G list", "gh pr $V", "gh pr", "gh --version x",
   ], 2);
 });
@@ -73,7 +84,10 @@ test("gh api writes: methods, fields, paths and GraphQL (G15)", () => {
     "gh api graphql -F query=@q.graphql", "gh api graphql --input q.json", "gh api graphql -f owner=o", `gh api graphql -f 'query=subscription { x }'`,
     `gh api graphql -f "query=$Q"`, "gh api repos/o/r/issues/3 -X PATCH -f state=closed", "gh api repos/o/r/pulls/3 -X PATCH -F state=closed",
     "gh api repos/o/r/issues/3 -X PATCH -f state_reason=x -f state=CLOSED", "gh api repos/o/r/pulls/5/reviews -f event=APPROVE", "gh api repos/o/r/pulls/5/reviews -f event=REQUEST_CHANGES",
-    "gh api repos/o/r/pulls/5/reviews/2/events -X POST -f event=approve", `gh api graphql -f query='mutation { closeIssue(input: {}) { clientMutationId } }'`, "gh api graphql -f query='{ a }' -f query='{ b }'", "gh api graphql -f query='{ a }' x",
+    "gh api repos/o/r/pulls/5/reviews/2/events -X POST -f event=approve",
+    "gh api repos/o/r/issues/3 --field state=closed", "gh api repos/o/r/pulls/3 --raw-field=state=closed -X patch", "gh api repos/o/r/issues/3 -X PATCH -f STATE=Closed",
+    'gh api repos/o/r/issues/3 -X PATCH -f state="$S"', 'gh api repos/o/r/issues/3 -X PATCH -f "$K=closed"', "gh api repos/o/r/pulls/5/reviews -f event=request_changes",
+    "gh api repos/o/r/pulls/5/reviews/2/events -X POST -F event=Approve", 'gh api repos/o/r/pulls/5/reviews -f event="$E"', `gh api graphql -f query='mutation { closeIssue(input: {}) { clientMutationId } }'`, "gh api graphql -f query='{ a }' -f query='{ b }'", "gh api graphql -f query='{ a }' x",
   ], 2);
   const a = apiArgs(parse("x --cache 1h -p corsair --hostname h --silent -i --slurp -t '{{.}}' --raw-field k --field=k=v -X").segments[0].words);
   assert.deepEqual([a.method, a.fields.map((f) => f.slice(0, 2)), a.extra], ["DYNAMIC", [["k", ""], ["k", "v"]], false]);
@@ -91,7 +105,14 @@ test("MCP tools (G16): blocked everywhere, the GitHub allowlist, other servers",
     ["mcp__x__enable_workflow", {}], ["mcp__x__set_permission", {}],
     // #517 review: write verbs behind a read prefix, and branch writes to main on any server.
     ["mcp__x__list_merge_x", {}], ["mcp__x__get_and_dispatch", {}], ["mcp__x__push_files", { branch: "main" }], ["mcp__foo__create_or_update_file", {}],
-    ["mcp__fs__create_file", { path: "a", branch: "main" }], ["mcp__x__create_branch", {}], ["MCP:merge_pull_request", { owner: "o", repo: "r" }],
+    ["mcp__fs__create_file", { path: "a", branch: "main" }], ["mcp__x__create_branch", {}],
+    // #519: close and verdict tools on any server, argument keys at any depth.
+    ["mcp__github__update_issue", { owner: "o", repo: "r", issue_number: 1, state: "closed" }], ["mcp__x__update_issue", { state: "CLOSED" }],
+    ["mcp__github__update_pull_request", { owner: "o", repo: "r", pullNumber: 1, state: "closed" }], ["mcp__x__issue_write", { method: "update", state: "closed" }],
+    ["mcp__x__update_issue", { patch: { state: "closed" } }], ["mcp__github__merge_pull_request", { owner: "o", repo: "r", pullNumber: 1 }],
+    ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "APPROVE" }], ["mcp__x__submit_pull_request_review", { event: "request_changes" }],
+    ["mcp__x__create_and_submit_pull_request_review", { review: { event: "APPROVE" } }], ["mcp__x__pull_request_review_write", { method: "submit_pending", event: "APPROVE" }],
+    ["mcp__x__close_issue", {}], ["mcp__x__close_pr", {}], ["mcp__x__approve_pull_request", {}], ["mcp__x__dismiss_pull_request_review", {}], ["MCP:merge_pull_request", { owner: "o", repo: "r" }],
   ]) assert.equal(mcp(tool, args), 2, tool);
   for (const [tool, args] of [
     ["mcp__github__get_file_contents", { owner: "o", repo: "r", path: "README.md" }], ["mcp__github__list_workflow_runs", { owner: "o", repo: "r" }],
@@ -100,6 +121,15 @@ test("MCP tools (G16): blocked everywhere, the GitHub allowlist, other servers",
     ["mcp__github__update_pull_request_base", { owner: "o", repo: "r" }], ["mcp__other__update_pull_request_branch", { repo: "r" }],
     ["mcp__github__add_issue_comment", { owner: "o", repo: "r" }], ["mcp__memory__create_entities", { entities: [] }], ["mcp__fs__write_file", { path: "a" }],
     ["mcp__fs__create_file", { path: "a" }], ["mcp__x__push_files", { branch: "feat" }], ["mcp__github__list_workflows", { owner: "o", repo: "r" }],
+    ["mcp__github__update_issue", { owner: "o", repo: "r", state: "open" }], ["mcp__github__update_issue", { owner: "o", repo: "r", title: "t" }],
+    ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "COMMENT", body: "x" }], ["mcp__github__create_pending_pull_request_review", { owner: "o", repo: "r" }],
+    ["mcp__github__list_issues", { owner: "o", repo: "r", state: "closed" }], ["mcp__calendar__create_event", { event: { title: "x" } }], ["mcp__claude-in-chrome__tabs_close_mcp", {}],
   ]) assert.equal(mcp(tool, args), 0, tool);
   assert.equal(decide(JSON.stringify({ toolName: "github__merge_pull_request", toolInput: { owner: "o", repo: "r" } })).code, 2); // Grok shape
+  for (const [tool, args, want] of [
+    ["mcp__github__update_issue", { owner: "o", repo: "r", state: "closed" }, 2], ["mcp__github__update_pull_request", { owner: "o", repo: "r", state: "closed" }, 2],
+    ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "APPROVE" }, 2], ["mcp__github__merge_pull_request", { owner: "o", repo: "r" }, 2],
+    ["mcp__github__submit_pending_pull_request_review", { owner: "o", repo: "r", event: "REQUEST_CHANGES" }, 2],
+    ["mcp__github__update_issue", { owner: "o", repo: "r", state: "open" }, 0], ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "COMMENT" }, 0],
+  ]) assert.deepEqual(mcpShapes(tool, args), [want, want, want], tool);
 });

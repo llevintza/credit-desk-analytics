@@ -98,26 +98,32 @@ function api(args) {
   if (a.input) return block("gh api --input (the request body isn't visible; G15)");
   const method = a.method ?? (a.fields.length ? "POST" : "GET");
   if (method === "GET" && !a.extra) return ok;
-  const verdict = a.fields.find(([k, v, w]) => (k === "state" && (w.dynamic || v !== "open")) || (k === "event" && (w.dynamic || v.toUpperCase() !== "COMMENT")));
+  // #519: keys and values case-insensitive; a field whose key is dynamic could be either.
+  const verdict = a.fields.find(([k, v, w]) => (w.dynamic && !/^\w+$/.test(k)) || (/^state$/i.test(k) && (w.dynamic || v.toLowerCase() !== "open")) ||
+    (/^event$/i.test(k) && (w.dynamic || v.toUpperCase() !== "COMMENT")));
   if (verdict) return block(`gh api ${method} with ${verdict[0]}=${verdict[1]} (agents never close or post a review verdict; G14)`);
   if (ep.dynamic || /[?#%\\\s]|\.\.|\/\//.test(path)) return block(`gh api write to an unprovable path (G15)`);
   if (/(?:^|\/)merge(?:$|\/)|(?:^|\/)git\/|(?:^|\/)contents(?:\/|$)/.test(path)) return block(`gh api ${method} to a merge, git or contents path (G15)`);
   return WRITE_PATHS.test(path) ? ok : block(`gh api ${method} ${path} is outside the PR/issue write allowlist (G15, H14)`);
 }
 
-// `gh pr review` posts a comment only: `--comment` plus a body, nothing else (no -a/-r verdict).
+// `gh pr review` posts a comment only: `--comment` and/or a body, nothing else (no -a/-r verdict;
+// gh itself rejects a body without an action flag, #519).
 const REVIEW_VALUED = new Set(["-b", "--body", "-F", "--body-file", "-R", "--repo"]);
 function review(rest) {
   let comment = false;
+  let body = false;
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i].text;
     if (rest[i].dynamic) return block("gh pr review with a dynamic argument (G14)");
     if (t === "-c" || t === "--comment") comment = true;
-    else if (REVIEW_VALUED.has(t)) i++;
-    else if (/^--(?:body|body-file|repo)=/.test(t) || !t.startsWith("-")) continue;
+    else if (REVIEW_VALUED.has(t)) {
+      body ||= !["-R", "--repo"].includes(t);
+      i++;
+    } else if (/^--(?:body|body-file|repo)=/.test(t) || !t.startsWith("-")) body ||= t.startsWith("--body");
     else return block(`gh pr review ${t}: agents post review comments only, never a verdict (G14)`);
   }
-  return comment ? ok : block("gh pr review without --comment (agents never post a review verdict; G14)");
+  return comment || body ? ok : block("gh pr review without --comment or a body (agents never post a review verdict; G14)");
 }
 
 /** The segment analyser (decide.mjs ANALYSERS). */

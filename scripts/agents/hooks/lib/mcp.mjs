@@ -23,6 +23,26 @@ const PR_ISSUE = /^(?:create|update|add|submit|request)_\w*(?:pull_request|issue
 const BRANCH_WRITE = /^(?:create_branch|create_or_update_file|push_files|delete_file|create_file|update_file)$/;
 const GIT_ONLY = /^(?:create_branch|create_or_update_file|push_files)$/;
 
+// Agents never close issues or PRs or post a review verdict (AGENTS.md; #519), on any server:
+// a close/approve/dismiss issue, PR or review tool (`close_tab` passes), an issue or PR tool with a `state` other than open, or a review
+// tool with an `event` other than COMMENT, at any depth.
+const VERDICT_TOOL = /(?:^|_)(?:close|approve|request_changes|dismiss)(?:_|$)/i;
+const ISSUE_PR = /issue|pull_request|(?:^|_)prs?(?:_|$)/i;
+function pairs(v, out = []) {
+  if (Array.isArray(v)) for (const x of v) pairs(x, out);
+  else if (v !== null && typeof v === "object") for (const [k, x] of Object.entries(v)) { out.push([k, x]); pairs(x, out); }
+  return out;
+}
+function verdict(tool, a) {
+  if (VERDICT_TOOL.test(tool) && (ISSUE_PR.test(tool) || /review/i.test(tool))) return `the MCP tool ${tool} closes or posts a review verdict (G16, #519)`;
+  for (const [k, v] of pairs(a)) {
+    const val = typeof v === "string" ? v : JSON.stringify(v);
+    if (ISSUE_PR.test(tool) && /^state$/i.test(k) && val.toLowerCase() !== "open") return `the MCP tool ${tool} with state ${val} (agents never close; G16, #519)`;
+    if (/review/i.test(tool) && /^event$/i.test(k) && val.toUpperCase() !== "COMMENT") return `the MCP tool ${tool} with event ${val} (agents never post a verdict; G16, #519)`;
+  }
+  return undefined;
+}
+
 function keys(v, out = []) {
   if (Array.isArray(v)) for (const x of v) keys(x, out);
   else if (v !== null && typeof v === "object") for (const [k, x] of Object.entries(v)) { out.push(k); keys(x, out); }
@@ -39,6 +59,8 @@ export function decideMcp(call) {
   const a = call.args;
   const admin = keys(a).find((k) => ADMIN_KEYS.has(k.toLowerCase()));
   if (admin) return block(`an MCP call with the admin argument ${admin} (G16)`);
+  const v = READ.test(tool) ? undefined : verdict(tool, a);
+  if (v) return block(v);
   if (WRITE_VERB.test(tool)) return block(`the MCP tool ${tool} is blocked on every server (G16)`);
   if (READ.test(tool)) return ok;
   if (BLOCKED_TOOL.test(tool)) return block(`the MCP tool ${tool} is blocked on every server (G16)`);
