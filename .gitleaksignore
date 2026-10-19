@@ -1,0 +1,11 @@
+# Historical false positives in old commits (Helms, on Leo's behalf, 10-19, #522).
+# Fingerprints only: nothing to rotate, no history rewrite. New fixtures build values from parts.
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:postgres-password-literal:170
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:postgres-uri-password:49
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:connection-string-password:47
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:connection-string-password:48
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:connection-string-password:50
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:connection-string-password:52
+a7855ca038f55ccd6342b085041a9961bdc79161:scripts/agents/test/guard.test.mjs:connection-string-password:144
+98df7133c18fe44c4555efc52c599e582a38a1ff:scripts/agents/generated.lock.json:generic-api-key:2
+d681d68fffa20797cc1454782df07735f1d47771:.github/scripts/render-deploy.test.mjs:generic-api-key:15
