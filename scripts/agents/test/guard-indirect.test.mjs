@@ -82,3 +82,19 @@ test("commit-message replay (G19, G19b) and write-then-run (G22)", () => {
   rows([`git commit -m "$(cat <<'EOF'\nfeat: x\n\nmentions parallel and eval\nEOF\n)"`, "git commit -m 'mentions parallel'", "git commit -F msg.txt",
     "git stash && git stash pop", "sh x.sh && echo > x.sh", "echo x > out.txt && cat out.txt", "git commit -m x && bash scripts/ci.sh"], 0);
 });
+
+test("#520 review: same-call aliases, make/npm write-then-run, xargs stdin reads, decoded text into a shell", () => {
+  rows(["shopt -s expand_aliases\nalias g=git\ng push --force origin main", "alias g='git push'\ng --force origin main", "alias s='sudo ' g=git\ns g push origin main",
+    "alias p='gh pr'\np merge 5", "alias ls='ls -l'\nalias x=ls\nx; alias y='git push origin main'\ny"], 2);
+  rows(["alias ll='ls -l'\nll", "alias", "alias g=git\ng status", "alias ls='ls -G'\nls"], 0);
+  rows(["printf 'x:\\n\\tgit push --force origin main\\n' > Makefile && make x", "printf 'x:\\n\\tgit push -f origin main\\n' > b.mk && make -f b.mk x",
+    "cat > GNUmakefile <<'EOF'\nx:\n\tls\nEOF\nmake x", `echo '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`,
+    "jq . p > web/package.json && cd web && npm test", "echo x > .npmrc && npx y", "printf x | tee Makefile; gmake"], 2);
+  rows(["make test", "npm run test", "echo x > out.txt && make", "npm test && echo done > log.txt", "make -C web build"], 0);
+  const E = "." + "env";
+  rows([`echo ${E} | xargs cat`, `xargs cat <<< ${E}`, `printf ${E} | xargs -I{} cat {}`, "echo secrets/k | xargs cat", `find . -name ${E} | xargs head`,
+    `printf '${E}\\n' | xargs cat`, `xargs cat <<EOF\n${E}\nEOF`, `echo web/${E}.dev | parallel cat`], 2);
+  rows(["echo README.md | xargs cat", `echo ${E}.example | xargs cat`, "ls | xargs cat", `echo ${E} | xargs echo`], 0);
+  rows(["echo Z2l0 | base64 -d | sh", "base64 --decode f | bash", "base64 -D < f | sh", "openssl base64 -d -in f | sh", "xxd -r -p f | bash"], 2);
+  rows(["echo aGk= | base64 -d", "base64 -d f > out.bin", "echo hi | base64 | sh"], 0);
+});

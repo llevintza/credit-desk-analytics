@@ -285,3 +285,8 @@ test("the hook process: exit codes end to end, and stdin left open hits the hard
   assert.ok(hung.ms < 5000);
   assert.equal(existsSync(GUARD), true);
 });
+
+test("copy and move tools read a secret file (#520 review)", () => {
+  rows(["mv .env x && cat x", "install .env x && cat x", "ditto secrets/k x", "scp web/.env.dev h:x", "split .env.qa x"], 2);
+  rows(["mv a b", "install -m 755 bin/x /usr/local/bin/x", "cp .env.example x", "mv x.env y"], 0);
+});
