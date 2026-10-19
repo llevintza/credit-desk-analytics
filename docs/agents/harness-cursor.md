@@ -27,7 +27,7 @@
 | File | Content | Status |
 |---|---|---|
 | `.cursor/cli.json` | `{"permissions":{"allow":[…],"deny":[…]}}` only, colon form `Shell(cmd:args)`; no marker key (U8) | Steering |
-| `.cursor/hooks.json` | `{"version":1,"hooks":{"beforeShellExecution":[{"command":"node scripts/agents/hooks/guard.mjs"}]}}` (H8) | Backup alongside DEP-R1; removed if the H8 condition fails (fallback (ii)). Grok Build reads it too (C7, rev 10) |
+| `.cursor/hooks.json` | `{"version":1,"hooks":{"beforeShellExecution":[{"command":"node scripts/agents/hooks/guard.mjs","failClosed":true}]}}` (H8; `failClosed` turns a crash or timeout into a block) | Backup alongside DEP-R1; removed if the H8 condition fails (fallback (ii)). Grok Build reads it too (C7, rev 10) |
 | `.cursorignore` | Derived from the Claude `Read(...)` denies | Steering |
 | `.cursor/rules/areas/<area>.mdc` | Only if `cursorAreaRules: true` (U1 fails): `alwaysApply: false`, `globs: <dir>/**`, body = generated copy of the nested AGENTS.md | Fallback |
 
