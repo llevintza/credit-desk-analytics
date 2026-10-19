@@ -4,7 +4,7 @@
 
 Once enabled, Grok reads root and nested `AGENTS.md` plus `CLAUDE.md` in every directory from the repo root down to cwd (docs.x.ai project-rules). A possible double load of `@AGENTS.md` is U2.
 
-It reads `.claude/skills/*` through Claude Code compatibility, and `.claude/agents` once the harness build PR adds them (planned; arrives with the harness build PR; U4).
+It reads `.claude/skills/*` through Claude Code compatibility, and the six `.claude/agents/*.md` roles (#171 B8; whether Grok loads them is U4).
 
 It does **not** need `.agents/skills`. It reads `.cursor/rules/*.md`, and `.mdc` only if U5 holds.
 

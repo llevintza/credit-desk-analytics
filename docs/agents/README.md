@@ -63,6 +63,19 @@ Statuses for U1, U3, U8, U9, U10 and U15 come from Tech Research's verification 
 | U21 | Cursor stdin shape and matcher rewrite for imported Claude hooks; the `Shell` matcher | UNVERIFIED (TR: docs silent; the third-party-hooks page's example uses `"matcher": "Shell"`). The `Shell` matcher is an **ASSUMPTION**; if it doesn't fire, the guard fails open **silently**. | `stdin-canary.mjs` in the IDE + CLI over the fixed operation set (imported hooks and `beforeShellExecution`), then an exit-2 pass (`testing.md`) | Guard fails **open** on unrecognized non-push input (warning + log), **closed** on recognized input, and **closed on any push/merge-shaped input whatever its shape** (H4, R4-M1(c)); the generated `.cursor/hooks.json` doesn't depend on the matcher (H8) | **Yes** (guard) |
 | U24 | Cursor loads .claude/skills with default settings | PENDING: needs a human-run Cursor install before merge (PR-A acceptance A12) | Customize → Skills | harness-cursor.md note | No |
 
+**Build status (#171 Stage B, refreshed in B8).** The build ships the fallbacks and checks below. It verifies no harness behaviour, so every status above stands until its test is run in that harness.
+
+| # | What the build ships | Still open |
+|---|---|---|
+| U1, U5 | `cursorAreaRules` stays `false`, and D4 allows `.cursor/rules/areas/*.mdc` only as manifest outputs (B1a); the `.mdc` renderer is not built | The `/context` test in the Cursor CLI; the renderer if the fallback is needed |
+| U4, U12 | The six `.claude/agents/*.md` roles, unique names (D9) and D18 frontmatter only (B8) | `grok inspect`, and a load test in each harness |
+| U8 | `generated.lock.json` and D14 lock, header and regen-diff checks for `.cursor/cli.json` (B1a, B1b) | Unknown-key handling stays undocumented |
+| U9 | The generated `.cursor/hooks.json` calling the guard on `beforeShellExecution` with `failClosed: true`, and D7's byte-exact allowance (#524, #528, #529) | The cloud-agent push test (H8 condition; fallback (ii) if it fails) |
+| U10, U15 | `PostToolUse` format and `Stop` quick-test hooks (advisory) beside the `PreToolUse` guard (`onFailure: "block"`), in `.claude/settings.json`; D18 allows only those exact entries (#524, #528, #529) | Confirmation run in the IDE and CLI |
+| U16, U19 | `claude-review` keeps `disableAllHooks` and fails on the hook canary, which every hook writes under CI (B7, #524) | A real Actions run with a base hook |
+| U21 | The guard's Claude, Cursor-imported, Cursor-native and Grok shapes, with fail-closed push/merge handling (B2–B5) | The `stdin-canary.mjs` run in Cursor |
+| U22 | The `mcp__.*` matcher and the MCP allowlist and blocklist in the guard (B4) | Tool names and matcher firing per harness |
+
 
 ## Repository dependencies (not harness behaviour)
 
@@ -74,7 +87,7 @@ Statuses for U1, U3, U8, U9, U10 and U15 come from Tech Research's verification 
 
 ## Revision 14 (H21, Helms 2026-10-16): planned markers and drafts references
 
-ADR-0020 is still proposed and not committed under `docs/adr/` (see the 0020 row in [`../adr/README.md`](../adr/README.md)), so this section is the rev 14 record. Helms decided on 2026-10-16 (#171, #170, #418 section A) that rev 14 is still wanted.
+ADR-0020 rev 14 is now committed as [`../adr/0020-harness-neutral-agent-setup.md`](../adr/0020-harness-neutral-agent-setup.md) (#171 B8), which points back here; this section keeps the rev 14 detail. Helms decided on 2026-10-16 (#171, #170, #418 section A) that rev 14 is still wanted.
 
 **Planned-marker convention (PR-A, #166; #171).** PR-A put in place text about harness pieces that do not exist yet. Each such mention carries the literal suffix `(planned; arrives with the harness build PR)`, so nothing reads as shipped before it has shipped. The marker covers three things:
 
@@ -84,6 +97,6 @@ ADR-0020 is still proposed and not committed under `docs/adr/` (see the 0020 row
 
 It also covers the `.github/AGENTS.md` and root `AGENTS.md` "Agent sessions" mentions of the build PR. At `6a18895` the marker appears on 25 lines: `.github/AGENTS.md` (3), `AGENTS.md` (1), `docs/adr/0026-protected-ref-ci-wiring-check.md` (1, added by #469 after rev 14 counted 24 at `91a8d7e`), and in `docs/agents/`: `README.md` (3), `drift-checks.md` (4), `governance.md` (6), `harness-claude-code.md` (3), `harness-grok.md` (1), `review-restore.md` (2) and `workflow.md` (1). To list them: `git grep -n -E ' \(planned; arrives with the harness build PR'` (the leading space skips the quoted examples in this section).
 
-**The harness build PR removes the markers.** This revision only records the convention, and the markers stay until then. The build PR's checklist removes each marker in the same PR that lands the file or setting it names. After the build PR merges, the `git grep` above returns nothing. A piece that the build PR does not land keeps its marker, and the build PR's description names it. Until every marker is gone, the build PR's `agents-drift` accepts both states in D12 and D23 ([`drift-checks.md`](drift-checks.md)): a mention that carries the marker while its file or setting is absent, and a mention without the marker once the file or setting has landed.
+**The harness build PR removes the markers.** Done: #171 Stage B removed each marker with the piece it named, and B8 removed the last one (`harness-grok.md`), so the `git grep` above returns nothing. The build PR's checklist removes each marker in the same PR that lands the file or setting it names. After the build PR merges, the `git grep` above returns nothing. A piece that the build PR does not land keeps its marker, and the build PR's description names it. Until every marker is gone, the build PR's `agents-drift` accepts both states in D12 and D23 ([`drift-checks.md`](drift-checks.md)): a mention that carries the marker while its file or setting is absent, and a mention without the marker once the file or setting has landed.
 
 **Dangling box/drafts references (#170).** The pages copied from the Tech Writer tree referred to files that existed only in the drafts workspace: the "listed in the drafts README" headers, `tree/.claude/settings.json`, the `r5-*`/`r7-*`/`r9-*`/`r10-*` evidence files and "run on the box". #411 (`261ed77`) dropped or rewrote all of them. Rev 14 keeps that as an invariant: no page under `docs/agents/` refers to a file that is not in the repo or linked by URL, and `git grep -n -E '/workspace/|/tmp/' -- docs/agents` stays empty. The `secret-patterns.txt` and `.review-pr/*.pr.txt` names that remain are files the build PR generates, not drafts evidence.
