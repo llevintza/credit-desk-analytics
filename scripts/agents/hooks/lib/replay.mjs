@@ -8,7 +8,9 @@
  *   (commit/tag/notes message text left out of it, N2).
  * - G19/G19b: a commit/tag/note created with a re-execution vector, or commit text replayed
  *   into a shell.
- * - G22: a file written and then run in the same call, signature or not.
+ * - G22: a file written and then run in the same call, signature or not; make or an npm-style
+ *   runner after a same-call write to a Makefile, `.mk` or package.json.
+ * - Decoded text (`base64 -d`, `xxd -r`) piped into a shell, signature or not.
  */
 import { resolve } from "node:path";
 import { hasSignature, payloadTexts } from "./input.mjs";
@@ -22,6 +24,17 @@ const WRITE_OPS = /^(?:>|>>|>\||&>|&>>|<>)$/;
 const COMMITTERS = new Set(["commit", "commit-tree", "tag", "notes", "merge", "revert", "cherry-pick", "am", "stash"]);
 const TEXT_READERS = new Set(["log", "show", "cat-file", "format-patch", "rev-list", "for-each-ref", "shortlog", "reflog", "notes", "whatchanged", "show-branch", "tag"]);
 const GIT_GLOBAL_ARG = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
+
+const MAKEFILES = /^(?:GNUmakefile|makefile|Makefile)$|\.mk$/;
+const NPM_FILES = /^(?:package\.json|\.npmrc|\.yarnrc(?:\.yml)?)$/;
+const RECIPE_RUNNERS = { make: MAKEFILES, gmake: MAKEFILES, bmake: MAKEFILES, npm: NPM_FILES, npx: NPM_FILES, pnpm: NPM_FILES, yarn: NPM_FILES, bun: NPM_FILES };
+// Decoders whose output is hidden text: `base64 -d`, `openssl base64 -d`, `xxd -r`.
+const flag = (c, re) => c.args.some((w) => re.test(w.text));
+const DECODERS = [
+  (c) => ["base64", "gbase64", "base32", "basenc"].includes(c.name) && flag(c, /^(?:-[a-zA-Z]*[dD]|--decode)$/),
+  (c) => c.name === "openssl" && flag(c, /^(?:base64|enc)$/) && flag(c, /^-d$/),
+  (c) => c.name === "xxd" && flag(c, /^-[a-z]*r/),
+];
 
 /** The unwrapped command of a segment: { name, args } (args = words after the command word). */
 function command(seg) {
@@ -92,6 +105,10 @@ export function replayCheck({ text, segs, parsed, sig, cwd }) {
     if (sigN2 && (runsFile(c) || c.args.some((w) => w.raw.startsWith("<(")))) return block(`${c.word.text} runs a file in a push/merge-shaped payload (G13)`);
     const runs = [c.word?.text.includes("/") ? c.word.text : undefined, ...(RUNNERS.has(c.name) ? positional(c.args).slice(0, 1).map((w) => w.text) : [])].filter(Boolean);
     if (runs.some((p) => written.has(resolve(cwd, p)))) return block(`a file written earlier in the same call is run (G22)`);
+    // make and npm-style runners execute recipes and scripts from files they find (#520 review).
+    const recipe = RECIPE_RUNNERS[c.name];
+    if (recipe && [...written].some((p) => recipe.test(base(p)))) return block(`${c.name} after a same-call write to its Makefile, .mk or package.json (G22)`);
+    if (shell && piped(i) && DECODERS.some((d) => d(cmds[i - 1]))) return block(`decoded text piped into ${c.name} (base64 -d | sh)`);
     for (const r of s.redirs) if (WRITE_OPS.test(r.op)) written.add(resolve(cwd, r.target));
     const pos = positional(c.args).map((w) => w.text);
     if (c.name === "tee") pos.forEach((p) => written.add(resolve(cwd, p)));
