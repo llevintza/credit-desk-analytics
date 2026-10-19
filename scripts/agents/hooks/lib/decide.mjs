@@ -53,6 +53,10 @@ const READERS = new Set(["cat", "head", "tail", "less", "more", "sed", "awk", "g
 
 // A glob or brace word that could expand to a secret path counts as one (#512 review).
 const secretWord = (w) => isSecretPath(w.text) || (w.glob && couldBeSecret(w.text));
+// Copying, moving or archiving the `secrets` directory itself exposes it (`mv secrets s && cat
+// s/k`; #521 item 4). Only these tools: `grep secrets docs/` names a pattern, not the directory.
+const MOVERS = new Set(["cp", "mv", "install", "ln", "rsync", "tar", "zip", "ditto", "scp", "cpio", "pax"]);
+const secretsDir = (seg) => seg.words.some((w) => MOVERS.has(base(w.text))) && seg.words.some((w) => /^(?:.*\/)?secrets\/?$/i.test(w.text));
 
 // A recursive grep from a directory that holds a .env reads it without naming it (#514
 // review): `.`, `..`, `web`, or no path. rg/ag skip dotfiles and ignored files unless told not
@@ -83,7 +87,7 @@ function stdinRead(seg, prev) {
 function secretRead(seg, prev) {
   if (stdinRead(seg, prev)) return true;
   if (seg.redirs.some((r) => (r.op === "<" || r.op === "<>") && (isSecretPath(r.target) || (/[*?[{]/.test(r.target) && couldBeSecret(r.target))))) return true;
-  return (seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord)) || recursiveRead(seg);
+  return (seg.words.some((w) => READERS.has(base(w.text))) && seg.words.some(secretWord)) || secretsDir(seg) || recursiveRead(seg);
 }
 
 // Wrappers run their arguments as a command; behind one, a dynamic or glob word could be it.

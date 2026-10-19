@@ -150,11 +150,15 @@ export function indirect(seg, { cwd, hasSig }) {
   if (COPIERS.has(name)) {
     const args = u.words.slice(at + 1);
     const pos = args.filter((w) => !w.text.startsWith("-"));
-    // A quoted dynamic destination (`cp a.json "$D/b.json"`) can't become a source; an unquoted
-    // one can split into more words, and `-t`/`--target-directory` makes every positional a source.
+    // Only a quoted dynamic destination with a literal last component (`cp a.json "$D/b.json"`)
+    // passes: it can't split into a source or name a guarded binary (#525). A wholly dynamic one
+    // (`"$D"`, `"$(command -v git)"`) or a dynamic last component (`"$D/$N"`) could be `git`
+    // itself, and `-t`/`--target-directory` makes every positional a source.
     const dest = pos.length > 1 && !args.some((w) => /^(?:-[a-zA-Z]*t|--target-directory)/.test(w.text)) ? pos.at(-1) : undefined;
-    if (args.some((w) => (w.dynamic && w.splits) || w.glob) || pos.some((w) => (w.dynamic && w !== dest) || GUARDED.includes(base(w.text)) || guardedBinary(w.text, cwd)))
-      return { block: `${name} of a guarded binary or of a dynamic/glob source (G21)` };
+    const literalLeaf = (w) => /^[\w.@+,-]+$/.test(w.raw.slice(w.raw.lastIndexOf("/") + 1).replace(/^["']|["']$/g, ""));
+    const safeDest = (w) => w === dest && !w.splits && !w.glob && w.raw.includes("/") && literalLeaf(w);
+    if (args.some((w) => (w.dynamic && !safeDest(w)) || w.glob) || pos.some((w) => GUARDED.includes(base(w.text).toLowerCase()) || guardedBinary(w.text, cwd)))
+      return { block: `${name} of a guarded binary, or with a dynamic/glob source or destination (G21)` };
   }
   if (u.completes && GUARDED.includes(name)) {
     const sub = words.slice(at + 1).find((w) => !w.text.startsWith("-"))?.text;

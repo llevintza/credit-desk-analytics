@@ -36,6 +36,16 @@ const DECODERS = [
   (c) => c.name === "xxd" && flag(c, /^-[a-z]*r/),
 ];
 
+// xargs/parallel that turn stdin into a command (#521 item 5): `… | xargs sh -c`, `xargs -0 bash
+// -c`, `parallel` with no command (it runs each input line), or a runner behind either.
+function stdinShell(seg) {
+  const at = seg.words.findIndex((w) => ["xargs", "parallel"].includes(base(w.text)));
+  if (at < 0) return false;
+  const rest = seg.words.slice(at + 1);
+  const u = unwrap({ ...seg, words: seg.words.slice(at) });
+  return rest.some((w) => RUNNERS.has(base(w.text))) || (base(seg.words[at].text) === "parallel" && !u.words.length && !u.strings.length);
+}
+
 /** The unwrapped command of a segment: { name, args } (args = words after the command word). */
 function command(seg) {
   const words = unwrap(seg).words.filter((w, i, a) => a.slice(0, i + 1).some((x) => x.quoted || !ASSIGN.test(x.text)));
@@ -96,8 +106,8 @@ export function replayCheck({ text, segs, parsed, sig, cwd }) {
   for (const [i, s] of segs.entries()) {
     const c = cmds[i];
     const shell = RUNNERS.has(c.name);
-    if (shell && sig && (piped(i) || s.redirs.some((r) => ["<<<", "<", "<<", "<<-", "<>"].includes(r.op))))
-      return block(`push/merge-shaped text piped or redirected into ${c.name} (G1)`);
+    if ((shell || stdinShell(s)) && sig && (piped(i) || s.redirs.some((r) => ["<<<", "<", "<<", "<<-", "<>"].includes(r.op))))
+      return block(`push/merge-shaped text piped or redirected into ${c.name || heads[i]} (G1)`);
     const code = c.args.findIndex((w) => CODE_FLAGS.test(w.text));
     if (INTERPRETERS.has(c.name) && code >= 0 && hasSignature(c.args[code + 1]?.text ?? "")) return block(`${c.name} inline code with the push/merge signature (G1)`);
     if (shell && c.args.some((w) => /(?:^|[^\w.])\.git\//.test(w.text))) return block(`${c.name} on a file under .git/ (G19b)`);

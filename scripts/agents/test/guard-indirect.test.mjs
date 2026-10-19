@@ -12,8 +12,13 @@ import { parse } from "../hooks/lib/shell.mjs";
 import { fakeRepo } from "./helpers.mjs";
 
 const code = (command, cwd) => decide(JSON.stringify({ tool_name: "Bash", tool_input: { command }, ...(cwd && { cwd }) }), { repoAt: fakeRepo() }).code;
+// Every shell shape: Claude, Cursor-imported, Cursor-native and Grok (#521, #525).
+const SHAPES = [
+  (command) => ({ tool_name: "Bash", tool_input: { command } }), (command) => ({ tool_name: "Shell", tool_input: { command } }),
+  (command) => ({ hook_event_name: "beforeShellExecution", command }), (command) => ({ toolName: "run_terminal_command", toolInput: { command } }),
+];
 const rows = (list, want) => {
-  for (const c of list) assert.equal(code(c), want, c);
+  for (const c of list) for (const [i, shape] of SHAPES.entries()) assert.equal(decide(JSON.stringify(shape(c)), { repoAt: fakeRepo() }).code, want, `shape ${i}: ${c}`);
 };
 
 test("wrappers and shell strings are unwrapped (G1)", () => {
@@ -61,8 +66,12 @@ test("renamed or copied guarded binaries are resolved by identity (G21)", () => 
   assert.equal(code("./x status", dir), 0);
   rows([`cp ${git} /tmp/x`, "cp $(command -v git) x", "cp g* x", "ln -s /usr/bin/gh x", "install -m 755 curl x"], 2);
   rows(["mv a b", "cp -r src dst"], 0);
-  // B6 over-block report: a quoted dynamic destination passes; an unquoted one can split into a source.
-  rows(['cp a.json "$D/b.json"', 'cp a.json "$D"/b.json', 'mv -f x "${OUT}"', 'install -m 644 a "$P"'], 0);
+  // B6 over-block report: a quoted dynamic destination with a literal last component passes; an
+  // unquoted one can split into a source, and a wholly dynamic one could be git itself (#525).
+  rows(['cp a.json "$D/b.json"', 'cp a.json "$D"/b.json', 'mv -f x "${OUT}/x"', 'install -m 644 a "$P/a"', "cp a '$D'"], 0);
+  rows(['cp evil.sh "$D"', 'D=/usr/bin/git; cp a "$D" && git status', 'cp a "$(command -v git)"', 'mv a "$G"', 'mv -f x "${OUT}"', 'install -m 644 a "$P"',
+    'cp a "$D/$N"', 'cp a "$D/`id`"', 'cp evil.sh "$D/git"', 'cp evil.sh "$HOME/.local/bin/git"', 'ln -sf evil "$D/gh"', "cp evil.sh ~/.local/bin/git", 'cp a "$D/Git"',
+    'cp --target-directory="$D" a', 'rsync a "$D"'], 2);
   rows(["cp a.json $D/b.json", 'cp "$S" b', 'cp a "$D/git"', 'cp -t "$D" a', 'cp --target-directory=$D a', 'cp -t$D a', 'cp a "$D"/*', `cp ${git} "$D"`], 2);
 });
 
@@ -87,11 +96,12 @@ test("commit-message replay (G19, G19b) and write-then-run (G22)", () => {
 });
 
 test("#520 review: same-call aliases, make/npm write-then-run, xargs stdin reads, decoded text into a shell", () => {
-  rows(["shopt -s expand_aliases\nalias g=git\ng push --force origin main", "alias g='git push'\ng --force origin main", "alias s='sudo ' g=git\ns g push origin main",
+  rows(["shopt -s expand_aliases\nalias g=git\ng push --force origin main", "shopt -s expand_aliases; alias g=git\ng push --force origin main", "alias g='git push'\ng --force origin main", "alias s='sudo ' g=git\ns g push origin main",
     "alias p='gh pr'\np merge 5", "alias ls='ls -l'\nalias x=ls\nx; alias y='git push origin main'\ny"], 2);
   rows(["alias ll='ls -l'\nll", "alias", "alias g=git\ng status", "alias ls='ls -G'\nls"], 0);
   rows(["printf 'x:\\n\\tgit push --force origin main\\n' > Makefile && make x", "printf 'x:\\n\\tgit push -f origin main\\n' > b.mk && make -f b.mk x",
-    "cat > GNUmakefile <<'EOF'\nx:\n\tls\nEOF\nmake x", `echo '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`,
+    "cat > GNUmakefile <<'EOF'\nx:\n\tls\nEOF\nmake x", "printf 'x:\\n\\tgit push --force origin main\\n' > GNUmakefile && make",
+    `printf '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`, `echo '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`,
     "jq . p > web/package.json && cd web && npm test", "echo x > .npmrc && npx y", "printf x | tee Makefile; gmake"], 2);
   rows(["make test", "npm run test", "echo x > out.txt && make", "npm test && echo done > log.txt", "make -C web build"], 0);
   const E = "." + "env";
@@ -100,4 +110,12 @@ test("#520 review: same-call aliases, make/npm write-then-run, xargs stdin reads
   rows(["echo README.md | xargs cat", `echo ${E}.example | xargs cat`, "ls | xargs cat", `echo ${E} | xargs echo`], 0);
   rows(["echo Z2l0 | base64 -d | sh", "base64 --decode f | bash", "base64 -D < f | sh", "openssl base64 -d -in f | sh", "xxd -r -p f | bash"], 2);
   rows(["echo aGk= | base64 -d", "base64 -d f > out.bin", "echo hi | base64 | sh"], 0);
+});
+
+test("#521 item 5: a push/merge string piped or redirected into xargs/parallel running a shell (G1)", () => {
+  rows([`echo "'gh pr merge 1'" | xargs sh -c`, "printf 'gh pr merge 1' | xargs -d '\\n' sh -c", "printf 'gh pr merge 1\\0' | xargs -0 sh -c",
+    `echo "'git push -f origin main'" | xargs bash -c`, "printf 'git push -f origin main' | xargs -0 bash -c", "printf 'gh pr merge 1' | parallel",
+    "printf 'gh pr merge 1' | parallel -j 2", "xargs -0 sh -c <<< 'gh pr merge 1'", "printf 'gh pr merge 1' | xargs -0 node -e", "printf 'gh pr merge 1' | nice parallel"], 2);
+  rows(["echo a | xargs echo", "echo hi | xargs sh -c 'echo $0'", "ls | parallel -j 2 gzip", "echo a | xargs -I{} sh -c 'echo {}'", "git push -u origin feat",
+    "find . -name '*.ts' -exec grep x {} \\;", "grep -rn KEY src/", "cat .env.example", "ls .env*"], 0);
 });
