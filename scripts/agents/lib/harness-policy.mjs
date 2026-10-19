@@ -2,7 +2,8 @@
  * The absolute floors and caps main's checker applies when `.claude/settings.json` or
  * `.cursor/cli.json` is first introduced (docs/agents/drift-checks.md "First introduction";
  * adapters.md "Permissions mapping"). Later PRs are compared against base instead, and may
- * only add denies or remove allows. These lists are the rev 10 sets, verbatim.
+ * only add denies or remove allows. These lists are the rev 10 sets, verbatim, plus the rev-10
+ * amendment (#511).
  */
 
 const READ_EDIT = ["**/.env", "**/.env.*", "**/secrets/**"];
@@ -29,13 +30,21 @@ const ADMIN = [
 ];
 const FLAG_BEFORE_VERB = ["-*", "pr -*", "issue -*", "repo -*", "release -*", "label -*", "secret -*", "variable -*", "workflow -*", "run -*", "ruleset -*", "cache -*", "alias -*", "api -*"].map((x) => `gh ${x}`);
 
+// Rev-10 amendment (#511; ruled by Helms on Leo's behalf, 10-17): `+<refspec>` force-pushes to
+// any ref, with and without a remote (only `+main` was covered), and gh aliases and extensions
+// (an alias can rename a denied verb; `gh ext`/`gh extensions` are gh's own spellings).
+const AMENDMENT = [
+  "git push * +*", "git push +*", "gh alias set*", "gh alias import*", "gh extension install*", "gh extension exec*", "gh extension -*",
+  "gh extensions *", "gh ext *",
+];
+
 /** H11: Claude's exact bare-push deny. It has no Cursor rendering and is D10-exempt. */
 export const BARE_PUSH = "Bash(git push)";
 
 /** `Bash(cmd args)` -> `Shell(cmd:args)`, the colon form (U9). */
 const colon = (c) => c.replace(/^(\S+) /, "$1:");
 
-/** MIN_DENY = 71: 6 `**\/` Read/Edit + 22 push/merge (incl. the lease) + 28 admin + 14 flag-before-verb + the bare push. */
+/** MIN_DENY = 80: 6 `**\/` Read/Edit + 22 push/merge (incl. the lease) + 28 admin + 14 flag-before-verb + 9 amendment + the bare push. */
 export const MIN_DENY = Object.freeze([
   ...READ_EDIT.map((g) => `Read(${g})`),
   ...READ_EDIT.map((g) => `Edit(${g})`),
@@ -44,10 +53,11 @@ export const MIN_DENY = Object.freeze([
   "Bash(*curl*)",
   "Bash(*wget*)",
   ...FLAG_BEFORE_VERB.map((c) => `Bash(${c})`),
+  ...AMENDMENT.map((c) => `Bash(${c})`),
   BARE_PUSH,
 ]);
 
-/** MIN_DENY_CURSOR = 70: the same, colon form, `Edit`→`Write`, curl/wget as whole commands, no bare push. */
+/** MIN_DENY_CURSOR = 79: the same, colon form, `Edit`→`Write`, curl/wget as whole commands, no bare push. */
 export const MIN_DENY_CURSOR = Object.freeze([
   ...READ_EDIT.map((g) => `Read(${g})`),
   ...READ_EDIT.map((g) => `Write(${g})`),
@@ -56,6 +66,7 @@ export const MIN_DENY_CURSOR = Object.freeze([
   "Shell(curl)",
   "Shell(wget)",
   ...FLAG_BEFORE_VERB.map((c) => `Shell(${colon(c)})`),
+  ...AMENDMENT.map((c) => `Shell(${colon(c)})`),
 ]);
 
 /** H7/H11: a broad push deny in Cursor would block every cloud-agent fix-PR push. */
