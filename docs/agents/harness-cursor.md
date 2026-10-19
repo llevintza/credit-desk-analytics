@@ -37,7 +37,7 @@ With this tree, the U1 fallback would emit eight `.mdc` files, one per nested no
 
 Derived mechanically from the Claude draft by the rev 9 mapping (`Edit`→`Write`, drop `!`, `Bash(cmd args)`→`Shell(cmd:args)`, `*curl*`/`*wget*`→`Shell(curl)`/`Shell(wget)`, no `Shell(git:push)`). Do not commit a hand-written copy.
 
-- deny (70; `MIN_DENY_CURSOR` 70, rev 10, re-verified in rev 10 *verify* evidence): 6 `Read`/`Write` `**/` denies; the 21 colon-form push/merge denies (`Shell(git:push * main)` … `Shell(gh:pr --repo* merge*)`); the 28 admin denies with `Shell(curl)`, `Shell(wget)`; the 14 flag-before-verb denies (`Shell(gh:-*)` … `Shell(gh:api -*)`); the lease deny `Shell(git:push *--force-*)` (rev 10).
+- deny (70; `MIN_DENY_CURSOR` 70, rev 10, re-verified in rev 10 *verify* evidence): 6 `Read`/`Write` `**/` denies; the 21 colon-form push/merge denies (`Shell(git:push * main)` … `Shell(gh:pr --repo* merge*)`); the 28 admin denies with `Shell(curl)`, `Shell(wget)`; the 14 flag-before-verb denies (`Shell(gh:-*)` … `Shell(gh:api -*)`); the lease deny `Shell(git:push *--force-*)` (rev 10); **rev-10 amendment (#511), 9:** `Shell(git:push * +*)`, `Shell(git:push +*)` and the gh alias/extension denies (`adapters.md`), so `MIN_DENY_CURSOR` = 79.
 - allow (6): `Shell(dotnet:build *)`, `Shell(dotnet:test *)`, `Shell(npm:run lint)`, `Shell(npm:test *)`, `Shell(git:status)`, `Shell(git:diff *)`.
 - Must **not** contain `Shell(git:push)` or `Shell(git:push*)` (H7, H11).
 - No `ask` list exists in Cursor (TR), so the Claude `ask` entries for steering paths have no equivalent.
