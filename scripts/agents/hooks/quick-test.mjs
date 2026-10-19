@@ -53,8 +53,9 @@ function run() {
   const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const { tests, remind } = plan(changed(root), root);
   for (const t of tests) {
-    const r = spawnSync(process.execPath, ["--test", t], { cwd: root, encoding: "utf8", timeout: 120_000 });
-    const tally = /ℹ pass (\d+)[\s\S]*?ℹ fail (\d+)/.exec(r.stdout ?? "");
+    // TAP, so the totals read the same on every Node version (the default reporter varies).
+    const r = spawnSync(process.execPath, ["--test", "--test-reporter=tap", t], { cwd: root, encoding: "utf8", timeout: 120_000 });
+    const tally = /^# pass (\d+)$[\s\S]*?^# fail (\d+)$/m.exec(r.stdout ?? "");
     process.stderr.write(`agents quick-test: ${t}: ${tally ? `${tally[1]} pass, ${tally[2]} fail` : r.error ? r.error.code : `exit ${r.status}`}\n`);
   }
   for (const m of remind) process.stderr.write(`agents quick-test: also run ${m}\n`);
