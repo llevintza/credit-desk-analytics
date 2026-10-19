@@ -1,5 +1,6 @@
 {
-  ".cursor/cli.json": "sha256:cef4f31c0631e83b9c8d30e4b36221169e20e59261776c47ccf554900de16006",
-  ".cursorignore": "sha256:84b632faab8a7f3460eab909966630f77010a4781bd0e0ddd0ebf02fca91138d",
+  ".cursor/cli.json": "sha256:8827d38e23f5e7f8b8c539a76424f270bb6619bb4ee4795b9dadf5e7464718d6",
+  ".cursor/hooks.json": "sha256:109d66e6b2ece1d7521a850d5502c6d032830766efd7fb49d5a14b87805385f5",
+  ".cursorignore": "sha256:109d66e6b2ece1d7521a850d5502c6d032830766efd7fb49d5a14b87805385f5",
   "scripts/agents/hooks/secret-patterns.txt": "sha256:be347484dde151096c141e216eec93372573522cba6a9e2a06c7ccd0ba9d65ce"
 }
