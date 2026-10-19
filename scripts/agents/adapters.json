@@ -39,6 +39,13 @@
       "render": "cursor-cli"
     },
     {
+      "path": ".cursor/hooks.json",
+      "sources": [
+        ".claude/settings.json"
+      ],
+      "render": "cursor-hooks"
+    },
+    {
       "path": ".cursorignore",
       "sources": [
         ".claude/settings.json"
