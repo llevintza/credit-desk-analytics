@@ -61,6 +61,9 @@ test("renamed or copied guarded binaries are resolved by identity (G21)", () => 
   assert.equal(code("./x status", dir), 0);
   rows([`cp ${git} /tmp/x`, "cp $(command -v git) x", "cp g* x", "ln -s /usr/bin/gh x", "install -m 755 curl x"], 2);
   rows(["mv a b", "cp -r src dst"], 0);
+  // B6 over-block report: a quoted dynamic destination passes; an unquoted one can split into a source.
+  rows(['cp a.json "$D/b.json"', 'cp a.json "$D"/b.json', 'mv -f x "${OUT}"', 'install -m 644 a "$P"'], 0);
+  rows(["cp a.json $D/b.json", 'cp "$S" b', 'cp a "$D/git"', 'cp -t "$D" a', 'cp --target-directory=$D a', 'cp -t$D a', 'cp a "$D"/*', `cp ${git} "$D"`], 2);
 });
 
 test("indirect execution in a push/merge-shaped payload (G13) and the N2 message carve-out", () => {

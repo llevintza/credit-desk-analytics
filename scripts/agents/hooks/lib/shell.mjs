@@ -117,13 +117,17 @@ function heredocBodies(p, subs) {
   }
 }
 
-/** One word at p.i. Returns { text, raw, dynamic, quoted, glob } or null at a stop character. */
+/**
+ * One word at p.i. Returns { text, raw, dynamic, quoted, glob, splits } or null at a stop
+ * character. `splits`: an expansion outside double quotes, which bash can split into more words.
+ */
 function word(p, subs) {
   const start = p.i;
   let text = "";
   let dynamic = false;
   let quoted = false;
   let glob = false;
+  let splits = false;
   const sub = (kind, inner) => {
     subs.push({ kind, result: inner });
     dynamic = true;
@@ -162,6 +166,7 @@ function word(p, subs) {
       text += ansi(p);
       quoted = true;
     } else if (c === "$" || c === "`") {
+      splits = true;
       text += expansion(p, sub);
     } else if (c === "\\") {
       if (p.src[p.i + 1] === "\n") p.i += 2;
@@ -173,7 +178,7 @@ function word(p, subs) {
     }
   }
   if (p.i === start) return null;
-  return { text, raw: p.src.slice(start, p.i), dynamic, quoted, glob };
+  return { text, raw: p.src.slice(start, p.i), dynamic, quoted, glob, splits };
 }
 
 /**
