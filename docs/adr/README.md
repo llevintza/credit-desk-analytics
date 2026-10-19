@@ -23,7 +23,7 @@ Every technology or design choice is recorded here, **in the same PR that makes 
 | [0017](0017-deploy-path-safety.md) | Deploy-path safety: pipefail, main-only release, step-scoped DATABASE_URL | 0 Scaffold (follow-up) | Accepted |
 | [0018](0018-coverage-gates-and-ci-hardening.md) | Coverage gates, action pinning, and CI hardening | 0 Scaffold (follow-up) | Accepted |
 | [0019](0019-openapi-and-swagger-ui.md) | OpenAPI document + Swagger UI (off in production unless enabled) | cross-cutting (#93) | Accepted |
-| 0020 | Harness-neutral agent setup | cross-cutting | Proposed, not yet committed; rev 14 (planned-marker convention, drafts references dropped; Helms 2026-10-16) is recorded in [`docs/agents/README.md`](../agents/README.md#revision-14-h21-helms-2026-10-16-planned-markers-and-drafts-references) |
+| [0020](0020-harness-neutral-agent-setup.md) | Harness-neutral agent setup: one `AGENTS.md` source, generated Cursor adapters, base-sourced drift checks, a local guard hook (guard p99 48 ms, measured) | cross-cutting (#171) | Accepted, rev 14 (Helms 2026-10-16; built in #171) |
 | [0021](0021-per-user-portfolio-entitlements.md) | Per-user portfolio entitlements (model B: per-user grants) | cross-cutting (#122) | Accepted; implemented in #122 (mode defaults to `all`); amended 2026-10-16 (#70, `/api/admin/usage` exempt) |
 | [0022](0022-audit-retention-purge-on-write.md) | Audit retention: 90-day default (`AUDIT_RETENTION_DAYS`), purged after an audit write and on an idle timer (measured; timer added by #193) | 2 Auth and limits follow-up (#114) | Accepted |
 | [0023](0023-per-area-ci-jobs.md) | CI runs only the jobs a change touches (base-sourced per-area classifier, measured) | [workflows] follow-up (#169) | Proposed |
