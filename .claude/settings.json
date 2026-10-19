@@ -110,8 +110,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/agents/hooks/guard.mjs",
-            "timeout": 5
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/scripts/agents/hooks/guard.mjs\"",
+            "timeout": 5,
+            "onFailure": "block"
           }
         ]
       }
@@ -122,7 +123,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/agents/hooks/format.mjs",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/scripts/agents/hooks/format.mjs\"",
             "timeout": 30
           }
         ]
@@ -133,7 +134,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/agents/hooks/quick-test.mjs",
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/scripts/agents/hooks/quick-test.mjs\"",
             "timeout": 300
           }
         ]

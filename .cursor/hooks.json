@@ -3,7 +3,8 @@
   "hooks": {
     "beforeShellExecution": [
       {
-        "command": "node scripts/agents/hooks/guard.mjs"
+        "command": "node scripts/agents/hooks/guard.mjs",
+        "failClosed": true
       }
     ]
   }
