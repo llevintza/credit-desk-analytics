@@ -10,7 +10,7 @@ This file is the always-on core for every harness (ADR-0020 §1). Area rules loa
 - Infra and CI: [`.github/AGENTS.md`](.github/AGENTS.md), [`deploy/AGENTS.md`](deploy/AGENTS.md)
 - Admin CLI: [`src/Desk.UserAdmin/AGENTS.md`](src/Desk.UserAdmin/AGENTS.md)
 - Tests and coverage: [`tests/AGENTS.md`](tests/AGENTS.md)
-- Agent session rules in full, with examples: [`docs/agents/workflow.md`](docs/agents/workflow.md). Harness setup: [`docs/agents/README.md`](docs/agents/README.md).
+- Agent session rules in full, with examples: [`docs/agents/workflow.md`](docs/agents/workflow.md); switching the hooks off locally: [its section](docs/agents/workflow.md#switching-the-hooks-off-leo-locally). Harness setup: [`docs/agents/README.md`](docs/agents/README.md).
 - Skills (one copy, read by every harness): `.claude/skills/<name>/SKILL.md`. Stack guidelines: `docs/agents/guidelines/`, indexed in [`docs/agents/README.md`](docs/agents/README.md).
 
 ## Workflow: the history is part of the deliverable
