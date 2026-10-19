@@ -96,11 +96,12 @@ test("commit-message replay (G19, G19b) and write-then-run (G22)", () => {
 });
 
 test("#520 review: same-call aliases, make/npm write-then-run, xargs stdin reads, decoded text into a shell", () => {
-  rows(["shopt -s expand_aliases\nalias g=git\ng push --force origin main", "alias g='git push'\ng --force origin main", "alias s='sudo ' g=git\ns g push origin main",
+  rows(["shopt -s expand_aliases\nalias g=git\ng push --force origin main", "shopt -s expand_aliases; alias g=git\ng push --force origin main", "alias g='git push'\ng --force origin main", "alias s='sudo ' g=git\ns g push origin main",
     "alias p='gh pr'\np merge 5", "alias ls='ls -l'\nalias x=ls\nx; alias y='git push origin main'\ny"], 2);
   rows(["alias ll='ls -l'\nll", "alias", "alias g=git\ng status", "alias ls='ls -G'\nls"], 0);
   rows(["printf 'x:\\n\\tgit push --force origin main\\n' > Makefile && make x", "printf 'x:\\n\\tgit push -f origin main\\n' > b.mk && make -f b.mk x",
-    "cat > GNUmakefile <<'EOF'\nx:\n\tls\nEOF\nmake x", `echo '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`,
+    "cat > GNUmakefile <<'EOF'\nx:\n\tls\nEOF\nmake x", "printf 'x:\\n\\tgit push --force origin main\\n' > GNUmakefile && make",
+    `printf '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`, `echo '{"scripts":{"x":"git push --force origin main"}}' > package.json && npm run x`,
     "jq . p > web/package.json && cd web && npm test", "echo x > .npmrc && npx y", "printf x | tee Makefile; gmake"], 2);
   rows(["make test", "npm run test", "echo x > out.txt && make", "npm test && echo done > log.txt", "make -C web build"], 0);
   const E = "." + "env";

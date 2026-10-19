@@ -17,6 +17,12 @@ const rows = (list, want) => {
   for (const c of list) for (const shape of SHAPES) assert.equal(decide(JSON.stringify(shape(c)), { repoAt: fakeRepo() }).code, want, c);
 };
 const mcp = (tool, args = {}) => decide(JSON.stringify({ tool_name: tool, tool_input: args })).code;
+// #519: the same MCP call in Claude, Cursor (`MCP:<tool>` + server) and Grok (`server__tool`) shapes.
+const mcpShapes = (tool, args) => {
+  const [, server, name] = /^mcp__(.*?)__(.*)$/.exec(tool);
+  return [{ tool_name: tool, tool_input: args }, { tool_name: `MCP:${name}`, mcp_server_name: server, tool_input: args }, { toolName: `${server}__${name}`, toolInput: args }]
+    .map((j) => decide(JSON.stringify(j)).code);
+};
 
 test("TC's check commands and the PR/issue flows stay allowed (governance.md)", () => {
   rows([
@@ -120,4 +126,10 @@ test("MCP tools (G16): blocked everywhere, the GitHub allowlist, other servers",
     ["mcp__github__list_issues", { owner: "o", repo: "r", state: "closed" }], ["mcp__calendar__create_event", { event: { title: "x" } }], ["mcp__claude-in-chrome__tabs_close_mcp", {}],
   ]) assert.equal(mcp(tool, args), 0, tool);
   assert.equal(decide(JSON.stringify({ toolName: "github__merge_pull_request", toolInput: { owner: "o", repo: "r" } })).code, 2); // Grok shape
+  for (const [tool, args, want] of [
+    ["mcp__github__update_issue", { owner: "o", repo: "r", state: "closed" }, 2], ["mcp__github__update_pull_request", { owner: "o", repo: "r", state: "closed" }, 2],
+    ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "APPROVE" }, 2], ["mcp__github__merge_pull_request", { owner: "o", repo: "r" }, 2],
+    ["mcp__github__submit_pending_pull_request_review", { owner: "o", repo: "r", event: "REQUEST_CHANGES" }, 2],
+    ["mcp__github__update_issue", { owner: "o", repo: "r", state: "open" }, 0], ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "COMMENT" }, 0],
+  ]) assert.deepEqual(mcpShapes(tool, args), [want, want, want], tool);
 });
