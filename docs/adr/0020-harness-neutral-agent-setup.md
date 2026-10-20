@@ -24,13 +24,20 @@ Several coding agents (Claude Code, the Cursor IDE, the Cursor CLI and cloud age
 | A PR weakening its own checks | possible | base-sourced (`_target`, main's copy of the scripts) | same as 2 |
 | Deny floor on first introduction | none | `MIN_DENY` = 71 (Claude), `MIN_DENY_CURSOR` = 70 (Cursor), `MAX_ALLOW` = 6 | same as 2 |
 | Push/merge/admin shapes the lists miss (wrappers, `$()`, aliases, `+<ref>`) | missed | guard fails closed on them (G1–G22) | missed |
-| Guard cost per tool call | n/a | p50 33 ms, p99 48 ms per fresh-node call (budget p99 ≤ 500 ms, 1 s hard cap) | n/a |
+| Guard cost per tool call | n/a | p50 32 ms, p99 54 ms per fresh-node call, n=400 (budget p99 ≤ 500 ms, 1 s hard cap) | n/a |
 
-**How to reproduce:** `node perf/guard-timing.mjs` (80 fresh-node calls), and the `agents-tests` command in [`.github/AGENTS.md`](../../.github/AGENTS.md).
+**How to reproduce:** `node perf/guard-timing.mjs [runs]` (one fresh node process per call over a fixed mix of eight command shapes; default 80 runs), and the `agents-tests` command in [`.github/AGENTS.md`](../../.github/AGENTS.md).
+
+**Source of record (#531):** the n=400 run below, at `031361e` on an Apple M5, Node v24.18.0, 2026-10-19. At the default n=80 the p99 index is the last sample, so p99 equals max and moves with one slow spawn. That is why the earlier n=80 runs disagreed (33/48 ms at #528, 31/44 ms in the #530 body). Three n=80 runs at the same commit give p50 31–32 ms and p99 46–52 ms. All of them are about 10× under the 500 ms budget.
 
 ```
-$ node perf/guard-timing.mjs
-guard hook, fresh node per call: n=80 p50=33 ms p99=48 ms max=48 ms (budget p99 ≤ 500 ms)
+$ node perf/guard-timing.mjs 400
+guard hook, fresh node per call: n=400 p50=32 ms p99=54 ms max=88 ms (budget p99 ≤ 500 ms)
+
+$ node perf/guard-timing.mjs   # three times, same commit
+guard hook, fresh node per call: n=80 p50=32 ms p99=52 ms max=52 ms (budget p99 ≤ 500 ms)
+guard hook, fresh node per call: n=80 p50=32 ms p99=51 ms max=51 ms (budget p99 ≤ 500 ms)
+guard hook, fresh node per call: n=80 p50=31 ms p99=46 ms max=46 ms (budget p99 ≤ 500 ms)
 ```
 
 ## Decision
