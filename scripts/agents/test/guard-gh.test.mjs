@@ -106,6 +106,7 @@ test("MCP tools (G16): blocked everywhere, the GitHub allowlist, other servers",
     // #517 review: write verbs behind a read prefix, and branch writes to main on any server.
     ["mcp__x__list_merge_x", {}], ["mcp__x__get_and_dispatch", {}], ["mcp__x__push_files", { branch: "main" }], ["mcp__foo__create_or_update_file", {}],
     ["mcp__fs__create_file", { path: "a", branch: "main" }], ["mcp__x__create_branch", {}],
+    ["mcp__corp__push_files", { repo_full_name: "o/r", branch: "main" }], // #518 (d): no GitHub-shaped args, still blocks
     // #519: close and verdict tools on any server, argument keys at any depth.
     ["mcp__github__update_issue", { owner: "o", repo: "r", issue_number: 1, state: "closed" }], ["mcp__x__update_issue", { state: "CLOSED" }],
     ["mcp__github__update_pull_request", { owner: "o", repo: "r", pullNumber: 1, state: "closed" }], ["mcp__x__issue_write", { method: "update", state: "closed" }],
@@ -124,6 +125,7 @@ test("MCP tools (G16): blocked everywhere, the GitHub allowlist, other servers",
     ["mcp__github__update_issue", { owner: "o", repo: "r", state: "open" }], ["mcp__github__update_issue", { owner: "o", repo: "r", title: "t" }],
     ["mcp__github__create_pull_request_review", { owner: "o", repo: "r", event: "COMMENT", body: "x" }], ["mcp__github__create_pending_pull_request_review", { owner: "o", repo: "r" }],
     ["mcp__github__list_issues", { owner: "o", repo: "r", state: "closed" }], ["mcp__calendar__create_event", { event: { title: "x" } }], ["mcp__claude-in-chrome__tabs_close_mcp", {}],
+    ["mcp__corp__push_files", { repo_full_name: "o/r", branch: "feat" }], ["mcp__github__get_pull_request", { owner: "o", repo: "r", pullNumber: 1 }], // #518 (d), (e)
   ]) assert.equal(mcp(tool, args), 0, tool);
   assert.equal(decide(JSON.stringify({ toolName: "github__merge_pull_request", toolInput: { owner: "o", repo: "r" } })).code, 2); // Grok shape
   for (const [tool, args, want] of [
