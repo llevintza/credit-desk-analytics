@@ -4,7 +4,8 @@ Area file for `src/Desk.UserAdmin/` (console CLI for invite-only accounts). The 
 
 ## Rules
 
-- **Local and test databases only.** Run the CLI only against the compose Postgres you started or Testcontainers; never against Neon or production, and never with a connection string a human exported for you. Real accounts are created by a human (README §7.1, §13 step 8).
+- **Local and test databases only.** Run the CLI only against the compose Postgres you started or Testcontainers; never against Neon or production, and never with a connection string a human exported for you. Real accounts come only from a human running this CLI or from Leo's approval of a demo request in the admin view (README §7.1, §13 step 8, ADR-0029). Agents never create, approve, reject, reset or delete real accounts, demo accounts included, and never call the access-request approval endpoints against Render or Neon.
+- **Shared create path (ADR-0029):** when the approval endpoint provisions through this CLI's create logic (#540), the password rules below hold for both callers, and the CLI's behaviour and output stay unchanged.
 - **Passwords:** `PasswordGenerator` output is printed once to stdout and stored only as a hash. Never log it or put it in stderr, audit, exceptions, tests or PR text. No `EnableSensitiveDataLogging`.
 - **Output contract:** keep `Password (shown once, share it out of band): <pw>` byte-stable. `UserAdminTests` and CI's `budgets` job (`.github/workflows/ci.yml`) parse it, so changing it needs a `[workflows]` PR for `ci.yml` first.
 - **Security stamp:** `disable` and `reset` rotate it on purpose (live sessions end). `grant`/`revoke` (ADR-0021, #122) must **not** rotate it; a change takes effect at the next 5-minute stamp refresh (ADR-0021 E5). Each behaviour has a test.
