@@ -136,7 +136,7 @@ The group and the verb are the first two words after `gh`; for `gh api`, the end
 
 **Over-deny you will hit:** Claude's deny list also blocks harmless reads that contain an admin word (`gh api …/rulesets`, `…/protection`, `…/environments`, `…/secrets`, `…/keys`, `…/actions/…`) and `gh secret list` / `gh variable list|get`. Tech Coordinator does those reads.
 
-**Substring denies that also catch read flags (#516 review; kept as is, because a deny may only be added to, never narrowed below `MIN_DENY`):** the word can sit in a `--json` field or a `--jq` filter, not only in the verb or the path. Ask for the same data another way:
+**Substring denies that also catch read flags (#516 review; kept as is, because a deny may only be added to, never narrowed below `MIN_DENY`):** the word can sit in a `--json` field or a `--jq` filter, not only in the verb or the path. Ask for the same data with a sanctioned read below. Never look for another spelling of the denied command to get around it (AGENTS.md "Agent sessions"):
 
 | Denied | Why | Write instead |
 |---|---|---|

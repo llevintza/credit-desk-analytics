@@ -63,6 +63,14 @@ Statuses for U1, U3, U8, U9, U10 and U15 come from Tech Research's verification 
 | U21 | Cursor stdin shape and matcher rewrite for imported Claude hooks; the `Shell` matcher | UNVERIFIED (TR: docs silent; the third-party-hooks page's example uses `"matcher": "Shell"`). The `Shell` matcher is an **ASSUMPTION**; if it doesn't fire, the guard fails open **silently**. | `stdin-canary.mjs` in the IDE + CLI over the fixed operation set (imported hooks and `beforeShellExecution`), then an exit-2 pass (`testing.md`) | Guard fails **open** on unrecognized non-push input (warning + log), **closed** on recognized input, and **closed on any push/merge-shaped input whatever its shape** (H4, R4-M1(c)); the generated `.cursor/hooks.json` doesn't depend on the matcher (H8) | **Yes** (guard) |
 | U24 | Cursor loads .claude/skills with default settings | PENDING: needs a human-run Cursor install before merge (PR-A acceptance A12) | Customize → Skills | harness-cursor.md note | No |
 
+**Gaps until the guard was armed (#518 (b)), now closed by the armed guard (#528, `12e0cae`).** Before #528, the settings alone did not deny these, and only the AGENTS.md rule covered them:
+
+- `git push origin +feat:feat` (a `+<ref>` force-push to a non-`main` branch): the guard's push analysis blocks every `+<ref>` refspec (G9; [`adapters.md`](adapters.md) "What the guard blocks"), and #527 (#511) added `Bash(git push * +*)` and `Bash(git push +*)` to the deny floor.
+- `gh alias set`, `gh extension install|exec`: the guard's gh verb allowlist blocks them (G14; [`workflow.md`](workflow.md#gh-canonical-form-only)), and #527 (#511) added the alias and extension denies to the floor.
+- `$()`, backticks and `eval`: permission patterns can't express these. The guard blocks a dynamic command word, a substitution in a commit command, and `eval` (G4, G19; [`workflow.md`](workflow.md#other-command-shapes-the-guard-rejects)).
+
+With the hooks off (`workflow.md` "Switching the hooks off"), the deny-floor entries still apply, but the `$()`/backticks/`eval` class is back to the AGENTS.md rule alone.
+
 **Build status (#171 Stage B, refreshed in B8).** The build ships the fallbacks and checks below. It verifies no harness behaviour, so every status above stands until its test is run in that harness.
 
 | # | What the build ships | Still open |
