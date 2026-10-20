@@ -173,7 +173,9 @@ credit-desk-analytics/
 
 ## 5. Data model and seed data
 
-All data is **synthetic** and generated **deterministically** (`SEED=42` by default, so the same seed always gives the same database). It must look and behave like real structured-credit desk data: realistic names, distributions, correlations, NULLs where real data has NULLs, and a few deliberate edge cases.
+The book (funds, portfolios, deals, issuers, bonds, positions, trades, analysts) is **synthetic** and generated **deterministically** (`SEED=42` by default, so the same seed always gives the same database). It must look and behave like real structured-credit desk data: realistic names, distributions, correlations, NULLs where real data has NULLs, and a few deliberate edge cases.
+
+Beside it, the market data pipeline (epic #535, [ADR-0030](docs/adr/0030-public-market-data-pipeline.md)) ingests **public market reference data** (curves, rates, FX, and later issuer names, tickers and prices) from sources whose licence allows storage and display, recorded per source. Each business day it rolls the synthetic book forward to a new as-of date, repriced from the day's public moves. Real public names stay in the ingested reference tables and the views that read them, never in the synthetic book's names; client, employer and person names are never stored.
 
 ### 5.1 Schemas (= data sources)
 
@@ -244,6 +246,17 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
+
+**Steady state with the daily roll (epic #535, ADR-0030).** Retention keeps the snapshot at 2 as-of dates and marks at 22 business days (batched DELETE + plain `VACUUM (ANALYZE)`), public series and prices 730 days, `app.ingest_run` 400 days. Measured on a local stack over 10 simulated days (`perf/snapshot-retention.sh`):
+
+| Object | Steady low | Steady peak |
+|---|---|---|
+| `core.position_snapshot` (2 dates) | 84.9 MB | 116.2 MB (31 MB of reusable dead space; flat over the 10 days) |
+| `pricing` marks (22 days) | 94.9 MB (day 1) | 96.3 MB |
+| New ingest tables (public series, prices, `app.ingest_run`, longer curve history) | ~10 MB (estimate) | ~10 MB (estimate) |
+| **Database** (fresh seed 280.0 MB locally on today's main) | 296.6 MB + ~10 MB | **330.3 MB + ~10 MB ≈ 340 MB**; from Leo's ~150 MB production figure, ≤ ~210 MB |
+
+From a 270–280 MB start that leaves 10–20 MB under the 350 MB budget, so the ingest checks the projected size and fails **before** writing when it would exceed it (#549). A production `size-report` confirms the starting size before ADR-0030 is accepted. Without retention the roll adds ~46–54 MB per business day. Neon's point-in-time history also counts the ~54 MB of WAL a day.
 
 **Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` (current size + new data) and, on a run that would TRUNCATE, **refuses (exit 2) before TRUNCATE when it exceeds `--cap-mb`** (default 512 MB), leaving data and `app.seed_metadata` untouched (#109; §10). Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed.
 
@@ -904,6 +917,8 @@ services:
    | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
    | variable | `SEED_SCALE` | `1.0` |
    | variable | `SEED_CAP_MB` (optional) | reseed peak cap in MB; unset means 512 (§10, #224). Set it only after Leo confirms the Neon cap |
+   | secret | `ECON_DATA_API_KEY` (later, optional) | the public economic-data API key, only once a licence-checked series is enabled (ADR-0030; injected on the ingest fetch step only). The first three sources need no key |
+   | variable | `INGEST_MAX_MB` (optional) | the ingest's pre-write size budget in MB; unset means 350 (§5.4, #549) |
 
 5. **Claude review (Leo's decision, 2026-10-07):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. The `review` check stays non-required.
 6. **Last:** after Tech Coordinator's go-ahead, set `production` environment variable `APP_URL` to the service URL (no trailing slash). That variable turns deploys on.
