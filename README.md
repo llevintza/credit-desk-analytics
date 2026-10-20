@@ -625,6 +625,36 @@ The **website is public** (anyone can reach the login page). The **data is not**
 - **Static SPA:** `UseStaticFiles` + `MapFallbackToFile("index.html")`. Long-cache hashed assets, and `no-cache` for `index.html`.
 - **Same origin, so no CORS** is configured in production. In development the Angular dev server proxies `/api` to the API.
 
+### 8.1 MCP server (planned: #554–#558, [ADR-0031](docs/adr/0031-mcp-server.md))
+
+`src/Desk.Mcp` (`desk-mcp`) is a local **stdio** MCP server: read-only, with no listener and no port. By default it is a typed client of `/api` (API mode), so entitlements (ADR-0021), rate limits, caching, audit and maintenance mode apply unchanged. Local-DB mode (`serve --db --as <local account>`, #558) reads a **local** database only: it refuses any host but `localhost`, `127.0.0.1`, `[::1]` and the compose service names, and never connects to Neon.
+
+- **Tools** (each one call to the endpoint shown):
+
+  | Tool | Endpoint |
+  |---|---|
+  | `get_as_of_dates` | `GET /api/meta/as-of` |
+  | `list_columns` | `GET /api/meta/columns` |
+  | `list_portfolios` | `GET /api/meta/portfolios` (entitled set only) |
+  | `query_positions` | `POST /api/positions/query` (whitelisted columns, filters and sort; default 100 rows, max 500; totals over all filtered rows) |
+  | `get_positions_summary` | `POST /api/positions/query` (totals only) |
+  | `get_fund_performance` | `GET /api/funds/{id}/performance` |
+  | `list_insight_sources` | none (the five fixed sources) |
+  | `get_insight` | `GET /api/insights/{source}` |
+  | `list_deals` | `GET /api/deals` |
+  | `get_deal` | `GET /api/deals/{id}` |
+
+- **No writes.** There are no admin, preset, export or stream tools, and no emails or other personal data in any output.
+- **Caps:** 100 rows by default and 500 at most; 64 KB per tool result, as a `columns` header plus row arrays. A cut result says `truncated: true` and which cap cut it.
+- **Limits:** 30 requests/min on the client (half the per-account 60/min, shared with the SPA), 1 request in flight, and 429 `Retry-After` honoured up to 60 s.
+- **Sign-in (API mode):**
+  1. Create a local account with `Desk.UserAdmin` (§7.1) against the local stack.
+  2. Run `desk-mcp login --api http://localhost:8080`. It prompts for the email and password on the terminal (never as arguments or environment variables) and stores only the refresh token, in a 0600 file under your user config directory (`~/.config/desk-mcp/`), never in the repo.
+  3. Register the server in your **user-level** MCP config, for example `claude mcp add --scope user desk -- desk-mcp serve --api http://localhost:8080`. The project `.mcp.json` stays empty until #557.
+  4. Run `desk-mcp logout --api http://localhost:8080` to end the sign-in. After 24 h (or 8 h idle) the tools ask you to sign in again.
+- **Production:** only Leo, with his own account and the explicit `--live` opt-in. Agents use a local stack with a locally created account, as for e2e and k6. Each production call can wake Render and Neon, so no scheduled or looping use (§7.2).
+- The exact build and install commands land with #554.
+
 ---
 
 ## 9. Frontend requirements and trade-desk UI
@@ -1125,4 +1155,5 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 7 Deal Explorer | #363 | Merged (`09b8344`): `GET /api/deals` (LATERAL representative bond, zero-bond deals kept, per-deal totals, scoped holdings) and `GET /api/deals/{id}`; master/detail page (ADR-0013) |
 | 8 Performance Lab | #474 | Merged (`a3bac1c`): `/lab` runs P1 (row JSON / columnar JSON / MessagePack, 100/200/500 rows, displayed/all columns) and P3 (5 per-source vs 20 naive calls) with cache off (admin) and forced br/gzip/none (dev knobs); per run wire/decoded bytes, TTFB, download, decode, render, Server-Timing and cache from real requests; last 20 runs, copy as markdown (#64, #65, ADR-0028). MessagePack responses are now compressed (were sent raw). |
 | 9 Hardening | #471, #472, #477 | Merged (follow-ups #470, #476, #481, #483): #66, security headers and CSP review (one-year HSTS, Pages frame guard and meta referrer, `perf/security-headers.mjs`; ADR-0024 amendment), merged as #472, `6336aa0`; the header check refuses any non-local host, `--live` is Leo's opt-in (merged as #483, `6a18895`); the framed-page notice gets `role="alert"` and token styling (#472 nit N3, merged as #495, `b25214a`); #241, the All-preset whole-book MISS p95 (stored weight column, parallel summary; ADR-0006 addendum): local 61–83 ms, hosted CI 155.5 ms (was ≈ 249), merged as #460, `ef2efff`; a first view's page and totals on two connections with a spare database permit (ADR-0006 addendum): hosted CI All MISS p95 134.9 / 101.7 / 101.1 ms in three runs (< 150), merged as #470, `8e19774`; #241 closed by Tech Coordinator on 2026-10-16; the peak-of-2 tests hold both connections open together, so they are deterministic (merged as #476, `89bdfbd`); #70, the admin Usage page (`GET /api/admin/usage`: requests per user per day, cache hit ratio, slowest 20 per day; LATERAL top-N, 98–182 ms for 30 days of a busy audit log; ADR-0027), merged as #471, `5cdef26`; #67, free-tier guardrails (ADR-0014): per-user burst 60 (a fast four-page click-through needs 38–42 tokens), response cache 64 MB capped at 96 (full cache under k6: 338 MiB of the 512 MiB instance), preset lists cached per user, so a demo session's second views read no database (measured on a local 512 MiB stack, pinned by `FreeTierGuardrailTests`), merged as #477, `078adaf`; follow-ups #67/#70: bounded preset versions, no `X-Cache` on a 404, burst and Usage pins (merged as #481, `4227d09`); #115, the ADR-0005 addendum for the viewer/admin role seed, merged as #485, `16c01e9`; #488, README §14.4 names that role seed as a second migration-seed exception (`[workflows]`, merged as #491, `6de16ed`). Left from the definition of done, Leo's: the live-site header and budget checks, and reviewer accounts (#89) |
+| MCP server (epic #536) | #553 | In review: [ADR-0031](docs/adr/0031-mcp-server.md) (local stdio, read-only, entitlement-scoped; `desk-mcp login`, 100/500 rows and 64 KB, user-level config first) and README §8.1. Next: #554–#556 |
 | 10 Intraday overlay (stretch) | #475 | Merged (`341a7d0`; #71, #72): SSE mark stream `/api/marks/stream` read with `fetch` and the bearer token, scoped and rate-limited in its own partition, at most 5 minutes per stream; stale marks dropped by `seq`; Live marks toggle on P1 with flashing cells and server overlay totals (ADR-0015, measured) |
