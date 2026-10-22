@@ -148,3 +148,9 @@ test("#576: PATH planting, enable -n/-f and hash -p re-point a command name (G22
     "printf x > /tmp/a/f && PATH=/tmp/b:$PATH ls", "echo $PATH", "echo PATH=bin:$PATH", "export PATH", "PATH=bin:$PATH", "hash", "hash -r", "enable", "enable -a",
     "export FOO=bar; ls", "grep PATH= .bashrc", "env | grep PATH", "printenv PATH"], 0);
 });
+
+test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
+  rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
+  rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
+    "[[ -n $(git push --force origin main) ]]", "[[ $X == g* ]] && $G push origin main", "[[ $X == g* ]]; /usr/bin/g?t push origin main", "[[ $X == c*l ]] && c?rl x"], 2);
+});
