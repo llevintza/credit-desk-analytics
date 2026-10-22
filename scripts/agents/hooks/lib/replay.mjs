@@ -9,7 +9,8 @@
  * - G19/G19b: a commit/tag/note created with a re-execution vector, or commit text replayed
  *   into a shell.
  * - G22: a file written and then run in the same call, signature or not; make or an npm-style
- *   runner after a same-call write to a Makefile, `.mk` or package.json.
+ *   runner after a same-call write to a Makefile, `.mk` or package.json; a command after a PATH
+ *   change to a relative, dynamic or same-call-written directory, `enable -n|-f`, `hash -p` (#576).
  * - Decoded text (`base64 -d`, `xxd -r`) piped into a shell, signature or not.
  */
 import { resolve } from "node:path";
@@ -89,8 +90,57 @@ function subs(r, out = []) {
 const positional = (args) => args.filter((w) => !w.text.startsWith("-"));
 const runsFile = (c) => (RUNNERS.has(c.name) && !c.args.some((w) => CODE_FLAGS.test(w.text)) && positional(c.args).length > 0) || (c.word?.text.includes("/") ?? false);
 
+/** Paths a segment writes: redirections, tee, cp/mv/ln/install/rsync destinations, sed -i. */
+function writes(s, c, cwd) {
+  const out = s.redirs.filter((r) => WRITE_OPS.test(r.op)).map((r) => resolve(cwd, r.target));
+  const pos = positional(c.args).map((w) => w.text);
+  if (c.name === "tee") out.push(...pos.map((p) => resolve(cwd, p)));
+  if (["cp", "mv", "ln", "install", "rsync"].includes(c.name) && pos.length > 1) out.push(resolve(cwd, pos.at(-1)));
+  if (c.name === "sed" && c.args.some((w) => /^-[a-zA-Z]*i/.test(w.text))) out.push(...pos.slice(1).map((p) => resolve(cwd, p)));
+  return out;
+}
+
+/** Every path a payload writes (shell strings it runs see the outer writes; #576). */
+export const payloadWrites = (segs, cwd) => segs.flatMap((s) => writes(s, command(s), cwd));
+
+// PATH planting (#576): a relative, dynamic or same-call-written directory on PATH makes the
+// next command, or any name a script runs, resolve to whatever file sits there (`> bin/ls &&
+// PATH=bin:$PATH ls`). zsh ties `path` to PATH, and `path=(…)` parses as a bare `path=`.
+const PATH_SET = /^(?:PATH|path)\+?=/;
+const DECLARERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+function unsafePath(w, written, cwd) {
+  const [, op, value] = /^(?:PATH|path)(\+?=)([\s\S]*)$/.exec(w.text);
+  return (op === "+=" ? value.replace(/^:/, "") : value).split(":").some((d) => {
+    if (d === "$PATH" || d === "${PATH}") return false;
+    if (!d.startsWith("/") || /[$`*?[{~]/.test(d)) return true;
+    const dir = resolve(cwd, d);
+    return [...written].some((p) => p === dir || p.startsWith(`${dir}/`));
+  });
+}
+function pathPlanting(segs, cmds, written, cwd) {
+  const unsafe = (list) => list.some((w) => PATH_SET.test(w.raw) && unsafePath(w, written, cwd));
+  for (const [i, s] of segs.entries()) {
+    const ws = s.words;
+    let at = 0;
+    while (at < ws.length && /^[A-Za-z_]\w*\+?=/.test(ws[at].raw)) at++;
+    const name = ws[at] ? base(ws[at].text) : "";
+    // `PATH=… cmd`, `env PATH=… cmd`: this command. `export PATH=…`, a bare `PATH=…`: the rest.
+    const self = !name ? [] : DECLARERS.has(name) ? [] : ["env", "sudo"].includes(name) ? ws : ws.slice(0, at);
+    const rest = !name ? ws : DECLARERS.has(name) ? ws.slice(at + 1) : [];
+    if (unsafe(self) && cmds[i].word) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
+    if (unsafe(rest) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
+  }
+  for (const c of cmds) {
+    // `enable -n test` turns a builtin off so a PATH file runs in its place; `enable -f` loads one.
+    if (c.name === "enable" && c.args.some((w) => /^-[a-zA-Z]*[nf]/.test(w.text))) return `enable -n/-f re-points a builtin (G22, #576)`;
+    // `hash -p file name` (bash) and `hash name=file` (zsh) make a command name run any file.
+    if (c.name === "hash" && c.args.some((w) => /^-[a-zA-Z]*p/.test(w.text) || /^[^-=][^=]*=/.test(w.text))) return `hash -p / hash name=path re-points a command name (G22, #576)`;
+  }
+  return undefined;
+}
+
 /** Payload-level indirect-execution rules. `text` is the command; `cwd` resolves paths. */
-export function replayCheck({ text, segs, parsed, sig, cwd }) {
+export function replayCheck({ text, segs, parsed, sig, cwd, prior = [] }) {
   const cmds = segs.map(command);
   const heads = segs.map((s) => base(head(s)?.text ?? ""));
   // `git tag -m`/`git notes add -m` create text; without a message they print it.
@@ -119,12 +169,10 @@ export function replayCheck({ text, segs, parsed, sig, cwd }) {
     const recipe = RECIPE_RUNNERS[c.name];
     if (recipe && [...written].some((p) => recipe.test(base(p)))) return block(`${c.name} after a same-call write to its Makefile, .mk or package.json (G22)`);
     if (shell && piped(i) && DECODERS.some((d) => d(cmds[i - 1]))) return block(`decoded text piped into ${c.name} (base64 -d | sh)`);
-    for (const r of s.redirs) if (WRITE_OPS.test(r.op)) written.add(resolve(cwd, r.target));
-    const pos = positional(c.args).map((w) => w.text);
-    if (c.name === "tee") pos.forEach((p) => written.add(resolve(cwd, p)));
-    if (["cp", "mv", "ln", "install", "rsync"].includes(c.name) && pos.length > 1) written.add(resolve(cwd, pos.at(-1)));
-    if (c.name === "sed" && c.args.some((w) => /^-[a-zA-Z]*i/.test(w.text))) pos.slice(1).forEach((p) => written.add(resolve(cwd, p)));
+    for (const p of writes(s, c, cwd)) written.add(p);
   }
+  const planted = pathPlanting(segs, cmds, new Set([...prior, ...written]), cwd);
+  if (planted) return block(planted);
 
   if (cmds.some((c) => COMMITTERS.has(gitSub(c).sub))) {
     const vector =

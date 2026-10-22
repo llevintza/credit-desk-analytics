@@ -13,7 +13,7 @@ import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
 import { globNamesGuarded, indirect, unwrap } from "./indirect.mjs";
 import { decideMcp } from "./mcp.mjs";
-import { replayCheck } from "./replay.mjs";
+import { payloadWrites, replayCheck } from "./replay.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
 import { ASSIGN, base, head } from "./words.mjs";
 
@@ -120,6 +120,15 @@ function unnamed(seg) {
   return undefined;
 }
 
+// Words bash can pathname-expand. Between a `[[` command word and its `]]` it pattern-matches
+// instead (`[[ $X == g* ]]`; #577); `$(…)` inside is its own segment and still checked.
+function globbed(seg) {
+  const at = seg.words.indexOf(head(seg));
+  if (seg.words[at]?.raw !== "[[") return seg.words;
+  const end = seg.words.findIndex((w, k) => k > at && w.raw === "]]");
+  return end < 0 ? seg.words : [...seg.words.slice(0, at), ...seg.words.slice(end + 1)];
+}
+
 // `alias name=value …` definitions in a payload: { name: value }.
 function aliasDefs(segs) {
   const out = {};
@@ -148,11 +157,14 @@ function command(text, call, opts, depth = 0) {
   }
   const segs = allSegments(parsed);
   const cwd = call.cwd ?? process.cwd();
-  const p = payloadCheck({ segs, sig }) ?? replayCheck({ text, segs, parsed, sig, cwd });
+  const prior = opts.written ?? [];
+  const p = payloadCheck({ segs, sig }) ?? replayCheck({ text, segs, parsed, sig, cwd, prior });
   if (p) return block(p.reason, call);
-  const sweep = segs.flatMap((s) => [...s.words, ...s.redirs.map((r) => ({ text: r.target, glob: /[*?[{]/.test(r.target) }))]).find((w) => w.glob && globNamesGuarded(w));
+  const sweep = segs.flatMap((s) => [...globbed(s), ...s.redirs.map((r) => ({ text: r.target, glob: /[*?[{]/.test(r.target) }))]).find((w) => w.glob && globNamesGuarded(w));
   if (sweep) return block(`the glob ${sweep.text} could name git, gh, hub, curl or wget (G20)`, call);
-  const evaluate = (t, o = opts) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, o, depth + 1));
+  // Shell strings and aliases see this payload's writes (PATH planting, #576).
+  const written = [...prior, ...payloadWrites(segs, cwd)];
+  const evaluate = (t, o = opts) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, { ...o, written }, depth + 1));
   const aliases = { ...opts.aliases, ...aliasDefs(segs) };
   for (const [i, seg] of segs.entries()) {
     // A shell alias defined in the same payload (`alias g=git` then `g push …`; #520 review) is

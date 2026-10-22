@@ -131,3 +131,26 @@ test("#521 item 5: a push/merge string piped or redirected into xargs/parallel r
   rows(["echo a | xargs echo", "echo hi | xargs sh -c 'echo $0'", "ls | parallel -j 2 gzip", "echo a | xargs -I{} sh -c 'echo {}'", "git push -u origin feat",
     "find . -name '*.ts' -exec grep x {} \\;", "grep -rn KEY src/", "cat .env.example", "ls .env*"], 0);
 });
+
+test("#576: PATH planting, enable -n/-f and hash -p re-point a command name (G22)", () => {
+  const W = "printf '#!/bin/sh\\ngit push --force origin main\\n' > bin/ls && chmod +x bin/ls";
+  rows([`${W} && PATH=bin:$PATH ls`, `${W} && PATH=bin:$PATH env ls`, `${W} && PATH=bin:$PATH env test x`, `${W} && env PATH=bin:$PATH ls`,
+    `${W}; export PATH=bin:$PATH; ls`, `${W}; PATH=bin:$PATH; ls`, `${W}; export PATH="$PWD/bin:$PATH"; ls`, `${W} && PATH=./bin:$PATH ls`], 2);
+  // A relative, empty, `~` or dynamic entry fails closed even with no write here: the file can come from an earlier call.
+  rows(["PATH=bin:$PATH ls", "PATH=:$PATH ls", "PATH=.:$PATH ls", "PATH=~/bin:$PATH ls", "PATH=$HOME/bin:$PATH ls", "PATH+=:bin ls", "export PATH=$PATH:bin; ls",
+    "declare -x PATH=bin:$PATH; ls", "sudo PATH=bin:$PATH ls", "env -i PATH=bin ls", 'PATH="bin:$PATH" npm test',
+    "path=(bin $path); ls", "path+=(bin); ls", "path=bin:$path; ls"], 2);
+  // An absolute directory fails closed when this payload (or a shell string in it) writes under it.
+  rows(["printf x > /tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "cp /usr/bin/git /tmp/pp/ls && PATH=/tmp/pp:$PATH ls", "printf x > /tmp/pp/ls; bash -c 'PATH=/tmp/pp:$PATH ls'",
+    "printf x > /tmp/pp/ls; PATH=/tmp/pp:$PATH ./run.sh", "tee /tmp/pp/git < f; export PATH=/tmp/pp:$PATH; git status"], 2);
+  rows(["enable -n [", "enable -n test", "enable -n echo; echo x", "enable -f ./x.so x", "builtin enable -n test", "enable -an", "hash -p /tmp/x ls", "hash ls=/tmp/x"], 2);
+  rows(["PATH=/usr/bin:$PATH ls", "export PATH=/opt/homebrew/bin:$PATH; brew list", "PATH=/usr/local/bin:/usr/bin:/bin npm test", "printf x > out.txt && PATH=/usr/bin:$PATH ls",
+    "printf x > /tmp/a/f && PATH=/tmp/b:$PATH ls", "echo $PATH", "echo PATH=bin:$PATH", "export PATH", "PATH=bin:$PATH", "hash", "hash -r", "enable", "enable -a",
+    "export FOO=bar; ls", "grep PATH= .bashrc", "env | grep PATH", "printenv PATH"], 0);
+});
+
+test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
+  rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
+  rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
+    "[[ -n $(git push --force origin main) ]]", "[[ $X == g* ]] && $G push origin main", "[[ $X == g* ]]; /usr/bin/g?t push origin main", "[[ $X == c*l ]] && c?rl x"], 2);
+});
