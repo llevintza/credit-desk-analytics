@@ -173,7 +173,9 @@ credit-desk-analytics/
 
 ## 5. Data model and seed data
 
-All data is **synthetic** and generated **deterministically** (`SEED=42` by default, so the same seed always gives the same database). It must look and behave like real structured-credit desk data: realistic names, distributions, correlations, NULLs where real data has NULLs, and a few deliberate edge cases.
+The book (funds, portfolios, deals, issuers, bonds, positions, trades, analysts) is **synthetic** and generated **deterministically** (`SEED=42` by default, so the same seed always gives the same database). It must look and behave like real structured-credit desk data: realistic names, distributions, correlations, NULLs where real data has NULLs, and a few deliberate edge cases.
+
+Beside it, the market data pipeline (epic #535, [ADR-0030](docs/adr/0030-public-market-data-pipeline.md)) ingests **public market reference data** (curves, rates, FX, and later issuer names, tickers and prices) from sources whose licence allows storage and display, recorded per source. Each business day it rolls the synthetic book forward to a new as-of date, repriced from the day's public moves. Real public names stay in the ingested reference tables and the views that read them, never in the synthetic book's names; client, employer and person names are never stored.
 
 ### 5.1 Schemas (= data sources)
 
@@ -244,6 +246,17 @@ That's about **193 columns.** Pad with additional, clearly named analytics to re
 | **Total (seed, excluding app.audit)** | | **≈ 250 MB; with app.audit it MUST stay < 350 MB** |
 
 The seeder **MUST** print the final size (`pg_database_size`) and **fail** above 400 MB **before commit**, then roll back so the previous data and `app.seed_metadata` stay untouched. A later `--if-changed` skip must not fail the deploy just because a previous over-budget row is still in the database.
+
+**Steady state with the daily roll (epic #535, ADR-0030).** Retention keeps the snapshot at 2 as-of dates and marks at 22 business days (batched DELETE + plain `VACUUM (ANALYZE)`), public series and prices 730 days, `app.ingest_run` 400 days. Measured on a local stack over 10 simulated days (`perf/snapshot-retention.sh`):
+
+| Object | Steady low | Steady peak |
+|---|---|---|
+| `core.position_snapshot` (2 dates) | 84.9 MB | 116.2 MB (31 MB of reusable dead space; flat over the 10 days) |
+| `pricing` marks (22 days) | 94.9 MB (day 1) | 96.3 MB |
+| New ingest tables (public series, prices, `app.ingest_run`, longer curve history) | ~10 MB (estimate) | ~10 MB (estimate) |
+| **Database** (fresh seed 280.0 MB locally on today's main) | 296.6 MB + ~10 MB | **330.3 MB + ~10 MB ≈ 340 MB**; from Leo's ~150 MB production figure, ≤ ~210 MB |
+
+From a 270–280 MB start that leaves 10–20 MB under the 350 MB budget, so the ingest checks the projected size and fails **before** writing when it would exceed it (#549). A production `size-report` confirms the starting size before ADR-0030 is accepted. Without retention the roll adds ~46–54 MB per business day. Neon's point-in-time history also counts the ~54 MB of WAL a day.
 
 **Later reseeds peak at about 2×.** `TRUNCATE` inside a transaction keeps the old relfilenodes until `COMMIT`, so a `--force` (or SeedVersion bump) at scale 1.0 temporarily needs ~old + new. The seeder prints `SEED_PEAK_EST_MB` (current size + new data) and, on a run that would TRUNCATE, **refuses (exit 2) before TRUNCATE when it exceeds `--cap-mb`** (default 512 MB), leaving data and `app.seed_metadata` untouched (#109; §10). Neon Free has been documented as both 0.5 GB (this spec's planning number) and 1 GB; confirm the project's cap before a production reseed.
 
@@ -954,6 +967,8 @@ services:
    | secret | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL |
    | variable | `SEED_SCALE` | `1.0` |
    | variable | `SEED_CAP_MB` (optional) | reseed peak cap in MB; unset means 512 (§10, #224). Set it only after Leo confirms the Neon cap |
+   | secret | `ECON_DATA_API_KEY` (later, optional) | the public economic-data API key, only once a licence-checked series is enabled (ADR-0030; injected on the ingest fetch step only). The first three sources need no key |
+   | variable | `INGEST_MAX_MB` (optional) | the ingest's pre-write size budget in MB; unset means 350 (§5.4, #549) |
 
 5. **Claude review (Leo's decision, 2026-10-07):** environment **`claude-review`** (no branch restriction, no required reviewers) holding spend-capped `ANTHROPIC_API_KEY`. Never `production`, never a repository secret. Same-repo PRs use this key; forks and Dependabot skip. The `review` check stays non-required.
 6. **Last:** after Tech Coordinator's go-ahead, set `production` environment variable `APP_URL` to the service URL (no trailing slash). That variable turns deploys on.
@@ -1178,3 +1193,4 @@ Per-area CI ([ADR-0023](docs/adr/0023-per-area-ci-jobs.md)): a heavy job skipped
 | 9 Hardening | #471, #472, #477 | Merged (follow-ups #470, #476, #481, #483): #66, security headers and CSP review (one-year HSTS, Pages frame guard and meta referrer, `perf/security-headers.mjs`; ADR-0024 amendment), merged as #472, `6336aa0`; the header check refuses any non-local host, `--live` is Leo's opt-in (merged as #483, `6a18895`); the framed-page notice gets `role="alert"` and token styling (#472 nit N3, merged as #495, `b25214a`); #241, the All-preset whole-book MISS p95 (stored weight column, parallel summary; ADR-0006 addendum): local 61–83 ms, hosted CI 155.5 ms (was ≈ 249), merged as #460, `ef2efff`; a first view's page and totals on two connections with a spare database permit (ADR-0006 addendum): hosted CI All MISS p95 134.9 / 101.7 / 101.1 ms in three runs (< 150), merged as #470, `8e19774`; #241 closed by Tech Coordinator on 2026-10-16; the peak-of-2 tests hold both connections open together, so they are deterministic (merged as #476, `89bdfbd`); #70, the admin Usage page (`GET /api/admin/usage`: requests per user per day, cache hit ratio, slowest 20 per day; LATERAL top-N, 98–182 ms for 30 days of a busy audit log; ADR-0027), merged as #471, `5cdef26`; #67, free-tier guardrails (ADR-0014): per-user burst 60 (a fast four-page click-through needs 38–42 tokens), response cache 64 MB capped at 96 (full cache under k6: 338 MiB of the 512 MiB instance), preset lists cached per user, so a demo session's second views read no database (measured on a local 512 MiB stack, pinned by `FreeTierGuardrailTests`), merged as #477, `078adaf`; follow-ups #67/#70: bounded preset versions, no `X-Cache` on a 404, burst and Usage pins (merged as #481, `4227d09`); #115, the ADR-0005 addendum for the viewer/admin role seed, merged as #485, `16c01e9`; #488, README §14.4 names that role seed as a second migration-seed exception (`[workflows]`, merged as #491, `6de16ed`). Left from the definition of done, Leo's: the live-site header and budget checks, and reviewer accounts (#89) |
 | MCP server (epic #536) | #553 | In review: [ADR-0031](docs/adr/0031-mcp-server.md) (local stdio, read-only, entitlement-scoped; `desk-mcp login`, 100/500 rows and 64 KB, user-level config first) and README §8.1. Next: #554–#556 |
 | 10 Intraday overlay (stretch) | #475 | Merged (`341a7d0`; #71, #72): SSE mark stream `/api/marks/stream` read with `fetch` and the bearer token, scoped and rate-limited in its own partition, at most 5 minutes per stream; stale marks dropped by `seq`; Live marks toggle on P1 with flashing cells and server overlay totals (ADR-0015, measured) |
+| Market data pipeline (E2, #535) | #544 | In review (`[workflows]`, Helms signs off): ADR-0030 (public reference data allowed, client/employer/person names still banned, licensing per source, daily roll on an Actions schedule, retention by batched DELETE + VACUUM, 31 MB steady snapshot bloat measured by `perf/snapshot-retention.sh`); the AGENTS.md amendment. Waits on a production `size-report` (Tech Coordinator). Stories #545–#552 follow |

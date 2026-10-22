@@ -21,6 +21,12 @@ Area file for `src/Desk.Data/` (EF Core DbContexts and migrations, Dapper query 
 - Never run DDL from the app at start-up.
 - Long-form guidance: [ef-postgres-migrations.md](../../docs/agents/guidelines/ef-postgres-migrations.md), [sql-dapper.md](../../docs/agents/guidelines/sql-dapper.md).
 
+## Public market reference data (ADR-0030)
+
+- Real public names (issuer names, tickers, prices, curves, rates) live only in the ingested reference tables and the views that read them. Never join them into, or copy them over, the synthetic book's issuer, deal or analyst names.
+- Client, employer and person names stay banned (root `AGENTS.md`). Each source's licence, terms and attribution are recorded in `market.series_catalog` before it is ingested.
+- Agents never run the ingest against Neon or production; locally only against compose or Testcontainers with recorded fixtures.
+
 ## Commands
 
 | Task | Command |

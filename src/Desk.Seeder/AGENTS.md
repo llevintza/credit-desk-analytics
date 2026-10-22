@@ -4,7 +4,8 @@ Area file for `src/Desk.Seeder/` (deterministic synthetic data generator, bulk C
 
 ## Rules
 
-- **Synthetic only.** No real company, employer, client or person names in generated data, fixtures or screenshots.
+- **Synthetic only.** No real company, employer, client or person names in generated data, fixtures or screenshots. The seeder generates only the fictional book; public market reference data (ADR-0030) comes from the ingest, never from a generator, and its names never feed the synthetic issuer, deal or analyst names.
+- **Never TRUNCATE ingested tables.** The seeder bootstraps an empty or version-bumped database at the latest ingested as-of date; the ingest owns the rolling dates and the public series (ADR-0030).
 - **Bump `SeedVersion`** (`SeedVersion.cs`) only when the shape of the seeded data changes: a generator change, or a seeded table or column added, dropped, renamed or retyped. A constraint- or index-only migration that the existing data satisfies (#286) needs no bump. Without a needed bump, production keeps the old data (deploy seeds only when the version changed, README §14.2).
 - **Budgets (README §10):** seeder runtime < 90 s locally at scale 1.0; DB size < 350 MB; the seeder fails above 400 MB.
 - **Never run `--force` seeding or the load benchmark against production or Neon.** `--force` wipes the seeded tables. The load benchmark drops and recreates a `bench` schema in whatever `DATABASE_URL` points to.
