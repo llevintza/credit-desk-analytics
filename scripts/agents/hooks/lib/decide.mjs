@@ -13,7 +13,7 @@ import { analyseGit, payloadCheck } from "./git.mjs";
 import { couldBeSecret, couldName } from "./glob.mjs";
 import { globNamesGuarded, indirect, unwrap } from "./indirect.mjs";
 import { decideMcp } from "./mcp.mjs";
-import { replayCheck } from "./replay.mjs";
+import { payloadWrites, replayCheck } from "./replay.mjs";
 import { ShellError, allSegments, parse } from "./shell.mjs";
 import { ASSIGN, base, head } from "./words.mjs";
 
@@ -148,11 +148,14 @@ function command(text, call, opts, depth = 0) {
   }
   const segs = allSegments(parsed);
   const cwd = call.cwd ?? process.cwd();
-  const p = payloadCheck({ segs, sig }) ?? replayCheck({ text, segs, parsed, sig, cwd });
+  const prior = opts.written ?? [];
+  const p = payloadCheck({ segs, sig }) ?? replayCheck({ text, segs, parsed, sig, cwd, prior });
   if (p) return block(p.reason, call);
   const sweep = segs.flatMap((s) => [...s.words, ...s.redirs.map((r) => ({ text: r.target, glob: /[*?[{]/.test(r.target) }))]).find((w) => w.glob && globNamesGuarded(w));
   if (sweep) return block(`the glob ${sweep.text} could name git, gh, hub, curl or wget (G20)`, call);
-  const evaluate = (t, o = opts) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, o, depth + 1));
+  // Shell strings and aliases see this payload's writes (PATH planting, #576).
+  const written = [...prior, ...payloadWrites(segs, cwd)];
+  const evaluate = (t, o = opts) => (depth > 4 ? block("nested aliases too deep", call) : command(t, call, { ...o, written }, depth + 1));
   const aliases = { ...opts.aliases, ...aliasDefs(segs) };
   for (const [i, seg] of segs.entries()) {
     // A shell alias defined in the same payload (`alias g=git` then `g push …`; #520 review) is
