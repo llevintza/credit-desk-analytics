@@ -56,6 +56,8 @@ test("# starts a comment only at a word start", () => {
 
 test("glob and brace words are marked", () => {
   assert.deepEqual(parse("ls g* a? [x] {git,gh} {a} 'q*'").segments[0].words.map((w) => w.glob), [false, true, true, true, true, false, false]);
+  // A bare `[` or `[[` is the test builtin, not a glob; `[` inside any other word still is.
+  assert.deepEqual(parse("[ [[ ] ]] a[ [a [[x]] \\[").segments[0].words.map((w) => w.glob), [false, false, false, false, true, true, true, false]);
 });
 
 test("unbalanced input throws ShellError", () => {

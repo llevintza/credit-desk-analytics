@@ -52,6 +52,18 @@ test("dynamic, escaped and glob command words (G4, G20)", () => {
   assert.equal(globNamesGuarded({ text: "w[!g]et" }), false);
 });
 
+test("the test builtins [ and [[ are command words, not globs (live over-block)", () => {
+  rows(['until npm ci || [ "$?" = 8 ]; do :; done', "[ -f a ] && echo y", '[[ -n "$X" ]] && echo y', "if [ -d src ]; then ls; fi", "x=1 [ -f a ]",
+    "[ $X ]", "command [ -f a ]", 'while [ "$n" -lt 3 ]; do n=1; done'], 0);
+  const E = "." + "env";
+  rows(["[ -f a ] && git push --force origin main", "[[ -n x ]] || gh pr merge 1", "[ -f a ] && $G push origin main", "[g]it push origin main", "[ab] x",
+    "[a]", "[[x]] y", `[ -f a ] && cat ${E}`, "[ -f a ] && echo 'git push origin main' | bash", "[ x ] && g[i]t status"], 2);
+  // Helms's bar on #575: a command after a test, a substitution inside one, and [a-z] globs are all still caught.
+  rows(["[ -f x ] && rm g*", "[ -f x ] && rm /usr/bin/g[a-z]t", "[ -f x ] && $RM x", "[ -f x ] && rm a; cat secrets/k", `[ -f x ] && rm a; cat ${E}`,
+    "[[ -n $(git push --force origin main) ]]", "[[ -z `gh pr merge 1` ]]", '[ -n "$(git push origin +main)" ]', "[[ $(gh pr merge 1) == x ]] && echo y",
+    "[a-z]", "[a-z]it status", "[ -f x ] && [a-z]* x", "[ x ] && ls [a-z]url", "[[ x ]] && /usr/bin/[a-z]it push origin main"], 2);
+});
+
 test("renamed or copied guarded binaries are resolved by identity (G21)", () => {
   const git = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
   const dir = mkdtempSync(join(tmpdir(), "agents-g21-"));
