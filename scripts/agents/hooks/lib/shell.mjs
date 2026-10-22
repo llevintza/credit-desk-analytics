@@ -178,7 +178,10 @@ function word(p, subs) {
     }
   }
   if (p.i === start) return null;
-  return { text, raw: p.src.slice(start, p.i), dynamic, quoted, glob, splits };
+  const raw = p.src.slice(start, p.i);
+  // A bare `[` or `[[` (the test builtins) has no closing bracket, so it can't glob.
+  if (raw === "[" || raw === "[[") glob = false;
+  return { text, raw, dynamic, quoted, glob, splits };
 }
 
 /**
