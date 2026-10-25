@@ -181,9 +181,10 @@ function pathPlanting(segs, cmds, written, cwd) {
     // `env`/`sudo`/`doas PATH=…`: the PATH words after it fail closed, unless the command only prints.
     const e = a < 0 || ECHOES.has(base(u[a].text)) ? -1 : u.findIndex((w, j) => j >= a && ENV_SETTERS.has(base(w.text)));
     // `echo ls | xargs env PATH=bb`: xargs, parallel or find supplies the program name (#581).
-    const runs = a < 0 ? (uw.completes ? [...self, ...u] : self) : [...self, ...u.slice(0, a), ...(e < 0 ? [] : u.slice(e + 1))];
+    const programFromInput = a < 0 && uw.completes;
+    const runs = a < 0 ? (programFromInput ? [...self, ...u] : self) : [...self, ...u.slice(0, a), ...(e < 0 ? [] : u.slice(e + 1))];
     const after = a >= 0 && DECLARERS.has(base(u[a].text)) ? [...rest, ...u.slice(a + 1)] : rest;
-    if (unsafe(runs) && (cmds[i].word || uw.completes)) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
+    if (unsafe(runs) && (cmds[i].word || programFromInput)) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
     if (unsafe(after) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
   }
   for (const c of cmds) {
