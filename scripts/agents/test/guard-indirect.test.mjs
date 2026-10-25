@@ -182,6 +182,8 @@ test("#581: env PATH=… under xargs, parallel or find -exec fails closed with n
     "echo ls | xargs sudo PATH=bb", "echo ls | xargs doas PATH=bb", "echo ls | xargs nice env PATH=bb", "echo ls | xargs env PATH=bb:$PATH",
     "echo ls | xargs env FOO=1 PATH=bb", "echo ls | xargs env 'PATH=bb'", "echo ls | parallel env PATH=bb", "echo ls | parallel -j2 env PATH=bb",
     "find . -exec env PATH=bb \\;", "find . -execdir env PATH=bb +", "printf x > /tmp/pp/ls; echo ls | xargs env PATH=/tmp/pp"], 2);
+  // Declared over-block (#582 R582-1): parallel's `--env PATH` only exports the caller's PATH.
+  rows(["echo ls | parallel --env PATH env"], 2);
   rows(["echo ls | xargs env PATH=/usr/bin:$PATH", "echo ls | xargs env FOO=bar", "echo ls | xargs ls", "echo ls | xargs echo PATH=bb",
     "echo ls | parallel env PATH=/opt/homebrew/bin:$PATH"], 0);
 });
