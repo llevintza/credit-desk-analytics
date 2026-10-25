@@ -181,7 +181,7 @@ These fail closed in the rev 9 guard (G3, G4, G13, G19, G19b, G22). Rewrite them
 | `git -C $DIR checkout main`, `git -C "$WT" status` (G3, G4) | A literal path: `git -C /abs/path/to/worktree checkout main`, or `cd /abs/path/to/worktree` in the same call |
 | A heredoc `git commit` followed by `node -e …`, `node x.mjs "$(…)"` or `… \| xargs …` in one call (G19) | Commit in its own call, then run the node commands in the next one |
 | `sed -i … probe.mjs && node probe.mjs`, `printf … > Makefile && make` (G22) | Write or edit the file in one call, then run it in the next one |
-| `PATH=bin:$PATH cmd`, `export PATH="$PWD/bin:$PATH"`, `PATH=node_modules/.bin:$PATH jest`, `enable -n test`, `hash -p … name` (G22, #576) | Run the program by path (`./bin/tool`), use `npx jest` or `npm run`, or put only absolute literal directories on `PATH` (`PATH=/opt/homebrew/bin:$PATH`) |
+| `PATH=bin:$PATH cmd`, `export PATH="$PWD/bin:$PATH"`, `PATH=node_modules/.bin:$PATH jest`, `enable -n test`, `hash -p … name` (G22, #576); `read PATH`, `printf -v PATH`, `unset PATH` before a command (#578) | Run the program by path (`./bin/tool`), use `npx jest` or `npm run`, or put only absolute literal directories on `PATH` (`PATH=/opt/homebrew/bin:$PATH`) |
 | `"$EDITOR" notes.md`, `$(npm bin)/eslint .` | Name the program, or use the `npm run` script |
 | `git log --format=%H -3 \| xargs -n1 git show --stat` | One `git show --stat <sha>` per commit |
 | `bash some-script.sh` in a command that also pushes or merges | Run the script on its own |

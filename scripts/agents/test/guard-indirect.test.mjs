@@ -157,6 +157,18 @@ test("#578 item 1: a quoted PATH= argument to a declarer, env or sudo still sets
   rows(['export "PATH=/opt/homebrew/bin:$PATH"; brew list', "export 'PATH=/usr/bin:/bin'; ls", "env 'PATH=/usr/bin' ls"], 0);
 });
 
+test("#578 item 2: PATH set without an assignment word fails closed before a command (G22)", () => {
+  rows(["printf -v PATH %s bin; ls", "printf -vPATH %s bin; ls", "read -r PATH <<< bin; ls", "read PATH < f; ls", "IFS= read PATH < f; ls", "IFS= read -r PATH <<< bin && ls",
+    "read -a path <<< bin; ls", "mapfile -t PATH < f; ls", "readarray path < f; ls", "for PATH in bin; do ls; done", "select path in bin; do ls; done",
+    "while getopts b PATH; do ls; done", "unset PATH; ls", "unset -v PATH && ls", "f() { local PATH; ls; }; f", "declare -n r=PATH; r=bin; ls", "typeset -n r=path; r=(bin); ls",
+    "let PATH=1; ls", "(( PATH = 1 )); ls", ": $((PATH=1)); ls", ": ${PATH::=bin}; ls", ": ${PATH:=bin}; ls",
+    // eval is banned outright (indirect.mjs), so these block before G22 sees them.
+    "eval 'PATH=bin'; ls", 'eval "export PATH=bin"; ls'], 2);
+  // Reading PATH, or setting it with nothing after, is not planting.
+  rows(["printenv PATH", "echo PATH", "printf '%s\\n' PATH; ls", "export PATH; ls", "readonly PATH; ls", "grep -n PATH .bashrc; ls", "read -r X <<< bin; ls",
+    "printf -v X %s bin; ls", "read -r PATH <<< bin", "declare -n r=X; ls", "echo $((1+2)); ls", "echo ${PATH:-x}; ls"], 0);
+});
+
 test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
   rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
   rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",

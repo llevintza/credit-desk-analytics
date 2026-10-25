@@ -120,7 +120,25 @@ function unsafePath(w, written, cwd) {
     return [...written].some((p) => p === dir || p.startsWith(`${dir}/`));
   });
 }
+// PATH set without an assignment word (#578 item 2): `read PATH`, `printf -v PATH`, `mapfile`,
+// `for`/`select PATH in`, `getopts`, `unset PATH`, `local PATH`, a nameref to PATH, `let` or
+// `(( … ))` arithmetic, or `${PATH::=…}`. Its value can't be checked. (`eval` is banned outright.)
+const PATH_NAME = /^(?:-[a-zA-Z]+)?(?:PATH|path)$/;
+const PATH_READERS = new Set(["echo", "printf", "printenv", "grep", "egrep", "fgrep", "rg", "export", "readonly", "which", "type"]);
+function namesPath(s) {
+  const h = head(s);
+  if (!h) return false;
+  const name = base(h.text);
+  const args = s.words.slice(s.words.indexOf(h) + 1);
+  if (s.words.some((w) => /\$\(\([\s\S]*\b(?:PATH|path)\b|\$\{(?:PATH|path)::?=/.test(w.text))) return true;
+  if (name === "let") return args.some((w) => /\b(?:PATH|path)\b/.test(w.text));
+  if (DECLARERS.has(name) && args.some((w) => /^-[a-zA-Z]*n/.test(w.text)) && args.some((w) => /=(?:PATH|path)$/.test(w.text))) return true;
+  if (PATH_READERS.has(name) && !(name === "printf" && args.some((w) => w.text.startsWith("-v")))) return false;
+  return [h, ...args].some((w) => PATH_NAME.test(w.text));
+}
 function pathPlanting(segs, cmds, written, cwd) {
+  for (const [i, s] of segs.entries())
+    if (namesPath(s) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set by read, printf -v, mapfile, for, unset, a nameref or arithmetic before a command (G22, #578)`;
   const unsafe = (list) => list.some((w) => PATH_SET.test(w.text) && unsafePath(w, written, cwd));
   for (const [i, s] of segs.entries()) {
     const ws = s.words;
