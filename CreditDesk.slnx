@@ -10,6 +10,7 @@
   <Folder Name="/src/">
     <Project Path="src/Desk.Api/Desk.Api.csproj" />
     <Project Path="src/Desk.Data/Desk.Data.csproj" />
+    <Project Path="src/Desk.Mcp/Desk.Mcp.csproj" />
     <Project Path="src/Desk.Seeder/Desk.Seeder.csproj" />
     <Project Path="src/Desk.UserAdmin/Desk.UserAdmin.csproj" />
   </Folder>
