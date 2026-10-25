@@ -176,6 +176,16 @@ test("#578 re-review @064e107: env PATH=… behind any wrapper chain still sets 
     "doas env PATH=/usr/bin:$PATH ls", "chrt 1 env FOO=bar ls", "echo env PATH=bb; ls", "grep 'env PATH=bb' f; ls", "nice echo env PATH=bb"], 0);
 });
 
+test("#581: env PATH=… under xargs, parallel or find -exec fails closed with no program word (G22)", () => {
+  // xargs, parallel and find supply the program name, so there is no command word to see.
+  rows(["echo ls | xargs env PATH=bb", "echo ls | xargs -n1 env PATH=bb", "echo ls | xargs -0 env PATH=bb", "echo ls | xargs env -i PATH=bb",
+    "echo ls | xargs sudo PATH=bb", "echo ls | xargs doas PATH=bb", "echo ls | xargs nice env PATH=bb", "echo ls | xargs env PATH=bb:$PATH",
+    "echo ls | xargs env FOO=1 PATH=bb", "echo ls | xargs env 'PATH=bb'", "echo ls | parallel env PATH=bb", "echo ls | parallel -j2 env PATH=bb",
+    "find . -exec env PATH=bb \\;", "find . -execdir env PATH=bb +", "printf x > /tmp/pp/ls; echo ls | xargs env PATH=/tmp/pp"], 2);
+  rows(["echo ls | xargs env PATH=/usr/bin:$PATH", "echo ls | xargs env FOO=bar", "echo ls | xargs ls", "echo ls | xargs echo PATH=bb",
+    "echo ls | parallel env PATH=/opt/homebrew/bin:$PATH"], 0);
+});
+
 test("#578 item 2: PATH set without an assignment word fails closed before a command (G22)", () => {
   rows(["printf -v PATH %s bin; ls", "printf -vPATH %s bin; ls", "read -r PATH <<< bin; ls", "read PATH < f; ls", "IFS= read PATH < f; ls", "IFS= read -r PATH <<< bin && ls",
     "read -a path <<< bin; ls", "mapfile -t PATH < f; ls", "readarray path < f; ls", "for PATH in bin; do ls; done", "select path in bin; do ls; done",
