@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { decide } from "../hooks/lib/decide.mjs";
 import { globNamesGuarded, guardedBinary, unwrap } from "../hooks/lib/indirect.mjs";
-import { parse } from "../hooks/lib/shell.mjs";
+import { allSegments, parse } from "../hooks/lib/shell.mjs";
 import { fakeRepo } from "./helpers.mjs";
 
 const code = (command, cwd) => decide(JSON.stringify({ tool_name: "Bash", tool_input: { command }, ...(cwd && { cwd }) }), { repoAt: fakeRepo() }).code;
@@ -192,4 +192,24 @@ test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers e
   rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
   rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
     "[[ -n $(git push --force origin main) ]]", "[[ $X == g* ]] && $G push origin main", "[[ $X == g* ]]; /usr/bin/g?t push origin main", "[[ $X == c*l ]] && c?rl x"], 2);
+});
+
+test("#578 items 4 and 5: Helms's required rows around [ ] and [[ ]] (G20)", () => {
+  // A single-bracket test followed by rm: the words after it are swept (`rm *` names nothing guarded, like `rm -f *`).
+  rows(["[ -f x ] && rm git*", "[ -f x ] && rm -rf g?t"], 2);
+  rows(["[ -f x ] && rm *"], 0);
+  // Bracket-class globs after a [[ ]] test, and as a pattern inside one.
+  rows(["[[ x ]] && /usr/bin/[g]it push origin main", "[[ x ]]; [c]url x", "[[ $X == [a-z]* ]] && ls [g]it*"], 2);
+  rows(["[[ $X == [a-z]* ]]"], 0);
+  // Backticks and process substitution inside [[ ]] are their own segments, and are checked.
+  const BT = "[[ -n `git push --force origin main` ]]";
+  const PS = "[[ -n $(cat <(git push --force origin main)) ]]";
+  rows([BT, PS], 2);
+  for (const c of [BT, PS]) assert.ok(allSegments(parse(c)).some((s) => s.words.map((w) => w.text).join(" ") === "git push --force origin main"), c);
+  // A glob after ]] is swept; `rm *` passes as it does without the test.
+  rows(["[[ x ]] && rm g*"], 2);
+  rows(["[[ x ]] && rm *"], 0);
+  // Item 5: the skip ends at the first ]]; a second ]] and everything after it is swept.
+  rows(["[[ x == y ]] ]] g*", "[[ x == y ]] ]] ]] git*"], 2);
+  rows(["[[ x == y ]] ]] ls"], 0);
 });
