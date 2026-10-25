@@ -90,13 +90,26 @@ function subs(r, out = []) {
 const positional = (args) => args.filter((w) => !w.text.startsWith("-"));
 const runsFile = (c) => (RUNNERS.has(c.name) && !c.args.some((w) => CODE_FLAGS.test(w.text)) && positional(c.args).length > 0) || (c.word?.text.includes("/") ?? false);
 
-/** Paths a segment writes: redirections, tee, cp/mv/ln/install/rsync destinations, sed -i. */
+// Write markers for G22's absolute-directory rule (#578 item 3): MOVED, the payload changes
+// directory, so relative writes land somewhere unknown; OPAQUE, a write whose path can't be
+// read from the words (an archive, a patch, a `-t` target, a clone, or a shell or interpreter).
+const MOVED = "\0moved";
+const OPAQUE = "\0opaque";
+const OPAQUE_WRITERS = new Set(["tar", "gtar", "bsdtar", "unzip", "cpio", "pax", "ditto", "patch"]);
+const COPIERS = ["cp", "mv", "ln", "install", "rsync"];
+
+/** Paths a segment writes: redirections, tee, cp/mv/ln/install/rsync destinations, sed -i, dd of=; markers. */
 function writes(s, c, cwd) {
   const out = s.redirs.filter((r) => WRITE_OPS.test(r.op)).map((r) => resolve(cwd, r.target));
   const pos = positional(c.args).map((w) => w.text);
   if (c.name === "tee") out.push(...pos.map((p) => resolve(cwd, p)));
-  if (["cp", "mv", "ln", "install", "rsync"].includes(c.name) && pos.length > 1) out.push(resolve(cwd, pos.at(-1)));
+  if (COPIERS.includes(c.name) && pos.length > 1) out.push(resolve(cwd, pos.at(-1)));
   if (c.name === "sed" && c.args.some((w) => /^-[a-zA-Z]*i/.test(w.text))) out.push(...pos.slice(1).map((p) => resolve(cwd, p)));
+  if (c.name === "dd") out.push(...c.args.filter((w) => w.text.startsWith("of=")).map((w) => resolve(cwd, w.text.slice(3))));
+  if (["cd", "pushd", "popd"].includes(c.name)) out.push(MOVED);
+  if (OPAQUE_WRITERS.has(c.name) || RUNNERS.has(c.name) || unwrap(s).strings.length || ["clone", "worktree"].includes(gitSub(c).sub) ||
+    (COPIERS.includes(c.name) && c.args.some((w) => /^(?:-[a-zA-Z]*t|--target-directory)/.test(w.text))))
+    out.push(OPAQUE);
   return out;
 }
 
@@ -117,7 +130,12 @@ function unsafePath(w, written, cwd) {
     if ((d === "$PATH" || d === "${PATH}") && w.dynamic && !LITERAL_REF.test(w.raw)) return false;
     if (!d.startsWith("/") || /[$`*?[{~]/.test(d)) return true;
     const dir = resolve(cwd, d);
-    return [...written].some((p) => p === dir || p.startsWith(`${dir}/`));
+    // Under the working directory, files can come from any earlier call or build (#578 item 3).
+    if (cwd !== "/" && (dir === cwd || dir.startsWith(`${cwd}/`))) return true;
+    // A write this payload can't place (MOVED with a write, or OPAQUE) could be under any directory.
+    const real = [...written].filter((p) => !p.startsWith("\0"));
+    if (written.has(OPAQUE) || (written.has(MOVED) && real.length)) return true;
+    return real.some((p) => p === dir || p.startsWith(`${dir}/`));
   });
 }
 // PATH set without an assignment word (#578 item 2): `read PATH`, `printf -v PATH`, `mapfile`,

@@ -169,6 +169,25 @@ test("#578 item 2: PATH set without an assignment word fails closed before a com
     "printf -v X %s bin; ls", "read -r PATH <<< bin", "declare -n r=X; ls", "echo $((1+2)); ls", "echo ${PATH:-x}; ls"], 0);
 });
 
+test("#578 item 3: an absolute PATH entry fails closed after a write the guard can't place (G22)", () => {
+  const cwd = process.cwd();
+  // cd/pushd/popd move the directory relative writes land in.
+  rows(["cd /tmp && printf x > pp/ls && PATH=/tmp/pp:$PATH ls", "pushd /tmp; printf x > pp/ls; PATH=/tmp/pp:$PATH ls", "cd /tmp; cp /usr/bin/git pp/ls; export PATH=/tmp/pp:$PATH; ls",
+    "popd; printf x > pp/ls; PATH=/tmp/pp:$PATH ls", "cd /tmp; bash -c 'printf x > pp/ls; PATH=/tmp/pp:$PATH ls'"], 2);
+  // Writers whose destination isn't the last word, and shells or interpreters that write themselves.
+  rows(["dd if=f of=/tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "install -D f /tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "install -t /tmp/pp f; PATH=/tmp/pp:$PATH ls",
+    "cp -t /tmp/pp ls; PATH=/tmp/pp:$PATH ls", "cp --target-directory=/tmp/pp ls; PATH=/tmp/pp:$PATH ls", "tar -x -C /tmp/pp -f a.tar; PATH=/tmp/pp:$PATH ls",
+    "tar -xf a.tar; PATH=/tmp/pp:$PATH ls", "unzip -d /tmp/pp a.zip; PATH=/tmp/pp:$PATH ls", "patch -p0 < x.diff; PATH=/tmp/pp:$PATH ls", "cpio -i < a.cpio; PATH=/tmp/pp:$PATH ls",
+    "node -e 'require(\"fs\").writeFileSync(\"/tmp/pp/ls\", \"x\")'; PATH=/tmp/pp:$PATH ls", "python3 w.py; PATH=/tmp/pp:$PATH ls", "perl w.pl && export PATH=/tmp/pp:$PATH; ls",
+    "bash -c 'printf x > /tmp/pp/ls'; PATH=/tmp/pp:$PATH ls", "source w.sh; PATH=/tmp/pp:$PATH ls", "git clone ../r /tmp/pp; PATH=/tmp/pp:$PATH ls",
+    "PATH=/tmp/pp:$PATH node w.js"], 2);
+  // An absolute directory under the working directory: anything earlier could have written it.
+  rows([`PATH=${cwd}/bin:$PATH ls`, `export PATH=${cwd}:$PATH; ls`, `PATH=${cwd}/node_modules/.bin:$PATH jest`], 2);
+  // Nothing written, or a write the guard can place outside the PATH directory.
+  rows(["cd /tmp && PATH=/usr/bin:$PATH ls", "cd src; export PATH=/opt/homebrew/bin:$PATH; brew list", "dd if=f of=/tmp/a/x; PATH=/tmp/b:$PATH ls",
+    "cp a b && PATH=/usr/local/bin:$PATH ls", "cd /tmp; ls; PATH=/usr/bin:$PATH ls"], 0);
+});
+
 test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
   rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
   rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
