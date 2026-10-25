@@ -154,6 +154,11 @@ test("#578 item 1: a quoted PATH= argument to a declarer, env or sudo still sets
     "export 'PATH'=bin; ls", "env 'PATH=bin' ls", "sudo 'PATH=bin' ls", "export 'path=bin'; ls",
     // A single-quoted or escaped $PATH is a literal relative directory named `$PATH`.
     "export 'PATH=$PATH:/usr/bin'; ls", "PATH='$PATH':/usr/bin ls", "PATH=\\$PATH:/usr/bin ls"], 2);
+  // A declarer, env or sudo behind builtin or command (Helms re-review @7409b78).
+  rows(["builtin export PATH=bin; ls", "builtin declare PATH=bin; ls", "builtin typeset PATH=bin; ls", "f() { builtin local PATH=bin; ls; }; f",
+    "builtin readonly PATH=bin; ls", "command export PATH=bin; ls", "command -p export PATH=bin; ls", "command builtin export PATH=bin; ls",
+    "builtin export 'PATH=bin'; ls", "command env PATH=bin ls", "command -p env PATH=bin ls"], 2);
+  rows(["builtin export PATH=/usr/bin:$PATH; ls", "command export PATH=/opt/homebrew/bin:$PATH; brew list", "builtin cd /tmp; ls", "command -v export; ls"], 0);
   rows(['export "PATH=/opt/homebrew/bin:$PATH"; brew list', "export 'PATH=/usr/bin:/bin'; ls", "env 'PATH=/usr/bin' ls"], 0);
 });
 

@@ -162,10 +162,13 @@ function pathPlanting(segs, cmds, written, cwd) {
     const ws = s.words;
     let at = 0;
     while (at < ws.length && /^[A-Za-z_]\w*\+?=/.test(ws[at].raw)) at++;
-    const name = ws[at] ? base(ws[at].text) : "";
+    // `builtin export PATH=…`, `command -p env PATH=… cmd`: look through builtin/command (#578).
+    let k = at;
+    while (["builtin", "command"].includes(base(ws[k]?.text ?? ""))) for (k++; ws[k]?.text.startsWith("-"); ) k++;
+    const name = ws[k] ? base(ws[k].text) : "";
     // `PATH=… cmd`, `env PATH=… cmd`: this command. `export PATH=…`, a bare `PATH=…`: the rest.
     const self = !name ? [] : DECLARERS.has(name) ? [] : ["env", "sudo"].includes(name) ? ws : ws.slice(0, at);
-    const rest = !name ? ws : DECLARERS.has(name) ? ws.slice(at + 1) : [];
+    const rest = !ws[at] ? ws : DECLARERS.has(name) ? ws.slice(k + 1) : [];
     if (unsafe(self) && cmds[i].word) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
     if (unsafe(rest) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
   }
