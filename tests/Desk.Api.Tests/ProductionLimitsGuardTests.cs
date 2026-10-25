@@ -17,7 +17,7 @@ public sealed partial class ProductionLimitsGuardTests
     private static readonly LimitsOptions Defaults = new(
         PerUserPerMinute: 60, PerUserBurst: 60, LoginPerIpPerMinute: 5, GlobalConcurrency: 8, GlobalQueue: 32,
         PerUserConcurrency: 1, PerUserQueue: 8, InsightsConcurrency: 5, InsightsQueue: 15, ExportSlots: 2,
-        ExportTimeout: TimeSpan.FromSeconds(60), ExportMaxRows: PositionsEndpoints.MaxExportRows);
+        ExportTimeout: TimeSpan.FromSeconds(60), ExportMaxRows: PositionsEndpoints.MaxExportRows, AccessRequestsPerIpPerHour: 3);
 
     /// <summary>Every key <see cref="LimitsOptions.From"/> reads, with the largest value a production path may carry.</summary>
     private static readonly IReadOnlyDictionary<string, double> Ceilings = new Dictionary<string, double>
@@ -34,6 +34,7 @@ public sealed partial class ProductionLimitsGuardTests
         ["EXPORT_GLOBAL_SLOTS"] = Defaults.ExportSlots,
         ["EXPORT_TIMEOUT_SECONDS"] = Defaults.ExportTimeout.TotalSeconds,
         ["EXPORT_MAX_ROWS"] = Defaults.ExportMaxRows,
+        ["RATE_LIMIT_ACCESS_REQUESTS_PER_IP_PER_HOUR"] = Defaults.AccessRequestsPerIpPerHour,
     };
 
     [Fact]
@@ -108,6 +109,7 @@ public sealed partial class ProductionLimitsGuardTests
     [InlineData("EXPORT_GLOBAL_SLOTS=3")]
     [InlineData("RATE_LIMIT_PER_USER_PER_MIN=6000 # temporary")] // a comment doesn't hide a raised value
     [InlineData("RATE_LIMIT_PER_USER_INSIGHTS_QUEUE=16")]
+    [InlineData("RATE_LIMIT_ACCESS_REQUESTS_PER_IP_PER_HOUR=10")] // ADR-0029 §3: 3 an hour
     [InlineData("EXPORT_MAX_ROWS=50000")] // above the built-in cap; the runtime clamp does not excuse a raised production value
     public void A_seeded_regression_is_caught(string text)
     {
