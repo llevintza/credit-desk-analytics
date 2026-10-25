@@ -122,6 +122,8 @@ export const payloadWrites = (segs, cwd) => segs.flatMap((s) => writes(s, comman
 // Declarer, env and sudo arguments are matched unquoted: `export 'PATH=bin:'$PATH` still sets PATH.
 const PATH_SET = /^(?:PATH|path)\+?=/;
 const DECLARERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+const ENV_SETTERS = new Set(["env", "sudo", "doas"]);
+const ECHOES = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg"]);
 // A single-quoted or escaped `$PATH` is a literal directory named `$PATH`, not the inherited value.
 const LITERAL_REF = /'[^']*\$\{?PATH|\\\$/;
 function unsafePath(w, written, cwd) {
@@ -169,8 +171,18 @@ function pathPlanting(segs, cmds, written, cwd) {
     // `PATH=… cmd`, `env PATH=… cmd`: this command. `export PATH=…`, a bare `PATH=…`: the rest.
     const self = !name ? [] : DECLARERS.has(name) ? [] : ["env", "sudo"].includes(name) ? ws : ws.slice(0, at);
     const rest = !ws[at] ? ws : DECLARERS.has(name) ? ws.slice(k + 1) : [];
-    if (unsafe(self) && cmds[i].word) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
-    if (unsafe(rest) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
+    // Any wrapper chain unwrap() knows (`nohup nice timeout 5 env PATH=… cmd`, `exec env …`)
+    // ends in the assignments the command runs with, and in a declarer's arguments (#578).
+    const u = unwrap(s).words;
+    // A quoted `'PATH=x'` is a command word only at the head; after env it is an assignment.
+    const a = u.findIndex((w) => (w.quoted && w === head(s)) || !ASSIGN.test(w.text));
+    // A wrapper unwrap() doesn't know (`doas`, `chrt 1`, `taskset 1`, `caffeinate`) in front of
+    // `env`/`sudo`/`doas PATH=…`: the PATH words after it fail closed, unless the command only prints.
+    const e = a < 0 || ECHOES.has(base(u[a].text)) ? -1 : u.findIndex((w, j) => j >= a && ENV_SETTERS.has(base(w.text)));
+    const runs = a < 0 ? self : [...self, ...u.slice(0, a), ...(e < 0 ? [] : u.slice(e + 1))];
+    const after = a >= 0 && DECLARERS.has(base(u[a].text)) ? [...rest, ...u.slice(a + 1)] : rest;
+    if (unsafe(runs) && cmds[i].word) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
+    if (unsafe(after) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
   }
   for (const c of cmds) {
     // `enable -n test` turns a builtin off so a PATH file runs in its place; `enable -f` loads one.

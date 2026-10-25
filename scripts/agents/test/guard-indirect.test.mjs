@@ -162,6 +162,20 @@ test("#578 item 1: a quoted PATH= argument to a declarer, env or sudo still sets
   rows(['export "PATH=/opt/homebrew/bin:$PATH"; brew list', "export 'PATH=/usr/bin:/bin'; ls", "env 'PATH=/usr/bin' ls"], 0);
 });
 
+test("#578 re-review @064e107: env PATH=… behind any wrapper chain still sets PATH (G22)", () => {
+  // Every wrapper chain unwrap() knows, with its options and arguments.
+  rows(["exec env PATH=bb ls", "nice env PATH=bb ls", "nice -n 5 env PATH=bb ls", "nice -5 env PATH=bb ls", "nohup env PATH=bb ls", "timeout 5 env PATH=bb ls",
+    "timeout -s KILL 5 env PATH=bb ls", "stdbuf -o0 env PATH=bb ls", "stdbuf -o 0 env PATH=bb ls", "time env PATH=bb ls", "time -p env PATH=bb ls",
+    "nohup nice timeout 5 env PATH=bb ls", "exec nice -n 5 nohup stdbuf -o0 time env PATH=bb ls", "nice env -i PATH=bb ls", "nice env -u X PATH=bb ls",
+    "setsid env PATH=bb ls", "ionice -c 3 env PATH=bb ls", "flock /tmp/l env PATH=bb ls", "nice sudo PATH=bb ls", "nice env 'PATH=bb' ls",
+    "command nice env PATH=bb ls", "nice command env PATH=bb ls", "nice env PATH=bb:$PATH npm test"], 2);
+  // A wrapper unwrap() doesn't know, in front of env/sudo/doas PATH=…, fails closed too.
+  rows(["doas env PATH=bb ls", "chrt 1 env PATH=bb ls", "taskset 1 env PATH=bb ls", "caffeinate env PATH=bb ls", "unbuffer env PATH=bb ls",
+    "nice doas env PATH=bb ls", "chrt 1 sudo PATH=bb ls", "doas PATH=bb ls"], 2);
+  rows(["nice env PATH=/usr/bin:$PATH ls", "nohup nice timeout 5 env PATH=/opt/homebrew/bin:$PATH brew list", "nice -n 5 ls", "timeout 5 env FOO=bar ls",
+    "doas env PATH=/usr/bin:$PATH ls", "chrt 1 env FOO=bar ls", "echo env PATH=bb; ls", "grep 'env PATH=bb' f; ls", "nice echo env PATH=bb"], 0);
+});
+
 test("#578 item 2: PATH set without an assignment word fails closed before a command (G22)", () => {
   rows(["printf -v PATH %s bin; ls", "printf -vPATH %s bin; ls", "read -r PATH <<< bin; ls", "read PATH < f; ls", "IFS= read PATH < f; ls", "IFS= read -r PATH <<< bin && ls",
     "read -a path <<< bin; ls", "mapfile -t PATH < f; ls", "readarray path < f; ls", "for PATH in bin; do ls; done", "select path in bin; do ls; done",
