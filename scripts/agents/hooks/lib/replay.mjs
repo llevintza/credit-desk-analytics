@@ -9,7 +9,8 @@
  * - G19/G19b: a commit/tag/note created with a re-execution vector, or commit text replayed
  *   into a shell.
  * - G22: a file written and then run in the same call, signature or not; make or an npm-style
- *   runner after a same-call write to a Makefile, `.mk` or package.json.
+ *   runner after a same-call write to a Makefile, `.mk` or package.json; a command after a PATH
+ *   change to a relative, dynamic or same-call-written directory, `enable -n|-f`, `hash -p` (#576).
  * - Decoded text (`base64 -d`, `xxd -r`) piped into a shell, signature or not.
  */
 import { resolve } from "node:path";
@@ -89,8 +90,111 @@ function subs(r, out = []) {
 const positional = (args) => args.filter((w) => !w.text.startsWith("-"));
 const runsFile = (c) => (RUNNERS.has(c.name) && !c.args.some((w) => CODE_FLAGS.test(w.text)) && positional(c.args).length > 0) || (c.word?.text.includes("/") ?? false);
 
+// Write markers for G22's absolute-directory rule (#578 item 3): MOVED, the payload changes
+// directory, so relative writes land somewhere unknown; OPAQUE, a write whose path can't be
+// read from the words (an archive, a patch, a `-t` target, a clone, or a shell or interpreter).
+const MOVED = "\0moved";
+const OPAQUE = "\0opaque";
+const OPAQUE_WRITERS = new Set(["tar", "gtar", "bsdtar", "unzip", "cpio", "pax", "ditto", "patch"]);
+const COPIERS = ["cp", "mv", "ln", "install", "rsync"];
+
+/** Paths a segment writes: redirections, tee, cp/mv/ln/install/rsync destinations, sed -i, dd of=; markers. */
+function writes(s, c, cwd) {
+  const out = s.redirs.filter((r) => WRITE_OPS.test(r.op)).map((r) => resolve(cwd, r.target));
+  const pos = positional(c.args).map((w) => w.text);
+  if (c.name === "tee") out.push(...pos.map((p) => resolve(cwd, p)));
+  if (COPIERS.includes(c.name) && pos.length > 1) out.push(resolve(cwd, pos.at(-1)));
+  if (c.name === "sed" && c.args.some((w) => /^-[a-zA-Z]*i/.test(w.text))) out.push(...pos.slice(1).map((p) => resolve(cwd, p)));
+  if (c.name === "dd") out.push(...c.args.filter((w) => w.text.startsWith("of=")).map((w) => resolve(cwd, w.text.slice(3))));
+  if (["cd", "pushd", "popd"].includes(c.name)) out.push(MOVED);
+  if (OPAQUE_WRITERS.has(c.name) || RUNNERS.has(c.name) || unwrap(s).strings.length || ["clone", "worktree"].includes(gitSub(c).sub) ||
+    (COPIERS.includes(c.name) && c.args.some((w) => /^(?:-[a-zA-Z]*t|--target-directory)/.test(w.text))))
+    out.push(OPAQUE);
+  return out;
+}
+
+/** Every path a payload writes (shell strings it runs see the outer writes; #576). */
+export const payloadWrites = (segs, cwd) => segs.flatMap((s) => writes(s, command(s), cwd));
+
+// PATH planting (#576): a relative, dynamic or same-call-written directory on PATH makes the
+// next command, or any name a script runs, resolve to whatever file sits there (`> bin/ls &&
+// PATH=bin:$PATH ls`). zsh ties `path` to PATH, and `path=(…)` parses as a bare `path=`.
+// Declarer, env and sudo arguments are matched unquoted: `export 'PATH=bin:'$PATH` still sets PATH.
+const PATH_SET = /^(?:PATH|path)\+?=/;
+const DECLARERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+const ENV_SETTERS = new Set(["env", "sudo", "doas"]);
+const ECHOES = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg"]);
+// A single-quoted or escaped `$PATH` is a literal directory named `$PATH`, not the inherited value.
+const LITERAL_REF = /'[^']*\$\{?PATH|\\\$/;
+function unsafePath(w, written, cwd) {
+  const [, op, value] = /^(?:PATH|path)(\+?=)([\s\S]*)$/.exec(w.text);
+  return (op === "+=" ? value.replace(/^:/, "") : value).split(":").some((d) => {
+    if ((d === "$PATH" || d === "${PATH}") && w.dynamic && !LITERAL_REF.test(w.raw)) return false;
+    if (!d.startsWith("/") || /[$`*?[{~]/.test(d)) return true;
+    const dir = resolve(cwd, d);
+    // Under the working directory, files can come from any earlier call or build (#578 item 3).
+    if (cwd !== "/" && (dir === cwd || dir.startsWith(`${cwd}/`))) return true;
+    // A write this payload can't place (MOVED with a write, or OPAQUE) could be under any directory.
+    const real = [...written].filter((p) => !p.startsWith("\0"));
+    if (written.has(OPAQUE) || (written.has(MOVED) && real.length)) return true;
+    return real.some((p) => p === dir || p.startsWith(`${dir}/`));
+  });
+}
+// PATH set without an assignment word (#578 item 2): `read PATH`, `printf -v PATH`, `mapfile`,
+// `for`/`select PATH in`, `getopts`, `unset PATH`, `local PATH`, a nameref to PATH, `let` or
+// `(( … ))` arithmetic, or `${PATH::=…}`. Its value can't be checked. (`eval` is banned outright.)
+const PATH_NAME = /^(?:-[a-zA-Z]+)?(?:PATH|path)$/;
+const PATH_READERS = new Set(["echo", "printf", "printenv", "grep", "egrep", "fgrep", "rg", "export", "readonly", "which", "type"]);
+function namesPath(s) {
+  const h = head(s);
+  if (!h) return false;
+  const name = base(h.text);
+  const args = s.words.slice(s.words.indexOf(h) + 1);
+  if (s.words.some((w) => /\$\(\([\s\S]*\b(?:PATH|path)\b|\$\{(?:PATH|path)::?=/.test(w.text))) return true;
+  if (name === "let") return args.some((w) => /\b(?:PATH|path)\b/.test(w.text));
+  if (DECLARERS.has(name) && args.some((w) => /^-[a-zA-Z]*n/.test(w.text)) && args.some((w) => /=(?:PATH|path)$/.test(w.text))) return true;
+  if (PATH_READERS.has(name) && !(name === "printf" && args.some((w) => w.text.startsWith("-v")))) return false;
+  return [h, ...args].some((w) => PATH_NAME.test(w.text));
+}
+function pathPlanting(segs, cmds, written, cwd) {
+  for (const [i, s] of segs.entries())
+    if (namesPath(s) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set by read, printf -v, mapfile, for, unset, a nameref or arithmetic before a command (G22, #578)`;
+  const unsafe = (list) => list.some((w) => PATH_SET.test(w.text) && unsafePath(w, written, cwd));
+  for (const [i, s] of segs.entries()) {
+    const ws = s.words;
+    let at = 0;
+    while (at < ws.length && /^[A-Za-z_]\w*\+?=/.test(ws[at].raw)) at++;
+    // `builtin export PATH=…`, `command -p env PATH=… cmd`: look through builtin/command (#578).
+    let k = at;
+    while (["builtin", "command"].includes(base(ws[k]?.text ?? ""))) for (k++; ws[k]?.text.startsWith("-"); ) k++;
+    const name = ws[k] ? base(ws[k].text) : "";
+    // `PATH=… cmd`, `env PATH=… cmd`: this command. `export PATH=…`, a bare `PATH=…`: the rest.
+    const self = !name ? [] : DECLARERS.has(name) ? [] : ["env", "sudo"].includes(name) ? ws : ws.slice(0, at);
+    const rest = !ws[at] ? ws : DECLARERS.has(name) ? ws.slice(k + 1) : [];
+    // Any wrapper chain unwrap() knows (`nohup nice timeout 5 env PATH=… cmd`, `exec env …`)
+    // ends in the assignments the command runs with, and in a declarer's arguments (#578).
+    const u = unwrap(s).words;
+    // A quoted `'PATH=x'` is a command word only at the head; after env it is an assignment.
+    const a = u.findIndex((w) => (w.quoted && w === head(s)) || !ASSIGN.test(w.text));
+    // A wrapper unwrap() doesn't know (`doas`, `chrt 1`, `taskset 1`, `caffeinate`) in front of
+    // `env`/`sudo`/`doas PATH=…`: the PATH words after it fail closed, unless the command only prints.
+    const e = a < 0 || ECHOES.has(base(u[a].text)) ? -1 : u.findIndex((w, j) => j >= a && ENV_SETTERS.has(base(w.text)));
+    const runs = a < 0 ? self : [...self, ...u.slice(0, a), ...(e < 0 ? [] : u.slice(e + 1))];
+    const after = a >= 0 && DECLARERS.has(base(u[a].text)) ? [...rest, ...u.slice(a + 1)] : rest;
+    if (unsafe(runs) && cmds[i].word) return `a command run with a relative, dynamic or same-call-written directory on PATH (G22, #576)`;
+    if (unsafe(after) && segs.some((t, j) => j !== i && cmds[j].word)) return `PATH set to a relative, dynamic or same-call-written directory before a command (G22, #576)`;
+  }
+  for (const c of cmds) {
+    // `enable -n test` turns a builtin off so a PATH file runs in its place; `enable -f` loads one.
+    if (c.name === "enable" && c.args.some((w) => /^-[a-zA-Z]*[nf]/.test(w.text))) return `enable -n/-f re-points a builtin (G22, #576)`;
+    // `hash -p file name` (bash) and `hash name=file` (zsh) make a command name run any file.
+    if (c.name === "hash" && c.args.some((w) => /^-[a-zA-Z]*p/.test(w.text) || /^[^-=][^=]*=/.test(w.text))) return `hash -p / hash name=path re-points a command name (G22, #576)`;
+  }
+  return undefined;
+}
+
 /** Payload-level indirect-execution rules. `text` is the command; `cwd` resolves paths. */
-export function replayCheck({ text, segs, parsed, sig, cwd }) {
+export function replayCheck({ text, segs, parsed, sig, cwd, prior = [] }) {
   const cmds = segs.map(command);
   const heads = segs.map((s) => base(head(s)?.text ?? ""));
   // `git tag -m`/`git notes add -m` create text; without a message they print it.
@@ -119,12 +223,10 @@ export function replayCheck({ text, segs, parsed, sig, cwd }) {
     const recipe = RECIPE_RUNNERS[c.name];
     if (recipe && [...written].some((p) => recipe.test(base(p)))) return block(`${c.name} after a same-call write to its Makefile, .mk or package.json (G22)`);
     if (shell && piped(i) && DECODERS.some((d) => d(cmds[i - 1]))) return block(`decoded text piped into ${c.name} (base64 -d | sh)`);
-    for (const r of s.redirs) if (WRITE_OPS.test(r.op)) written.add(resolve(cwd, r.target));
-    const pos = positional(c.args).map((w) => w.text);
-    if (c.name === "tee") pos.forEach((p) => written.add(resolve(cwd, p)));
-    if (["cp", "mv", "ln", "install", "rsync"].includes(c.name) && pos.length > 1) written.add(resolve(cwd, pos.at(-1)));
-    if (c.name === "sed" && c.args.some((w) => /^-[a-zA-Z]*i/.test(w.text))) pos.slice(1).forEach((p) => written.add(resolve(cwd, p)));
+    for (const p of writes(s, c, cwd)) written.add(p);
   }
+  const planted = pathPlanting(segs, cmds, new Set([...prior, ...written]), cwd);
+  if (planted) return block(planted);
 
   if (cmds.some((c) => COMMITTERS.has(gitSub(c).sub))) {
     const vector =

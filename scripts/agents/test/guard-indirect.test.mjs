@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { decide } from "../hooks/lib/decide.mjs";
 import { globNamesGuarded, guardedBinary, unwrap } from "../hooks/lib/indirect.mjs";
-import { parse } from "../hooks/lib/shell.mjs";
+import { allSegments, parse } from "../hooks/lib/shell.mjs";
 import { fakeRepo } from "./helpers.mjs";
 
 const code = (command, cwd) => decide(JSON.stringify({ tool_name: "Bash", tool_input: { command }, ...(cwd && { cwd }) }), { repoAt: fakeRepo() }).code;
@@ -130,4 +130,105 @@ test("#521 item 5: a push/merge string piped or redirected into xargs/parallel r
     "printf 'gh pr merge 1' | parallel -j 2", "xargs -0 sh -c <<< 'gh pr merge 1'", "printf 'gh pr merge 1' | xargs -0 node -e", "printf 'gh pr merge 1' | nice parallel"], 2);
   rows(["echo a | xargs echo", "echo hi | xargs sh -c 'echo $0'", "ls | parallel -j 2 gzip", "echo a | xargs -I{} sh -c 'echo {}'", "git push -u origin feat",
     "find . -name '*.ts' -exec grep x {} \\;", "grep -rn KEY src/", "cat .env.example", "ls .env*"], 0);
+});
+
+test("#576: PATH planting, enable -n/-f and hash -p re-point a command name (G22)", () => {
+  const W = "printf '#!/bin/sh\\ngit push --force origin main\\n' > bin/ls && chmod +x bin/ls";
+  rows([`${W} && PATH=bin:$PATH ls`, `${W} && PATH=bin:$PATH env ls`, `${W} && PATH=bin:$PATH env test x`, `${W} && env PATH=bin:$PATH ls`,
+    `${W}; export PATH=bin:$PATH; ls`, `${W}; PATH=bin:$PATH; ls`, `${W}; export PATH="$PWD/bin:$PATH"; ls`, `${W} && PATH=./bin:$PATH ls`], 2);
+  // A relative, empty, `~` or dynamic entry fails closed even with no write here: the file can come from an earlier call.
+  rows(["PATH=bin:$PATH ls", "PATH=:$PATH ls", "PATH=.:$PATH ls", "PATH=~/bin:$PATH ls", "PATH=$HOME/bin:$PATH ls", "PATH+=:bin ls", "export PATH=$PATH:bin; ls",
+    "declare -x PATH=bin:$PATH; ls", "sudo PATH=bin:$PATH ls", "env -i PATH=bin ls", 'PATH="bin:$PATH" npm test',
+    "path=(bin $path); ls", "path+=(bin); ls", "path=bin:$path; ls"], 2);
+  // An absolute directory fails closed when this payload (or a shell string in it) writes under it.
+  rows(["printf x > /tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "cp /usr/bin/git /tmp/pp/ls && PATH=/tmp/pp:$PATH ls", "printf x > /tmp/pp/ls; bash -c 'PATH=/tmp/pp:$PATH ls'",
+    "printf x > /tmp/pp/ls; PATH=/tmp/pp:$PATH ./run.sh", "tee /tmp/pp/git < f; export PATH=/tmp/pp:$PATH; git status"], 2);
+  rows(["enable -n [", "enable -n test", "enable -n echo; echo x", "enable -f ./x.so x", "builtin enable -n test", "enable -an", "hash -p /tmp/x ls", "hash ls=/tmp/x"], 2);
+  rows(["PATH=/usr/bin:$PATH ls", "export PATH=/opt/homebrew/bin:$PATH; brew list", "PATH=/usr/local/bin:/usr/bin:/bin npm test", "printf x > out.txt && PATH=/usr/bin:$PATH ls",
+    "printf x > /tmp/a/f && PATH=/tmp/b:$PATH ls", "echo $PATH", "echo PATH=bin:$PATH", "export PATH", "PATH=bin:$PATH", "hash", "hash -r", "enable", "enable -a",
+    "export FOO=bar; ls", "grep PATH= .bashrc", "env | grep PATH", "printenv PATH"], 0);
+});
+
+test("#578 item 1: a quoted PATH= argument to a declarer, env or sudo still sets PATH (G22)", () => {
+  rows(["export 'PATH=bin:'$PATH; ls", "declare 'PATH=bin'; ls", 'typeset "PATH=bin"; ls', "f() { local 'PATH=bin'; ls; }; f", "readonly 'PATH=bin:'$PATH; ls",
+    "export 'PATH'=bin; ls", "env 'PATH=bin' ls", "sudo 'PATH=bin' ls", "export 'path=bin'; ls",
+    // A single-quoted or escaped $PATH is a literal relative directory named `$PATH`.
+    "export 'PATH=$PATH:/usr/bin'; ls", "PATH='$PATH':/usr/bin ls", "PATH=\\$PATH:/usr/bin ls"], 2);
+  // A declarer, env or sudo behind builtin or command (Helms re-review @7409b78).
+  rows(["builtin export PATH=bin; ls", "builtin declare PATH=bin; ls", "builtin typeset PATH=bin; ls", "f() { builtin local PATH=bin; ls; }; f",
+    "builtin readonly PATH=bin; ls", "command export PATH=bin; ls", "command -p export PATH=bin; ls", "command builtin export PATH=bin; ls",
+    "builtin export 'PATH=bin'; ls", "command env PATH=bin ls", "command -p env PATH=bin ls"], 2);
+  rows(["builtin export PATH=/usr/bin:$PATH; ls", "command export PATH=/opt/homebrew/bin:$PATH; brew list", "builtin cd /tmp; ls", "command -v export; ls"], 0);
+  rows(['export "PATH=/opt/homebrew/bin:$PATH"; brew list', "export 'PATH=/usr/bin:/bin'; ls", "env 'PATH=/usr/bin' ls"], 0);
+});
+
+test("#578 re-review @064e107: env PATH=… behind any wrapper chain still sets PATH (G22)", () => {
+  // Every wrapper chain unwrap() knows, with its options and arguments.
+  rows(["exec env PATH=bb ls", "nice env PATH=bb ls", "nice -n 5 env PATH=bb ls", "nice -5 env PATH=bb ls", "nohup env PATH=bb ls", "timeout 5 env PATH=bb ls",
+    "timeout -s KILL 5 env PATH=bb ls", "stdbuf -o0 env PATH=bb ls", "stdbuf -o 0 env PATH=bb ls", "time env PATH=bb ls", "time -p env PATH=bb ls",
+    "nohup nice timeout 5 env PATH=bb ls", "exec nice -n 5 nohup stdbuf -o0 time env PATH=bb ls", "nice env -i PATH=bb ls", "nice env -u X PATH=bb ls",
+    "setsid env PATH=bb ls", "ionice -c 3 env PATH=bb ls", "flock /tmp/l env PATH=bb ls", "nice sudo PATH=bb ls", "nice env 'PATH=bb' ls",
+    "command nice env PATH=bb ls", "nice command env PATH=bb ls", "nice env PATH=bb:$PATH npm test"], 2);
+  // A wrapper unwrap() doesn't know, in front of env/sudo/doas PATH=…, fails closed too.
+  rows(["doas env PATH=bb ls", "chrt 1 env PATH=bb ls", "taskset 1 env PATH=bb ls", "caffeinate env PATH=bb ls", "unbuffer env PATH=bb ls",
+    "nice doas env PATH=bb ls", "chrt 1 sudo PATH=bb ls", "doas PATH=bb ls"], 2);
+  rows(["nice env PATH=/usr/bin:$PATH ls", "nohup nice timeout 5 env PATH=/opt/homebrew/bin:$PATH brew list", "nice -n 5 ls", "timeout 5 env FOO=bar ls",
+    "doas env PATH=/usr/bin:$PATH ls", "chrt 1 env FOO=bar ls", "echo env PATH=bb; ls", "grep 'env PATH=bb' f; ls", "nice echo env PATH=bb"], 0);
+});
+
+test("#578 item 2: PATH set without an assignment word fails closed before a command (G22)", () => {
+  rows(["printf -v PATH %s bin; ls", "printf -vPATH %s bin; ls", "read -r PATH <<< bin; ls", "read PATH < f; ls", "IFS= read PATH < f; ls", "IFS= read -r PATH <<< bin && ls",
+    "read -a path <<< bin; ls", "mapfile -t PATH < f; ls", "readarray path < f; ls", "for PATH in bin; do ls; done", "select path in bin; do ls; done",
+    "while getopts b PATH; do ls; done", "unset PATH; ls", "unset -v PATH && ls", "f() { local PATH; ls; }; f", "declare -n r=PATH; r=bin; ls", "typeset -n r=path; r=(bin); ls",
+    "let PATH=1; ls", "(( PATH = 1 )); ls", ": $((PATH=1)); ls", ": ${PATH::=bin}; ls", ": ${PATH:=bin}; ls",
+    // eval is banned outright (indirect.mjs), so these block before G22 sees them.
+    "eval 'PATH=bin'; ls", 'eval "export PATH=bin"; ls'], 2);
+  // Reading PATH, or setting it with nothing after, is not planting.
+  rows(["printenv PATH", "echo PATH", "printf '%s\\n' PATH; ls", "export PATH; ls", "readonly PATH; ls", "grep -n PATH .bashrc; ls", "read -r X <<< bin; ls",
+    "printf -v X %s bin; ls", "read -r PATH <<< bin", "declare -n r=X; ls", "echo $((1+2)); ls", "echo ${PATH:-x}; ls"], 0);
+});
+
+test("#578 item 3: an absolute PATH entry fails closed after a write the guard can't place (G22)", () => {
+  const cwd = process.cwd();
+  // cd/pushd/popd move the directory relative writes land in.
+  rows(["cd /tmp && printf x > pp/ls && PATH=/tmp/pp:$PATH ls", "pushd /tmp; printf x > pp/ls; PATH=/tmp/pp:$PATH ls", "cd /tmp; cp /usr/bin/git pp/ls; export PATH=/tmp/pp:$PATH; ls",
+    "popd; printf x > pp/ls; PATH=/tmp/pp:$PATH ls", "cd /tmp; bash -c 'printf x > pp/ls; PATH=/tmp/pp:$PATH ls'"], 2);
+  // Writers whose destination isn't the last word, and shells or interpreters that write themselves.
+  rows(["dd if=f of=/tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "install -D f /tmp/pp/ls; PATH=/tmp/pp:$PATH ls", "install -t /tmp/pp f; PATH=/tmp/pp:$PATH ls",
+    "cp -t /tmp/pp ls; PATH=/tmp/pp:$PATH ls", "cp --target-directory=/tmp/pp ls; PATH=/tmp/pp:$PATH ls", "tar -x -C /tmp/pp -f a.tar; PATH=/tmp/pp:$PATH ls",
+    "tar -xf a.tar; PATH=/tmp/pp:$PATH ls", "unzip -d /tmp/pp a.zip; PATH=/tmp/pp:$PATH ls", "patch -p0 < x.diff; PATH=/tmp/pp:$PATH ls", "cpio -i < a.cpio; PATH=/tmp/pp:$PATH ls",
+    "node -e 'require(\"fs\").writeFileSync(\"/tmp/pp/ls\", \"x\")'; PATH=/tmp/pp:$PATH ls", "python3 w.py; PATH=/tmp/pp:$PATH ls", "perl w.pl && export PATH=/tmp/pp:$PATH; ls",
+    "bash -c 'printf x > /tmp/pp/ls'; PATH=/tmp/pp:$PATH ls", "source w.sh; PATH=/tmp/pp:$PATH ls", "git clone ../r /tmp/pp; PATH=/tmp/pp:$PATH ls",
+    "PATH=/tmp/pp:$PATH node w.js"], 2);
+  // An absolute directory under the working directory: anything earlier could have written it.
+  rows([`PATH=${cwd}/bin:$PATH ls`, `export PATH=${cwd}:$PATH; ls`, `PATH=${cwd}/node_modules/.bin:$PATH jest`], 2);
+  // Nothing written, or a write the guard can place outside the PATH directory.
+  rows(["cd /tmp && PATH=/usr/bin:$PATH ls", "cd src; export PATH=/opt/homebrew/bin:$PATH; brew list", "dd if=f of=/tmp/a/x; PATH=/tmp/b:$PATH ls",
+    "cp a b && PATH=/usr/local/bin:$PATH ls", "cd /tmp; ls; PATH=/usr/bin:$PATH ls"], 0);
+});
+
+test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
+  rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
+  rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
+    "[[ -n $(git push --force origin main) ]]", "[[ $X == g* ]] && $G push origin main", "[[ $X == g* ]]; /usr/bin/g?t push origin main", "[[ $X == c*l ]] && c?rl x"], 2);
+});
+
+test("#578 items 4 and 5: Helms's required rows around [ ] and [[ ]] (G20)", () => {
+  // A single-bracket test followed by rm: the words after it are swept (`rm *` names nothing guarded, like `rm -f *`).
+  rows(["[ -f x ] && rm git*", "[ -f x ] && rm -rf g?t"], 2);
+  rows(["[ -f x ] && rm *"], 0);
+  // Bracket-class globs after a [[ ]] test, and as a pattern inside one.
+  rows(["[[ x ]] && /usr/bin/[g]it push origin main", "[[ x ]]; [c]url x", "[[ $X == [a-z]* ]] && ls [g]it*"], 2);
+  rows(["[[ $X == [a-z]* ]]"], 0);
+  // Backticks and process substitution inside [[ ]] are their own segments, and are checked.
+  const BT = "[[ -n `git push --force origin main` ]]";
+  const PS = "[[ -n $(cat <(git push --force origin main)) ]]";
+  rows([BT, PS], 2);
+  for (const c of [BT, PS]) assert.ok(allSegments(parse(c)).some((s) => s.words.map((w) => w.text).join(" ") === "git push --force origin main"), c);
+  // A glob after ]] is swept; `rm *` passes as it does without the test.
+  rows(["[[ x ]] && rm g*"], 2);
+  rows(["[[ x ]] && rm *"], 0);
+  // Item 5: the skip ends at the first ]]; a second ]] and everything after it is swept.
+  rows(["[[ x == y ]] ]] g*", "[[ x == y ]] ]] ]] git*"], 2);
+  rows(["[[ x == y ]] ]] ls"], 0);
 });
