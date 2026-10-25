@@ -22,4 +22,6 @@ public static class AuditKinds
     public const string Request = "request";
     public const string LoginSuccess = "login_success";
     public const string LoginFailure = "login_failure";
+    /// <summary>An anonymous demo access request that reached the database (ADR-0029): no user name, never the email.</summary>
+    public const string AccessRequest = "access_request";
 }

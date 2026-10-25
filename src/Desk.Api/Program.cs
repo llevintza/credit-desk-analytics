@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Desk.Api;
+using Desk.Api.AccessRequests;
 using Desk.Api.Admin;
 using Desk.Api.Audit;
 using Desk.Api.Auth;
@@ -41,6 +42,8 @@ builder.Services.AddSingleton<IPostConfigureOptions<ForwardedHeadersOptions>, Cl
 builder.Services.AddDeskRateLimiting(LimitsOptions.From(builder.Configuration), ClientAddress.From(builder.Configuration), MarksOptions.From(builder.Configuration));
 builder.Services.AddSingleton<AuditQueue>();
 builder.Services.AddSingleton<AuditRetention>();
+// ADR-0029: ACCESS_REQUESTS_ENABLED (default off) and the pending cap, read once here.
+builder.Services.AddSingleton<AccessRequestOptions>();
 builder.Services.AddSingleton<DbHealthProbe>();
 builder.Services.AddHostedService<AuditWriter>();
 builder.Services.AddHostedService<AuditPurgeTimer>();
@@ -131,6 +134,7 @@ api.MapInsightsEndpoints();
 api.MapDealEndpoints();
 api.MapMarksEndpoints();
 api.MapAdminEndpoints();
+api.MapAccessRequestEndpoints(app.Services.GetRequiredService<AccessRequestOptions>());
 api.MapFallback(() => Results.NotFound()).ExcludeFromDescription();
 
 // Client-side routes fall back to the SPA; /api/* never does. /swagger and /openapi are

@@ -124,6 +124,9 @@ public sealed class PostgresApiFactory : WebApplicationFactory<Program>, IAsyncL
         builder.UseSetting("RATE_LIMIT_PER_USER_PER_MIN", "100000");
         builder.UseSetting("RATE_LIMIT_PER_USER_BURST", "100000");
         builder.UseSetting("RATE_LIMIT_LOGIN_PER_IP_PER_MIN", "100000");
+        builder.UseSetting("RATE_LIMIT_ACCESS_REQUESTS_PER_IP_PER_HOUR", "100000");
+        // On here so the classifier and OpenAPI tests see the endpoints; AccessRequestTests turns it off on its own host.
+        builder.UseSetting("ACCESS_REQUESTS_ENABLED", "true");
         builder.ConfigureTestServices(s =>
         {
             s.RemoveAll<TimeProvider>();
