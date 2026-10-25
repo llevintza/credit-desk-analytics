@@ -25,11 +25,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<PortfolioGrant> PortfolioGrants => Set<PortfolioGrant>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
+    public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
+
+    /// <summary>The partial unique index on <c>lower(email)</c> over pending rows (raw SQL in the AccessRequests migration).</summary>
+    public const string PendingEmailIndex = "ux_access_request_pending_email";
 
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
         b.HasDefaultSchema(Schema);
+        // Case-insensitive email for app.access_request (ADR-0029).
+        b.HasPostgresExtension("citext");
         b.Entity<SeedMetadata>(e =>
         {
             e.ToTable("seed_metadata");
@@ -96,6 +102,30 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
             e.HasIndex(x => x.PortfolioId);
             // A deleted account takes its grants with it.
             e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ADR-0029, #538: demo access requests. The partial unique index on lower(email) where status = 'pending' is an
+        // expression index EF can't model; the migration creates it with raw SQL (PendingEmailIndex).
+        b.Entity<AccessRequest>(e =>
+        {
+            e.ToTable("access_request", t =>
+            {
+                t.HasCheckConstraint("ck_access_request_status", "status IN ('pending', 'approved', 'rejected')");
+                t.HasCheckConstraint("ck_access_request_email_length", $"char_length(email) BETWEEN 3 AND {AccessRequest.EmailMaxLength}");
+            });
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.Email).HasColumnName("email").HasColumnType("citext");
+            e.Property(x => x.DisplayName).HasColumnName("display_name").HasMaxLength(AccessRequest.TextMaxLength);
+            e.Property(x => x.Purpose).HasColumnName("purpose").HasMaxLength(AccessRequest.TextMaxLength);
+            e.Property(x => x.Status).HasColumnName("status").HasMaxLength(16);
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.DecidedAt).HasColumnName("decided_at");
+            e.Property(x => x.DecidedBy).HasColumnName("decided_by").HasMaxLength(256);
+            e.Property(x => x.AccountId).HasColumnName("account_id");
+            // The admin list reads by status, newest first (#540); the purge by status and age (#542).
+            e.HasIndex(x => new { x.Status, x.CreatedAt });
+            // A deleted account keeps its request until the purge (#542), unlinked.
+            e.HasOne<DeskUser>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<DeskUser>(e =>

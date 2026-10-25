@@ -11,10 +11,11 @@ namespace Desk.Api.Limits;
 /// <param name="ExportSlots">Exports running at once across all users; kept below the database permits.</param>
 /// <param name="ExportTimeout">The overall deadline on one export stream.</param>
 /// <param name="ExportMaxRows">Rows in one export; may only lower the built-in <see cref="PositionsEndpoints.MaxExportRows"/>.</param>
+/// <param name="AccessRequestsPerIpPerHour">Demo access requests one client address may send in an hour (ADR-0029 §3).</param>
 public sealed record LimitsOptions(
     int PerUserPerMinute, int PerUserBurst, int LoginPerIpPerMinute, int GlobalConcurrency, int GlobalQueue,
     int PerUserConcurrency, int PerUserQueue, int InsightsConcurrency, int InsightsQueue, int ExportSlots, TimeSpan ExportTimeout,
-    int ExportMaxRows = PositionsEndpoints.MaxExportRows)
+    int ExportMaxRows = PositionsEndpoints.MaxExportRows, int AccessRequestsPerIpPerHour = LimitsOptions.DefaultAccessRequestsPerIpPerHour)
 {
     public static LimitsOptions From(IConfiguration config) => new(
         PerUserPerMinute: Positive(config, "RATE_LIMIT_PER_USER_PER_MIN", 60),
@@ -35,7 +36,11 @@ public sealed record LimitsOptions(
         InsightsQueue: Positive(config, "RATE_LIMIT_PER_USER_INSIGHTS_QUEUE", 15),
         ExportSlots: Positive(config, "EXPORT_GLOBAL_SLOTS", 2),
         ExportTimeout: TimeSpan.FromSeconds(PositiveSeconds(config, "EXPORT_TIMEOUT_SECONDS", 60, max: MaxExportTimeoutSeconds)),
-        ExportMaxRows: Math.Min(Positive(config, "EXPORT_MAX_ROWS", PositionsEndpoints.MaxExportRows), PositionsEndpoints.MaxExportRows));
+        ExportMaxRows: Math.Min(Positive(config, "EXPORT_MAX_ROWS", PositionsEndpoints.MaxExportRows), PositionsEndpoints.MaxExportRows),
+        AccessRequestsPerIpPerHour: Positive(config, "RATE_LIMIT_ACCESS_REQUESTS_PER_IP_PER_HOUR", DefaultAccessRequestsPerIpPerHour));
+
+    /// <summary>ADR-0029 §3 (D5): the 4th request in an hour from one address gets 429.</summary>
+    public const int DefaultAccessRequestsPerIpPerHour = 3;
 
     /// <summary>An hour: far above any real export, and far below what a timer or a TimeSpan can hold.</summary>
     public const double MaxExportTimeoutSeconds = 3600;

@@ -114,6 +114,31 @@ public sealed class LoginFloorTests
         Assert.Equal("answer", Body(http));
     }
 
+    [Theory]
+    [InlineData(StatusCodes.Status202Accepted, true)]
+    [InlineData(StatusCodes.Status401Unauthorized, false)]
+    [InlineData(StatusCodes.Status400BadRequest, false)]
+    [InlineData(StatusCodes.Status503ServiceUnavailable, false)]
+    public async Task An_access_request_pads_its_202s_only(int status, bool padded)
+    {
+        // ADR-0029 §1: the access request's marker pads 202, the one answer a caller must not tell apart by time.
+        var http = Request(new Endpoint(null, new EndpointMetadataCollection(LoginFloorMetadata.Accepted), "RequestAccess"));
+
+        var pending = new LoginFloor(Answer(status), Options, _time).InvokeAsync(http);
+
+        Assert.Equal(!padded, pending.IsCompleted);
+        _time.Advance(Options.Floor + Options.MaxJitter);
+        await pending;
+        Assert.Equal("answer", Body(http));
+    }
+
+    [Fact]
+    public void Each_marker_pads_exactly_its_own_status()
+    {
+        Assert.Equal(StatusCodes.Status401Unauthorized, LoginFloorMetadata.Instance.Status);
+        Assert.Equal(StatusCodes.Status202Accepted, LoginFloorMetadata.Accepted.Status);
+    }
+
     [Fact]
     public async Task Only_the_login_response_is_buffered()
     {

@@ -13,9 +13,11 @@ public sealed record LoginFloorOptions(TimeSpan Floor, TimeSpan MaxJitter)
 }
 
 /// <summary>
-/// Every 401 from an endpoint marked with <see cref="LoginFloorMetadata"/> (<c>POST /api/auth/login</c>) answers no sooner than <see cref="LoginFloorOptions.Floor"/> (plus jitter)
-/// after the request reached it, so the time doesn't tell an unknown email from a real account, or one account state
-/// from another (#230). Success is never delayed.
+/// Every response with the padded status of an endpoint marked with <see cref="LoginFloorMetadata"/> answers no sooner
+/// than <see cref="LoginFloorOptions.Floor"/> (plus jitter) after the request reached it: the 401s of
+/// <c>POST /api/auth/login</c>, so the time doesn't tell an unknown email from a real account, or one account state
+/// from another (#230; a successful login is never delayed), and the 202s of <c>POST /api/access-requests</c>, so it
+/// doesn't tell a new request from a duplicate, an existing account or a refused bot either (ADR-0029, #538).
 /// </summary>
 /// <remarks>
 /// It runs before the rate limiter, so the wait never holds one of the shared <c>/api</c> concurrency permits. The
@@ -28,7 +30,7 @@ public sealed class LoginFloor(RequestDelegate next, LoginFloorOptions options, 
     public async Task InvokeAsync(HttpContext http)
     {
         // The routed endpoint, not the path string: routing also matches a trailing slash in any casing (R279-01).
-        if (http.GetEndpoint()?.Metadata.GetMetadata<LoginFloorMetadata>() is null)
+        if (http.GetEndpoint()?.Metadata.GetMetadata<LoginFloorMetadata>() is not { } floor)
         {
             await next(http);
             return;
@@ -50,7 +52,7 @@ public sealed class LoginFloor(RequestDelegate next, LoginFloorOptions options, 
             http.Features.Set(body);
         }
 
-        if (http.Response.StatusCode == StatusCodes.Status401Unauthorized)
+        if (http.Response.StatusCode == floor.Status)
         {
             var remaining = options.Floor + Jitter() - time.GetElapsedTime(started);
             if (remaining > TimeSpan.Zero)
@@ -65,10 +67,17 @@ public sealed class LoginFloor(RequestDelegate next, LoginFloorOptions options, 
         TimeSpan.FromMicroseconds(RandomNumberGenerator.GetInt32((int)options.MaxJitter.TotalMicroseconds + 1));
 }
 
-/// <summary>Marks the endpoint whose 401s <see cref="LoginFloor"/> pads.</summary>
+/// <summary>Marks an endpoint whose responses with <see cref="Status"/> <see cref="LoginFloor"/> pads.</summary>
 public sealed class LoginFloorMetadata
 {
-    public static readonly LoginFloorMetadata Instance = new();
+    /// <summary>The login's 401s.</summary>
+    public static readonly LoginFloorMetadata Instance = new(StatusCodes.Status401Unauthorized);
 
-    private LoginFloorMetadata() { }
+    /// <summary>The access request's 202s (ADR-0029 §1): every outcome a caller may not tell apart answers 202.</summary>
+    public static readonly LoginFloorMetadata Accepted = new(StatusCodes.Status202Accepted);
+
+    private LoginFloorMetadata(int status) => Status = status;
+
+    /// <summary>The one status that is padded; any other answers at once.</summary>
+    public int Status { get; }
 }

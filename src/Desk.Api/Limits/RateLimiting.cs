@@ -10,12 +10,13 @@ namespace Desk.Api.Limits;
 /// <summary>
 /// Free-tier protection (README §7.2): per-user concurrency (one in flight, or five for insights source reads), a
 /// per-user token bucket and one shared concurrency limiter on all of <c>/api</c> (every endpoint there can reach the
-/// database), plus a per-IP window on login. "IP" is the client's
+/// database), plus per-IP windows on login and on demo access requests. "IP" is the client's
 /// address as <see cref="ClientAddress"/> resolves it behind Cloudflare and Render, never a proxy's.
 /// </summary>
 public static class RateLimiting
 {
     public const string LoginPolicy = "login";
+    public const string AccessRequestPolicy = "access-request";
 
     public static IServiceCollection AddDeskRateLimiting(this IServiceCollection services, LimitsOptions limits, ClientAddress clients, MarksOptions? marks = null)
     {
@@ -108,6 +109,14 @@ public static class RateLimiting
             {
                 PermitLimit = limits.LoginPerIpPerMinute,
                 Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+            // ADR-0029 §3: anonymous demo access requests, per client address. The limiter runs before the handler, so
+            // the 4th request in the hour never reaches the database.
+            o.AddPolicy(AccessRequestPolicy, http => RateLimitPartition.GetFixedWindowLimiter(clients.For(http), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limits.AccessRequestsPerIpPerHour,
+                Window = TimeSpan.FromHours(1),
                 QueueLimit = 0,
             }));
         });
