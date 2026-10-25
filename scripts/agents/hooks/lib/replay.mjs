@@ -106,19 +106,22 @@ export const payloadWrites = (segs, cwd) => segs.flatMap((s) => writes(s, comman
 // PATH planting (#576): a relative, dynamic or same-call-written directory on PATH makes the
 // next command, or any name a script runs, resolve to whatever file sits there (`> bin/ls &&
 // PATH=bin:$PATH ls`). zsh ties `path` to PATH, and `path=(…)` parses as a bare `path=`.
+// Declarer, env and sudo arguments are matched unquoted: `export 'PATH=bin:'$PATH` still sets PATH.
 const PATH_SET = /^(?:PATH|path)\+?=/;
 const DECLARERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
+// A single-quoted or escaped `$PATH` is a literal directory named `$PATH`, not the inherited value.
+const LITERAL_REF = /'[^']*\$\{?PATH|\\\$/;
 function unsafePath(w, written, cwd) {
   const [, op, value] = /^(?:PATH|path)(\+?=)([\s\S]*)$/.exec(w.text);
   return (op === "+=" ? value.replace(/^:/, "") : value).split(":").some((d) => {
-    if (d === "$PATH" || d === "${PATH}") return false;
+    if ((d === "$PATH" || d === "${PATH}") && w.dynamic && !LITERAL_REF.test(w.raw)) return false;
     if (!d.startsWith("/") || /[$`*?[{~]/.test(d)) return true;
     const dir = resolve(cwd, d);
     return [...written].some((p) => p === dir || p.startsWith(`${dir}/`));
   });
 }
 function pathPlanting(segs, cmds, written, cwd) {
-  const unsafe = (list) => list.some((w) => PATH_SET.test(w.raw) && unsafePath(w, written, cwd));
+  const unsafe = (list) => list.some((w) => PATH_SET.test(w.text) && unsafePath(w, written, cwd));
   for (const [i, s] of segs.entries()) {
     const ws = s.words;
     let at = 0;

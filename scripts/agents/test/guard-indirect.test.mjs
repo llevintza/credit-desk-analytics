@@ -149,6 +149,14 @@ test("#576: PATH planting, enable -n/-f and hash -p re-point a command name (G22
     "export FOO=bar; ls", "grep PATH= .bashrc", "env | grep PATH", "printenv PATH"], 0);
 });
 
+test("#578 item 1: a quoted PATH= argument to a declarer, env or sudo still sets PATH (G22)", () => {
+  rows(["export 'PATH=bin:'$PATH; ls", "declare 'PATH=bin'; ls", 'typeset "PATH=bin"; ls', "f() { local 'PATH=bin'; ls; }; f", "readonly 'PATH=bin:'$PATH; ls",
+    "export 'PATH'=bin; ls", "env 'PATH=bin' ls", "sudo 'PATH=bin' ls", "export 'path=bin'; ls",
+    // A single-quoted or escaped $PATH is a literal relative directory named `$PATH`.
+    "export 'PATH=$PATH:/usr/bin'; ls", "PATH='$PATH':/usr/bin ls", "PATH=\\$PATH:/usr/bin ls"], 2);
+  rows(['export "PATH=/opt/homebrew/bin:$PATH"; brew list', "export 'PATH=/usr/bin:/bin'; ls", "env 'PATH=/usr/bin' ls"], 0);
+});
+
 test("#577: [[ … ]] operands are patterns, not globs; the sweep still covers everything else (G20)", () => {
   rows(["[[ $X == g* ]]", "[[ $X == g* ]] && echo y", "[[ -f g* ]]", '[[ "$B" = gh-* ]] || echo n', "if [[ $X == git* ]]; then ls; fi"], 0);
   rows(["[ $X == g* ]", "test $X == g*", "[[ x ]] g*", "[[ g*", "echo [[ g* ]]", "[[ $X == g* ]] && ls git*", "[[ $X == g* ]] && git push --force origin main",
