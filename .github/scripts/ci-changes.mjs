@@ -69,8 +69,9 @@ export function isDocs(path) {
 }
 
 const AREA_PREFIXES = Object.freeze({
-  // deploy/start.sh is linked into Desk.Api.Tests (StartScriptTests runs it).
-  api: ["src/Desk.Api/", "src/Desk.Data/", "src/Desk.UserAdmin/", "tests/Desk.Api.Tests/", "deploy/start.sh"],
+  // deploy/start.sh is linked into Desk.Api.Tests (StartScriptTests runs it). Desk.Mcp.Tests drives the
+  // desk-mcp server against Desk.Api in the api job's coverlet loop (#554).
+  api: ["src/Desk.Api/", "src/Desk.Data/", "src/Desk.UserAdmin/", "src/Desk.Mcp/", "tests/Desk.Api.Tests/", "tests/Desk.Mcp.Tests/", "deploy/start.sh"],
   web: ["web/"],
   db: ["src/Desk.Data/", "src/Desk.Seeder/", "tests/Desk.Data.Tests/", "tests/Desk.Seeder.Tests/"],
   app: ["deploy/", "e2e/", "render.yaml"],

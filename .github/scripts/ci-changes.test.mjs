@@ -38,6 +38,12 @@ const FIXTURES = [
     jobs: jobsOf("run_api", "run_compose_smoke", "run_e2e", "run_budgets", "run_coverage"),
   },
   {
+    name: "api (desk-mcp server and its tests, #554)",
+    paths: ["src/Desk.Mcp/DeskTools.cs", "tests/Desk.Mcp.Tests/ToolsTests.cs"],
+    flags: flagsOf("api", "app"),
+    jobs: jobsOf("run_api", "run_compose_smoke", "run_e2e", "run_budgets", "run_coverage"),
+  },
+  {
     name: "web",
     paths: ["web/src/app/app.ts", "web/package.json"],
     flags: flagsOf("web", "app"),
