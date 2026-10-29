@@ -192,7 +192,7 @@ jobs:
       - name: Test with cobertura coverage
         run: |
           mkdir -p TestResults/coverage
-          for proj in tests/Desk.Api.Tests tests/Desk.Data.Tests tests/Desk.Seeder.Tests; do
+          for proj in tests/Desk.Api.Tests tests/Desk.Data.Tests tests/Desk.Seeder.Tests tests/Desk.Mcp.Tests; do
             name=$(basename "$proj")
             # Generated OpenAPI XML-comment support is [GeneratedCode] and
             # *.generated.cs (PDB path is not under obj/ unless emitted). Do not
