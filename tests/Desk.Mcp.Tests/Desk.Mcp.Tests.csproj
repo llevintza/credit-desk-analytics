@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Desk.Mcp\Desk.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\Desk.Api\Desk.Api.csproj" />
+    <ProjectReference Include="..\..\src\Desk.Seeder\Desk.Seeder.csproj" />
+  </ItemGroup>
+
+</Project>

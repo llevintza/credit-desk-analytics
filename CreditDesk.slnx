@@ -10,12 +10,14 @@
   <Folder Name="/src/">
     <Project Path="src/Desk.Api/Desk.Api.csproj" />
     <Project Path="src/Desk.Data/Desk.Data.csproj" />
+    <Project Path="src/Desk.Mcp/Desk.Mcp.csproj" />
     <Project Path="src/Desk.Seeder/Desk.Seeder.csproj" />
     <Project Path="src/Desk.UserAdmin/Desk.UserAdmin.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Desk.Api.Tests/Desk.Api.Tests.csproj" />
     <Project Path="tests/Desk.Data.Tests/Desk.Data.Tests.csproj" />
+    <Project Path="tests/Desk.Mcp.Tests/Desk.Mcp.Tests.csproj" />
     <Project Path="tests/Desk.Seeder.Tests/Desk.Seeder.Tests.csproj" />
   </Folder>
 </Solution>
