@@ -21,7 +21,7 @@ The server has to fit rules the repo already has:
 
 The transport and backend:
 
-1. **(A) stdio server over the API.** A new console project `src/Desk.Mcp` built on the official C# MCP SDK (the `ModelContextProtocol` NuGet package, version pinned in #554), with stdio transport: no listener and no port. Each tool is a typed call to one existing `/api` endpoint, signed in as a real account.
+1. **(A) stdio server over the API.** A new console project `src/Desk.Mcp` built on the official C# MCP SDK (the `ModelContextProtocol` NuGet package, pinned at 2.3.0 in #554; re-pin deliberately, see "Revisit when"), with stdio transport: no listener and no port. Each tool is a typed call to one existing `/api` endpoint, signed in as a real account.
 2. **(B) stdio server over a local database.** The same server reads through the `Desk.Data` repositories and `GridSqlBuilder` directly, with an `IPortfolioEntitlements` built for a named local account. The host is restricted to local ones.
 3. **(C) Remote streamable-HTTP endpoint at `/mcp` inside Desk.Api**, so hosted assistants can connect without a local install.
 4. **(D) stdio server straight to the production database (Neon)**, through `Desk.Data` with the app role's connection string.
